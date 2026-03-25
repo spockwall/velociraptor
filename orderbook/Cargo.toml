@@ -1,6 +1,37 @@
 [package]
 name = "orderbook"
-version = "0.1.0"
-edition = "2024"
+version = {workspace = true}
+edition = {workspace = true}
+authors = {workspace = true}
+license = {workspace = true}
+
 
 [dependencies]
+libs = { path = "../libs" }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures-util = "0.3"
+
+# WebSocket
+tokio-tungstenite = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+ordered-float = "4"
