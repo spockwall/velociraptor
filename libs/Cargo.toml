@@ -1,0 +1,10 @@
+[package]
+name = "libs"
+version = {workspace = true}
+edition = {workspace = true}
+authors = {workspace = true}
+license = {workspace = true}
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
