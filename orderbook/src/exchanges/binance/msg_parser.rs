@@ -1,5 +1,5 @@
 use crate::connection::MessageParserTrait;
-use crate::exchanges::binance::types::{BinanceStreamMessage, BinanceSubscribeResponse};
+use crate::exchanges::binance::types::{BinanceDepthData, BinanceSubscribeResponse};
 use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
 use anyhow::Result;
@@ -34,8 +34,8 @@ impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
             }
         }
 
-        // Parse combined stream message
-        let msg: BinanceStreamMessage = match serde_json::from_str(text) {
+        // Parse raw partial depth message from fstream.binance.com/ws
+        let msg: BinanceDepthData = match serde_json::from_str(text) {
             Ok(m) => m,
             Err(e) => {
                 error!("Failed to parse Binance message: {e} - {text}");
@@ -43,24 +43,16 @@ impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
             }
         };
 
-        // Extract symbol from stream name, e.g. "btcusdt@depth20@100ms" -> "BTCUSDT"
-        let symbol = msg
-            .stream
-            .split('@')
-            .next()
-            .unwrap_or("UNKNOWN")
-            .to_uppercase();
-
+        let symbol = msg.symbol.to_uppercase();
         let timestamp = Utc::now();
         let ts_str = timestamp.to_rfc3339();
 
         let mut orders = Vec::new();
 
-        for ask in &msg.data.asks {
+        for ask in &msg.asks {
             let price: f64 = ask[0].parse().unwrap_or(0.0);
             let qty: f64 = ask[1].parse().unwrap_or(0.0);
             orders.push(GenericOrder {
-                id: format!("ask_{price}"),
                 price,
                 side: "Ask".to_string(),
                 qty,
@@ -69,11 +61,10 @@ impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
             });
         }
 
-        for bid in &msg.data.bids {
+        for bid in &msg.bids {
             let price: f64 = bid[0].parse().unwrap_or(0.0);
             let qty: f64 = bid[1].parse().unwrap_or(0.0);
             orders.push(GenericOrder {
-                id: format!("bid_{price}"),
                 price,
                 side: "Bid".to_string(),
                 qty,
@@ -86,6 +77,7 @@ impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
             return Ok(vec![]);
         }
 
+        // Binance depth20 is a snapshot
         let update = OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,

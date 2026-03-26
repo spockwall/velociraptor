@@ -2,7 +2,7 @@ use crate::types::ExchangeName;
 use crate::types::orderbook::*;
 use chrono::{DateTime, Utc};
 use ordered_float::OrderedFloat;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug)]
@@ -10,7 +10,6 @@ pub struct PriceLevel {
     pub price: f64,
     pub total_qty: f64,
     pub order_count: usize,
-    pub orders: HashMap<String, f64>, // order_id -> qty
 }
 
 pub struct Orderbook {
@@ -113,20 +112,14 @@ impl Orderbook {
                 debug!("Removed price level {} for {}", order.price, self.exchange);
             }
         } else {
-            // Insert or update the price level
+            // Insert or update the price level (OKX replaces the entire qty at this price)
             let level = levels.entry(price_key).or_insert_with(|| PriceLevel {
                 price: order.price,
                 total_qty: 0.0,
                 order_count: 0,
-                orders: HashMap::new(),
             });
-
-            // For OKX, we just replace the entire quantity at this price level
             level.total_qty = order.qty;
-            level.order_count = 1; // OKX doesn't provide order count in the simplified view
-            level.orders.clear();
-            level.orders.insert(order.id.clone(), order.qty);
-
+            level.order_count = 1;
             debug!(
                 "Updated OKX price level {} with qty {}",
                 order.price, order.qty
@@ -147,78 +140,42 @@ impl Orderbook {
             price: order.price,
             total_qty: 0.0,
             order_count: 0,
-            orders: HashMap::new(),
         });
-
-        //// BitMEX always has order IDs
-        //self.order_id_map.insert(
-        //    order.id.clone(),
-        //    OrderInfo {
-        //        price: order.price,
-        //        side: side.clone(),
-        //        qty: order.qty,
-        //    },
-        //);
-
-        level.orders.insert(order.id.clone(), order.qty);
         level.total_qty += order.qty;
         level.order_count += 1;
 
-        debug!(
-            "Added order {} at price {} qty {}",
-            order.id, order.price, order.qty
-        );
+        debug!("Added price level {} qty {}", order.price, order.qty);
     }
 
     fn update_order(&mut self, order: GenericOrder) {
-        //// BitMEX update means size changed for existing order ID
-        //if let Some(existing_info) = self.order_id_map.get_mut(&order.id) {
-        //    let old_qty = existing_info.qty;
-        //    let price_key = OrderedFloat(existing_info.price);
-
-        //    let levels = match existing_info.side {
-        //        OrderSide::Bid => &mut self.bid_levels,
-        //        OrderSide::Ask => &mut self.ask_levels,
-        //    };
-
-        //    if let Some(level) = levels.get_mut(&price_key) {
-        //        // Update quantity
-        //        level.total_qty = level.total_qty - old_qty + order.qty;
-        //        level.orders.insert(order.id.clone(), order.qty);
-        //        existing_info.qty = order.qty;
-
-        //        debug!(
-        //            "Updated order {} from qty {} to {}",
-        //            order.id, old_qty, order.qty
-        //        );
-        //    }
-        //} else {
-        //    warn!("Update for unknown order ID: {}", order.id);
-        //}
+        // Replace qty at the price level (or remove if qty == 0)
+        let price_key = OrderedFloat(order.price);
+        let levels = match self.parse_side(&order.side) {
+            OrderSide::Bid => &mut self.bid_levels,
+            OrderSide::Ask => &mut self.ask_levels,
+        };
+        if order.qty == 0.0 {
+            levels.remove(&price_key);
+        } else {
+            let level = levels.entry(price_key).or_insert_with(|| PriceLevel {
+                price: order.price,
+                total_qty: 0.0,
+                order_count: 0,
+            });
+            level.total_qty = order.qty;
+            level.order_count = 1;
+        }
     }
 
     fn remove_order(&mut self, order: GenericOrder) {
-        //if let Some(info) = self.order_id_map.remove(&order.id) {
-        //    let price_key = OrderedFloat(info.price);
-        //    let levels = match info.side {
-        //        OrderSide::Bid => &mut self.bid_levels,
-        //        OrderSide::Ask => &mut self.ask_levels,
-        //    };
-
-        //    if let Some(level) = levels.get_mut(&price_key) {
-        //        level.total_qty -= info.qty;
-        //        level.order_count -= 1;
-        //        level.orders.remove(&order.id);
-
-        //        if level.order_count == 0 {
-        //            levels.remove(&price_key);
-        //        }
-
-        //        debug!("Removed order {} at price {}", order.id, info.price);
-        //    }
-        //} else {
-        //    warn!("Delete for unknown order ID: {}", order.id);
-        //}
+        let price_key = OrderedFloat(order.price);
+        let levels = match self.parse_side(&order.side) {
+            OrderSide::Bid => &mut self.bid_levels,
+            OrderSide::Ask => &mut self.ask_levels,
+        };
+        if levels.remove(&price_key).is_none() {
+            warn!("Delete for unknown price level: {}", order.price);
+        }
     }
 
     fn clear(&mut self) {

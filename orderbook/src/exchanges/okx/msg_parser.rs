@@ -148,7 +148,6 @@ impl OkxMessageParser {
                 let qty: f64 = ask[1].parse().unwrap_or(0.0);
 
                 orders.push(GenericOrder {
-                    id: format!("ask_{price}"),
                     price,
                     side: "Ask".to_string(),
                     qty,
@@ -167,7 +166,6 @@ impl OkxMessageParser {
                 let qty: f64 = bid[1].parse().unwrap_or(0.0);
 
                 orders.push(GenericOrder {
-                    id: format!("bid_{price}"),
                     price,
                     side: "Bid".to_string(),
                     qty,

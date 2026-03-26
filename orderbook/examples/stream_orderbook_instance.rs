@@ -15,17 +15,9 @@ use tracing::{error, info};
     about = "Real-time orderbook connector using OrderbookSystem API"
 )]
 struct Args {
-    /// Enable BitMEX
-    #[clap(long, default_value_t = true)]
-    bitmex: bool,
-
     /// Enable OKX
-    #[clap(long, default_value_t = true)]
+    #[clap(long, default_value_t = false)]
     okx: bool,
-
-    /// Enable BitMart
-    #[clap(long, default_value_t = true)]
-    bitmart: bool,
 
     /// Enable Binance
     #[clap(long, default_value_t = true)]

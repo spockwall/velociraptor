@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GenericOrder {
-    pub id: String,
     pub price: f64,
     pub side: String,
     pub qty: f64,

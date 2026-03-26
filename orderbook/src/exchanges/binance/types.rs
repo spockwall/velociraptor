@@ -1,16 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BinanceStreamMessage {
-    pub stream: String,
-    pub data: BinanceDepthData,
-}
-
+/// Raw partial book depth message from fstream.binance.com/ws/<symbol>@depth20@100ms
+/// Fields use short names (b/a) and symbol is in "s".
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BinanceDepthData {
-    #[serde(rename = "lastUpdateId")]
-    pub last_update_id: u64,
+    #[serde(rename = "s")]
+    pub symbol: String,
+    #[serde(rename = "b")]
     pub bids: Vec<[String; 2]>,
+    #[serde(rename = "a")]
     pub asks: Vec<[String; 2]>,
 }
 
