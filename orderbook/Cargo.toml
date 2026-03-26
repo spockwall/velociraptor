@@ -1,37 +1,39 @@
 [package]
+edition = "2024"
 name = "orderbook"
-version = {workspace = true}
-edition = {workspace = true}
-authors = {workspace = true}
-license = {workspace = true}
-
+version = "0.1.0"
 
 [dependencies]
-libs = { path = "../libs" }
-
-# Async
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
-futures-util = "0.3"
-
-# WebSocket
-tokio-tungstenite = { workspace = true }
-
-# Serialization
+base64 = "0.21"
+bytes = "1.6.0"
+chrono = { workspace = true }
+clap = { version = "4.5.27", features = ["derive"] }
+crossbeam = "0.8.4"
+ctrlc = "3.2.5"
+dashmap = { workspace = true }
+dotenvy = "0.15.7"
+futures = "0.3"
+futures-util = { workspace = true }
+hex = { workspace = true }
+hmac = { workspace = true }
+lazy_static = "1.4"
+ordered-float = "5.0.0"
+rand = "0.10.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# Error handling
 thiserror = { workspace = true }
-anyhow = { workspace = true }
-
-# Logging
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-stream = "0.1"
 tracing = { workspace = true }
-
-# Time
-chrono = { workspace = true }
-
-# Utilities
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true }
-ordered-float = "4"
+sha2 = { workspace = true }
+libs = { path = "../libs" }
+
+[dev-dependencies]
+tempfile = "3.8"

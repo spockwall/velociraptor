@@ -1,4 +1,9 @@
+pub mod connection;
 pub mod endpoints;
-pub mod normalizer;
+pub mod msg_parser;
+pub mod subscription;
+pub mod types;
 
-pub use normalizer::BinanceDepthUpdate;
+pub use connection::BinanceConnection;
+pub(crate) use msg_parser::BinanceMessageParser;
+pub use subscription::BinanceSubMsgBuilder;
