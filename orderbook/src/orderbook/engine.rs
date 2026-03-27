@@ -3,70 +3,83 @@ use crate::orderbook::Orderbook;
 use crate::types::events::{OrderbookEvent, OrderbookSnapshot};
 use crate::types::orderbook::OrderbookMessage;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc::UnboundedReceiver};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 
-/// Orderbook manager that handles multiple symbols and exchanges.
-/// Runs as a tokio task, reads from an mpsc channel, applies updates to
-/// Arc<Orderbook> entries stored in a DashMap, and broadcasts events.
-pub struct OrderbookManager {
+/// Self-contained orderbook processing engine.
+///
+/// Creates its own ingest channel and event broadcast internally.
+/// Callers obtain a `sender()` to push `OrderbookMessage`s in,
+/// and `subscribe()` to receive `OrderbookEvent`s out.
+pub struct OrderbookEngine {
     orderbooks: Arc<dashmap::DashMap<String, Arc<Orderbook>>>,
-    rx: UnboundedReceiver<OrderbookMessage>,
-    system_control: SystemControl,
+    tx: mpsc::UnboundedSender<OrderbookMessage>,
+    rx: mpsc::UnboundedReceiver<OrderbookMessage>,
     event_tx: broadcast::Sender<OrderbookEvent>,
 }
 
-/// Handle to the running OrderbookManager task.
-pub struct OrderbookManagerHandle {
+/// Handle to the running `OrderbookEngine` task.
+pub struct OrderbookEngineHandle {
     pub handle: tokio::task::JoinHandle<()>,
 }
 
-impl OrderbookManager {
-    pub fn new(
-        rx: UnboundedReceiver<OrderbookMessage>,
-        system_control: SystemControl,
-        event_tx: broadcast::Sender<OrderbookEvent>,
-    ) -> Self {
+impl OrderbookEngine {
+    pub fn new(event_broadcast_capacity: usize) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = broadcast::channel(event_broadcast_capacity);
         Self {
             orderbooks: Arc::new(dashmap::DashMap::new()),
+            tx,
             rx,
-            system_control,
             event_tx,
         }
     }
 
-    pub fn get_orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
+    /// Returns a sender that connectors use to push `OrderbookMessage`s in.
+    pub fn sender(&self) -> mpsc::UnboundedSender<OrderbookMessage> {
+        self.tx.clone()
+    }
+
+    /// Subscribe directly to the event broadcast stream.
+    pub fn subscribe(&self) -> broadcast::Receiver<OrderbookEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Returns a shared handle to the live orderbook map.
+    pub fn orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
         self.orderbooks.clone()
     }
 
-    pub fn start(mut self) -> OrderbookManagerHandle {
+    /// Consume the engine, spawn the processing task, and return a handle.
+    pub fn start(self, system_control: SystemControl) -> OrderbookEngineHandle {
+        let orderbooks = self.orderbooks;
+        let mut rx = self.rx;
+        let event_tx = self.event_tx;
+
         let handle = tokio::spawn(async move {
-            info!("Orderbook manager started");
+            info!("Orderbook engine started");
 
             loop {
-                if self.system_control.is_shutdown() {
+                if system_control.is_shutdown() {
                     break;
                 }
 
-                match self.rx.recv().await {
+                match rx.recv().await {
                     Some(msg) => {
                         if let OrderbookMessage::OrderbookUpdate(update) = msg {
                             let key = format!("{}:{}", update.exchange, update.symbol);
 
                             // Emit raw update BEFORE apply
-                            let _ = self
-                                .event_tx
-                                .send(OrderbookEvent::RawUpdate(update.clone()));
+                            let _ = event_tx.send(OrderbookEvent::RawUpdate(update.clone()));
 
                             // Get or create the orderbook entry
-                            let mut entry =
-                                self.orderbooks.entry(key.clone()).or_insert_with(|| {
-                                    info!("Creating new orderbook for {key}");
-                                    Arc::new(Orderbook::new(
-                                        update.symbol.clone(),
-                                        update.exchange.clone(),
-                                    ))
-                                });
+                            let mut entry = orderbooks.entry(key.clone()).or_insert_with(|| {
+                                info!("Creating new orderbook for {key}");
+                                Arc::new(Orderbook::new(
+                                    update.symbol.clone(),
+                                    update.exchange.clone(),
+                                ))
+                            });
 
                             // Apply update — get a mutable Orderbook via Arc::make_mut
                             Arc::make_mut(&mut entry).apply_update(update);
@@ -95,19 +108,19 @@ impl OrderbookManager {
                                 timestamp: entry.last_update,
                                 book: Arc::clone(&entry),
                             };
-                            let _ = self.event_tx.send(OrderbookEvent::Snapshot(snapshot));
+                            let _ = event_tx.send(OrderbookEvent::Snapshot(snapshot));
                         }
                     }
                     None => {
-                        warn!("Channel closed, stopping orderbook manager");
+                        warn!("Channel closed, stopping orderbook engine");
                         break;
                     }
                 }
             }
 
-            info!("Orderbook manager stopped");
+            info!("Orderbook engine stopped");
         });
 
-        OrderbookManagerHandle { handle }
+        OrderbookEngineHandle { handle }
     }
 }

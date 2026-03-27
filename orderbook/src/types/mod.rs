@@ -1,11 +1,10 @@
 pub mod endpoints;
+pub mod errors;
 pub mod events;
 pub mod orderbook;
-
 pub use events::{OrderbookEvent, OrderbookSnapshot, PriceLevelTuple};
 
 use core::fmt;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
