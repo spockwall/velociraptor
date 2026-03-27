@@ -140,7 +140,7 @@ cargo build --release
 cargo run --example stream_orderbook_instance
 cargo run --example api_usage
 cargo run --example exchange_websocket
-cargo run --example exchange_connector_tests
+cargo run --example exchange_connection_tests
 
 cargo test
 cargo fmt

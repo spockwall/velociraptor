@@ -2,10 +2,10 @@ use crate::connection::ConnectionConfig;
 use anyhow::Result;
 use async_trait::async_trait;
 
-/// Trait for exchange-specific connectors
+/// Trait for exchange-specific connections
 #[async_trait]
 pub trait ConnectionTrait: Send + Sync {
-    /// Start the connector and run until stopped
+    /// Start the connection and run until stopped
     async fn run(&mut self) -> Result<()>;
 
     /// Get the exchange configuration

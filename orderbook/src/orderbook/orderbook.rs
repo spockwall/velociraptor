@@ -12,6 +12,7 @@ pub struct PriceLevel {
     pub order_count: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct Orderbook {
     pub symbol: String,
     pub exchange: ExchangeName,

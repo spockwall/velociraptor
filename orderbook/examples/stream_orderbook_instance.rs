@@ -12,7 +12,7 @@ use tracing::{error, info};
 #[clap(
     author,
     version,
-    about = "Real-time orderbook connector using OrderbookSystem API"
+    about = "Real-time orderbook connection using OrderbookSystem API"
 )]
 struct Args {
     /// Enable OKX
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
             info!("Ctrl+C received, shutting down");
             system_control.shutdown();
         }
-        result = system.run(true) => {
+        result = system.run() => {
             if let Err(e) = result {
                 error!("System error: {}", e);
                 system_control.shutdown();

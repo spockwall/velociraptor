@@ -3,21 +3,25 @@ use crate::heartbeat::HearthbeatConfig;
 use crate::heartbeat::metrics::ConnectionMetrics;
 use crate::heartbeat::state::{ConnectionStats, HealthStatus, HearthbeatState};
 use anyhow::Result;
-use crossbeam::channel::Sender;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
 
 /// Enhanced manager with metrics
 pub struct HearthbeatManager<M: BasicConnectionMsgTrait> {
     state: HearthbeatState,
     config: HearthbeatConfig,
-    message_tx: Sender<M>,
+    message_tx: UnboundedSender<M>,
     exchange_name: String,
     pub health_status: HealthStatus,
 }
 
 impl<M: BasicConnectionMsgTrait> HearthbeatManager<M> {
-    pub fn new(config: HearthbeatConfig, message_tx: Sender<M>, exchange_name: String) -> Self {
+    pub fn new(
+        config: HearthbeatConfig,
+        message_tx: UnboundedSender<M>,
+        exchange_name: String,
+    ) -> Self {
         Self {
             state: HearthbeatState::new(config.max_missed_pongs),
             health_status: HealthStatus::Healthy {

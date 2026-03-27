@@ -8,3 +8,4 @@ pub mod utils;
 
 pub use exchanges::{binance::BinanceConnection, okx::OkxConnection};
 pub use orderbook::{Orderbook, OrderbookManager};
+pub use types::{OrderbookEvent, OrderbookSnapshot};

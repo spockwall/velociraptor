@@ -4,7 +4,7 @@ use crate::exchanges::binance::BinanceMessageParser;
 use crate::types::orderbook::OrderbookMessage;
 use anyhow::Result;
 use async_trait::async_trait;
-use crossbeam::channel::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub struct BinanceConnection {
     inner: ConnectionBase<BinanceMessageParser, OrderbookMessage>,
@@ -13,7 +13,7 @@ pub struct BinanceConnection {
 impl BinanceConnection {
     pub fn new(
         config: ConnectionConfig,
-        message_tx: Sender<OrderbookMessage>,
+        message_tx: UnboundedSender<OrderbookMessage>,
         system_control: SystemControl,
     ) -> Self {
         let message_parser = BinanceMessageParser::new();

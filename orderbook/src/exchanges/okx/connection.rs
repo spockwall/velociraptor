@@ -4,7 +4,7 @@ use crate::types::ExchangeName;
 use crate::types::orderbook::OrderbookMessage;
 use anyhow::Result;
 use async_trait::async_trait;
-use crossbeam::channel::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub struct OkxConnection {
     inner: ConnectionBase<OkxMessageParser, OrderbookMessage>,
@@ -13,7 +13,7 @@ pub struct OkxConnection {
 impl OkxConnection {
     pub fn new(
         config: ConnectionConfig,
-        message_tx: Sender<OrderbookMessage>,
+        message_tx: UnboundedSender<OrderbookMessage>,
         system_control: SystemControl,
     ) -> Self {
         let message_parser = OkxMessageParser::new();

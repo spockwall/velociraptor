@@ -3,8 +3,8 @@ use crate::connection::{BasicConnectionMsgTrait, ConnectionConfig, MessageParser
 use crate::heartbeat::{HealthStatus, HearthbeatConfig, HearthbeatManager, HearthbeatProtocol};
 use crate::types::ExchangeName;
 use anyhow::{Result, anyhow};
-use crossbeam::channel::Sender;
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{Duration, interval, sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
@@ -12,7 +12,7 @@ use url::Url;
 
 pub struct ConnectionBase<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> {
     config: ConnectionConfig,
-    message_tx: Sender<M>,
+    message_tx: UnboundedSender<M>,
     message_parser: P,
     reconnect_attempts: u32,
     hearthbeat_manager: HearthbeatManager<M>,
@@ -25,7 +25,7 @@ pub struct ConnectionBase<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> 
 impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> {
     pub fn new(
         config: ConnectionConfig,
-        message_tx: Sender<M>,
+        message_tx: UnboundedSender<M>,
         system_control: SystemControl,
         message_parser: P,
         exchange_name: ExchangeName,
@@ -69,7 +69,7 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
                 Ok(messages) => {
                     for message in messages {
                         if self.message_tx.send(message).is_err() {
-                            error!("Failed to send message to channel");
+                            error!("Failed to send message to channel: receiver dropped");
                         }
                     }
                 }
@@ -139,12 +139,12 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
         loop {
             // Check shutdown first
             if self.system_control.is_shutdown() {
-                info!("{} connector shutdown requested", self.exchange_name);
+                info!("{} connection shutdown requested", self.exchange_name);
                 return Ok(());
             }
 
             if self.system_control.is_paused() {
-                info!("{} connector paused", self.exchange_name);
+                info!("{} connection paused", self.exchange_name);
                 sleep(Duration::from_millis(PAUSE_DELAY)).await;
                 continue;
             }
@@ -212,13 +212,13 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        info!("Starting {} connector", self.exchange_name);
+        info!("Starting {} connection", self.exchange_name);
 
         loop {
             // Check shutdown before attempting connection
             if self.system_control.is_shutdown() {
                 info!(
-                    "{} connector shutdown requested before connection",
+                    "{} connection shutdown requested before connection",
                     self.exchange_name
                 );
                 break;

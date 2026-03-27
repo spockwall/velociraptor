@@ -2,11 +2,13 @@
 ///
 /// # Example
 /// ```
+/// use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 /// let msg = BinanceSubMsgBuilder::new()
-///     .with_depth_channel(&["btcusdt", "ethusdt"])
+///     .with_orderbook_channel(&["btcusdt", "ethusdt"])
 ///     .build();
 /// // {"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","ethusdt@depth20@100ms"],"id":1}
 /// ```
+
 pub struct BinanceSubMsgBuilder {
     params: Vec<String>,
 }
