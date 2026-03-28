@@ -26,7 +26,19 @@ pub struct SubscriptionState {
 
 // Client actions
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     Subscribe,
     Unsubscribe,
+    /// Request the server to start streaming a new exchange/symbol channel.
+    AddChannel,
+}
+
+/// A request to dynamically add a new orderbook channel.
+/// Forwarded from ZmqPublisher back to OrderbookSystem.
+#[derive(Debug, Clone)]
+pub struct ChannelRequest {
+    pub client_id: Vec<u8>,
+    pub exchange: String,
+    pub symbol: String,
 }

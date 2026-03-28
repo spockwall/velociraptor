@@ -6,14 +6,17 @@ use serde::{Deserialize, Serialize};
 // ── Inbound (client → server) ─────────────────────────────────────────────────
 
 /// Subscription request sent by a client over the DEALER socket.
+///
+/// For `subscribe` / `unsubscribe`: all fields are required.
+/// For `add_channel`: only `action`, `exchange`, and `symbol` are required.
 #[derive(Debug, Deserialize)]
 pub struct SubscriptionRequest {
     pub action: Action,
     pub exchange: String,
     pub symbol: String,
     #[serde(rename = "type")]
-    pub subscription_type: SubscriptionType,
-    pub interval: u64, // milliseconds
+    pub subscription_type: Option<SubscriptionType>,
+    pub interval: Option<u64>, // milliseconds
 }
 
 // ── Outbound (server → client) ────────────────────────────────────────────────
@@ -40,8 +43,11 @@ impl Ack {
             status: "ok",
             exchange: Some(req.exchange.clone()),
             symbol: Some(req.symbol.clone()),
-            sub_type: Some(format!("{:?}", req.subscription_type).to_lowercase()),
-            interval: Some(req.interval),
+            sub_type: req
+                .subscription_type
+                .as_ref()
+                .map(|t| format!("{t:?}").to_lowercase()),
+            interval: req.interval,
             message: None,
         }
     }
@@ -54,6 +60,17 @@ impl Ack {
             sub_type: None,
             interval: None,
             message: None,
+        }
+    }
+
+    pub fn ok_add_channel(exchange: &str, symbol: &str) -> Self {
+        Self {
+            status: "ok",
+            exchange: Some(exchange.to_string()),
+            symbol: Some(symbol.to_string()),
+            sub_type: None,
+            interval: None,
+            message: Some("channel added".into()),
         }
     }
 
