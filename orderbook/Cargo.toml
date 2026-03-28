@@ -6,10 +6,10 @@ version = "0.1.0"
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-base64 = "0.21"
+base64 = "0.22"
 bytes = "1.6.0"
 chrono = { workspace = true }
-clap = { version = "4.5.27", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive", "env"] }
 ctrlc = "3.2.5"
 dashmap = { workspace = true }
 dotenvy = "0.15.7"
