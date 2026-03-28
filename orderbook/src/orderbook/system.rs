@@ -31,6 +31,7 @@ pub struct OrderbookSystem {
 struct SystemHandles {
     exchange_handles: Vec<tokio::task::JoinHandle<()>>,
     engine_handle: Option<OrderbookEngineHandle>,
+    extra_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl OrderbookSystem {
@@ -43,6 +44,7 @@ impl OrderbookSystem {
             handles: SystemHandles {
                 exchange_handles: Vec::new(),
                 engine_handle: None,
+                extra_handles: Vec::new(),
             },
             system_control,
         })
@@ -73,6 +75,16 @@ impl OrderbookSystem {
                 }
             }
         })
+    }
+
+    /// Attach a `ZmqPublisher` to this system before calling `run()`.
+    /// The publisher subscribes to the engine internally and its task is managed
+    /// alongside the system's other handles.
+    pub fn attach_zmq_publisher(&mut self, publisher: crate::publisher::ZmqPublisher) {
+        let handle = publisher.start(
+            self.engine.as_ref().expect("attach_zmq_publisher called after run()"),
+        );
+        self.handles.extra_handles.push(handle);
     }
 
     /// Access the live orderbook map directly.
@@ -138,6 +150,9 @@ impl OrderbookSystem {
             h.handle.abort();
         }
         for h in self.handles.exchange_handles {
+            h.abort();
+        }
+        for h in self.handles.extra_handles {
             h.abort();
         }
         info!("Orderbook system shutdown complete");

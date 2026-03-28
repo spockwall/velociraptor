@@ -2,6 +2,7 @@ pub mod connection;
 pub mod exchanges;
 pub mod heartbeat;
 pub mod orderbook;
+pub mod publisher;
 pub mod types;
 pub mod utils;
 
@@ -10,3 +11,4 @@ pub use orderbook::{Orderbook, OrderbookEngine, OrderbookEngineHandle};
 pub use types::{OrderbookEvent, OrderbookSnapshot};
 
 pub use orderbook::{OrderbookSystem, OrderbookSystemConfig};
+pub use publisher::ZmqPublisher;

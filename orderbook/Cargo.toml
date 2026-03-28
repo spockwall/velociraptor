@@ -32,6 +32,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
+tmq = "0.5"
 libs = { path = "../libs" }
 
 [dev-dependencies]
