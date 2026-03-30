@@ -17,7 +17,7 @@ enabled = false
 symbols = ["BTC-USDT", "ETH-USDT-SWAP"]
 
 [hyperliquid]
-enabled = false
+enabled = true
 coins   = ["BTC", "ETH"]   # uppercase coin names
 
 # Each Polymarket market is a pair of Yes/No tokens.
