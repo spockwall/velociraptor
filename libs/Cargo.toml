@@ -9,3 +9,4 @@ license = {workspace = true}
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 crossterm = { version = "0.29.0", default-features = false }
+chrono = { workspace = true }
