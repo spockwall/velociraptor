@@ -1,5 +1,6 @@
 use crate::connection::{ConnectionConfig, SystemControl};
 use crate::exchanges::binance::BinanceSubMsgBuilder;
+use crate::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use crate::exchanges::okx::OkxSubMsgBuilder;
 use crate::exchanges::polymarket::PolymarketSubMsgBuilder;
 use crate::exchanges::ConnectionFactory;
@@ -271,6 +272,9 @@ fn build_connection_config(req: &ChannelRequest) -> Result<ConnectionConfig, Str
             .build(),
         ExchangeName::Polymarket => PolymarketSubMsgBuilder::new()
             .with_asset(&req.symbol)
+            .build(),
+        ExchangeName::Hyperliquid => HyperliquidSubMsgBuilder::new()
+            .with_coin(&req.symbol)
             .build(),
     };
 

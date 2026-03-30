@@ -3,6 +3,7 @@ use clap::Parser;
 use libs::terminal::OrderbookUi;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
+use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
@@ -24,6 +25,10 @@ struct Args {
     /// Enable Binance symbols
     #[clap(long, default_value_t = true)]
     binance: bool,
+
+    /// Enable Hyperliquid symbols
+    #[clap(long, default_value_t = true)]
+    hyperliquid: bool,
 
     /// Depth levels to display per side
     #[clap(long, default_value_t = 8)]
@@ -70,6 +75,16 @@ fn build_system_config(args: &Args) -> Result<OrderbookSystemConfig> {
             ConnectionConfig::new(ExchangeName::Binance).set_subscription_message(
                 BinanceSubMsgBuilder::new()
                     .with_orderbook_channel(&["btcusdt", "ethusdt"])
+                    .build(),
+            ),
+        );
+    }
+
+    if args.hyperliquid {
+        config.with_exchange(
+            ConnectionConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
+                HyperliquidSubMsgBuilder::new()
+                    .with_coins(&["BTC", "ETH"])
                     .build(),
             ),
         );

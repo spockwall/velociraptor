@@ -1,3 +1,9 @@
+pub mod hyperliquid {
+    pub mod ws {
+        pub const PUBLIC_STREAM: &str = "wss://api.hyperliquid.xyz/ws";
+    }
+}
+
 pub mod binance {
     pub const BASE_URL: &str = "https://api.binance.com";
 

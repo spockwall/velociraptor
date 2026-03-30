@@ -1,5 +1,5 @@
 use crate::types::ExchangeName;
-use crate::types::endpoints::{binance, okx, polymarket};
+use crate::types::endpoints::{binance, hyperliquid, okx, polymarket};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -18,17 +18,18 @@ pub struct ConnectionConfig {
 
 impl ConnectionConfig {
     pub fn new(name: ExchangeName) -> Self {
-        let ws_url = match name {
-            ExchangeName::Okx => okx::ws::PUBLIC_STREAM,
-            ExchangeName::Binance => binance::ws::PUBLIC_STREAM,
-            ExchangeName::Polymarket => polymarket::ws::PUBLIC_STREAM,
+        let (ws_url, ping_interval) = match name {
+            ExchangeName::Okx => (okx::ws::PUBLIC_STREAM, 15u64),
+            ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
+            ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
+            ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 45u64),
         };
 
         Self {
             exchange: name,
             ws_url: ws_url.to_string(),
             subscription_message: String::new(),
-            ping_interval: 15,
+            ping_interval,
             reconnect_delay: 5,
             max_reconnect_attempts: 10,
             api_key: None,

@@ -18,6 +18,7 @@
 use clap::Parser;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
+use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
@@ -38,6 +39,16 @@ struct TomlConfig {
     okx: OkxConfig,
     #[serde(default)]
     polymarket: Vec<PolymarketMarket>,
+    #[serde(default)]
+    hyperliquid: HyperliquidConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HyperliquidConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    coins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +142,10 @@ struct Args {
     #[arg(long, env = "OKX_SYMBOLS", value_delimiter = ',')]
     okx: Option<Vec<String>>,
 
+    /// Comma-separated Hyperliquid coin symbols, e.g. BTC,ETH (overrides config file)
+    #[arg(long, env = "HYPERLIQUID_COINS", value_delimiter = ',')]
+    hyperliquid: Option<Vec<String>>,
+
     /// Tracing filter string (overrides config file)
     #[arg(long, env = "LOG_LEVEL")]
     log_level: Option<String>,
@@ -178,7 +193,7 @@ async fn main() {
 
     init_logging(&log_level, log_json);
 
-    if let Err(e) = run(args.binance, args.okx, toml_cfg, pub_endpoint, router_endpoint, depth).await {
+    if let Err(e) = run(args.binance, args.okx, args.hyperliquid, toml_cfg, pub_endpoint, router_endpoint, depth).await {
         error!("Fatal: {e:#}");
         std::process::exit(1);
     }
@@ -187,6 +202,7 @@ async fn main() {
 async fn run(
     cli_binance: Option<Vec<String>>,
     cli_okx: Option<Vec<String>>,
+    cli_hyperliquid: Option<Vec<String>>,
     toml_cfg: TomlConfig,
     pub_endpoint: String,
     router_endpoint: String,
@@ -217,15 +233,28 @@ async fn run(
         .flat_map(|m| [m.yes.clone(), m.no.clone()])
         .collect();
 
-    if binance_symbols.is_empty() && okx_symbols.is_empty() && polymarket_assets.is_empty() {
+    let hyperliquid_coins: Vec<String> = cli_hyperliquid.unwrap_or_else(|| {
+        if toml_cfg.hyperliquid.enabled {
+            toml_cfg.hyperliquid.coins.clone()
+        } else {
+            vec![]
+        }
+    });
+
+    if binance_symbols.is_empty()
+        && okx_symbols.is_empty()
+        && polymarket_assets.is_empty()
+        && hyperliquid_coins.is_empty()
+    {
         anyhow::bail!(
-            "No symbols configured. Provide a --config file or use --binance / --okx flags."
+            "No symbols configured. Provide a --config file or use --binance / --okx / --hyperliquid flags."
         );
     }
 
     info!(
         binance  = ?binance_symbols,
         okx      = ?okx_symbols,
+        hyperliquid = ?hyperliquid_coins,
         polymarket_markets = toml_cfg.polymarket.iter().filter(|m| m.enabled).count(),
         pub_endpoint  = %pub_endpoint,
         router_endpoint = %router_endpoint,
@@ -269,6 +298,16 @@ async fn run(
         config.with_exchange(
             ConnectionConfig::new(ExchangeName::Polymarket)
                 .set_subscription_message(builder.build()),
+        );
+    }
+
+    // ── Hyperliquid ───────────────────────────────────────────────────────────
+    if !hyperliquid_coins.is_empty() {
+        let coin_refs: Vec<&str> = hyperliquid_coins.iter().map(String::as_str).collect();
+        config.with_exchange(
+            ConnectionConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
+                HyperliquidSubMsgBuilder::new().with_coins(&coin_refs).build(),
+            ),
         );
     }
 

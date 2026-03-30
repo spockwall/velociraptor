@@ -12,6 +12,7 @@ pub enum ExchangeName {
     Okx,
     Binance,
     Polymarket,
+    Hyperliquid,
 }
 
 impl ExchangeName {
@@ -20,6 +21,7 @@ impl ExchangeName {
             ExchangeName::Okx => "okx",
             ExchangeName::Binance => "binance",
             ExchangeName::Polymarket => "polymarket",
+            ExchangeName::Hyperliquid => "hyperliquid",
         }
     }
 
@@ -32,6 +34,7 @@ impl ExchangeName {
             "okx" => Some(ExchangeName::Okx),
             "binance" => Some(ExchangeName::Binance),
             "polymarket" => Some(ExchangeName::Polymarket),
+            "hyperliquid" => Some(ExchangeName::Hyperliquid),
             _ => None,
         }
     }

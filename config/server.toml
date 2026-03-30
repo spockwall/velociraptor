@@ -16,6 +16,10 @@ symbols = ["btcusdt", "ethusdt"]
 enabled = false
 symbols = ["BTC-USDT", "ETH-USDT-SWAP"]
 
+[hyperliquid]
+enabled = false
+coins   = ["BTC", "ETH"]   # uppercase coin names
+
 # Each Polymarket market is a pair of Yes/No tokens.
 # Use scripts/fetch_polymarket_tokens.py to find token IDs.
 [[polymarket]]
