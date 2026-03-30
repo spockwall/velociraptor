@@ -6,6 +6,12 @@ pub mod binance {
     }
 }
 
+pub mod polymarket {
+    pub mod ws {
+        pub const PUBLIC_STREAM: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+    }
+}
+
 pub mod okx {
     pub const BASE_URL: &str = "https://www.okx.com";
 

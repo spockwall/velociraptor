@@ -18,6 +18,7 @@
 //! | DEPTH_LEVELS         | --depth           | 20                | Order book depth published          |
 //! | BINANCE_SYMBOLS      | --binance         | btcusdt,ethusdt   | Comma-separated Binance symbols     |
 //! | OKX_SYMBOLS          | --okx             | (none)            | Comma-separated OKX symbols (SPOT)  |
+//! | POLYMARKET_ASSETS    | --polymarket      | (none)            | Comma-separated Polymarket token IDs|
 //! | LOG_LEVEL            | --log-level       | info              | Tracing filter (e.g. debug)         |
 //! | LOG_JSON             | --log-json        | false             | Emit JSON logs instead of plain     |
 //!
@@ -39,6 +40,7 @@ use clap::Parser;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
+use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
@@ -73,6 +75,10 @@ struct Args {
     #[arg(long, env = "OKX_SYMBOLS", value_delimiter = ',')]
     okx: Option<Vec<String>>,
 
+    /// Comma-separated Polymarket asset (token) IDs to stream
+    #[arg(long, env = "POLYMARKET_ASSETS", value_delimiter = ',')]
+    polymarket: Option<Vec<String>>,
+
     /// Tracing filter string (e.g. info, debug, orderbook=trace)
     #[arg(long, env = "LOG_LEVEL", default_value = "info")]
     log_level: String,
@@ -105,14 +111,16 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .unwrap_or_else(|| vec!["btcusdt".into(), "ethusdt".into()]);
 
     let okx_symbols: Vec<String> = args.okx.unwrap_or_default();
+    let polymarket_assets: Vec<String> = args.polymarket.unwrap_or_default();
 
-    if binance_symbols.is_empty() && okx_symbols.is_empty() {
-        anyhow::bail!("No symbols configured. Use --binance or --okx to specify at least one.");
+    if binance_symbols.is_empty() && okx_symbols.is_empty() && polymarket_assets.is_empty() {
+        anyhow::bail!("No symbols configured. Use --binance, --okx, or --polymarket.");
     }
 
     info!(
         binance = ?binance_symbols,
         okx = ?okx_symbols,
+        polymarket = ?polymarket_assets,
         pub_endpoint = %args.pub_endpoint,
         router_endpoint = %args.router_endpoint,
         depth = args.depth,
@@ -140,6 +148,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
             .build();
         config.with_exchange(
             ConnectionConfig::new(ExchangeName::Okx).set_subscription_message(sub_msg),
+        );
+    }
+
+    // ── Polymarket connector ──────────────────────────────────────────────────
+    if !polymarket_assets.is_empty() {
+        let mut builder = PolymarketSubMsgBuilder::new();
+        for asset_id in &polymarket_assets {
+            builder = builder.with_asset(asset_id);
+        }
+        config.with_exchange(
+            ConnectionConfig::new(ExchangeName::Polymarket)
+                .set_subscription_message(builder.build()),
         );
     }
 

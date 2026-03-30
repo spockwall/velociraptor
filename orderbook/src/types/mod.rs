@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum ExchangeName {
     Okx,
     Binance,
+    Polymarket,
 }
 
 impl ExchangeName {
@@ -18,6 +19,7 @@ impl ExchangeName {
         match self {
             ExchangeName::Okx => "okx",
             ExchangeName::Binance => "binance",
+            ExchangeName::Polymarket => "polymarket",
         }
     }
 
@@ -29,6 +31,7 @@ impl ExchangeName {
         match s.to_lowercase().as_str() {
             "okx" => Some(ExchangeName::Okx),
             "binance" => Some(ExchangeName::Binance),
+            "polymarket" => Some(ExchangeName::Polymarket),
             _ => None,
         }
     }

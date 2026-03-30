@@ -1,5 +1,5 @@
 use crate::types::ExchangeName;
-use crate::types::endpoints::{binance, okx};
+use crate::types::endpoints::{binance, okx, polymarket};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -21,6 +21,7 @@ impl ConnectionConfig {
         let ws_url = match name {
             ExchangeName::Okx => okx::ws::PUBLIC_STREAM,
             ExchangeName::Binance => binance::ws::PUBLIC_STREAM,
+            ExchangeName::Polymarket => polymarket::ws::PUBLIC_STREAM,
         };
 
         Self {
