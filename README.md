@@ -9,6 +9,7 @@ A high-performance Rust library and server for real-time cryptocurrency orderboo
 | Binance     | Live   | Partial Book Depth 20 @ 100ms (`fstream.binance.com`) |
 | OKX         | Live   | `books` channel — snapshot + incremental updates |
 | Polymarket  | Live   | `book` snapshot + `price_change` incremental diffs |
+| Hyperliquid | Live   | `l2Book` full snapshot on every update |
 
 ---
 
@@ -76,6 +77,7 @@ All options can be set via environment variables or CLI flags. CLI flags take pr
 | `BINANCE_SYMBOLS`   | `--binance`       | `btcusdt,ethusdt` | Comma-separated Binance symbols          |
 | `OKX_SYMBOLS`       | `--okx`           | *(none)*          | Comma-separated OKX SPOT symbols         |
 | `POLYMARKET_ASSETS` | `--polymarket`    | *(none)*          | Comma-separated Polymarket token IDs     |
+| `HYPERLIQUID_COINS` | `--hyperliquid`   | *(none)*          | Comma-separated Hyperliquid coin names (e.g. `BTC,ETH`) |
 | `LOG_LEVEL`         | `--log-level`     | `info`            | Tracing filter (e.g. `debug`, `orderbook=trace`) |
 | `LOG_JSON`          | `--log-json`      | `false`           | JSON-formatted logs for log aggregators  |
 
@@ -90,6 +92,7 @@ DEPTH_LEVELS=10
 BINANCE_SYMBOLS=btcusdt,ethusdt,solusdt
 OKX_SYMBOLS=BTC-USDT,ETH-USDT
 POLYMARKET_ASSETS=71321045679252212594626385532706912750332728571942532289631379312455583992563
+HYPERLIQUID_COINS=BTC,ETH
 LOG_LEVEL=info
 LOG_JSON=true
 ```
@@ -101,6 +104,7 @@ LOG_JSON=true
     --binance btcusdt,ethusdt,solusdt \
     --okx BTC-USDT,ETH-USDT \
     --polymarket 71321045...,52114319... \
+    --hyperliquid BTC,ETH,SOL \
     --depth 10 \
     --pub-endpoint tcp://*:5555 \
     --router-endpoint tcp://*:5556
@@ -243,7 +247,7 @@ Client (DEALER)                       Server (ROUTER)
 | Field      | Values                                  | Notes                          |
 |------------|-----------------------------------------|--------------------------------|
 | `action`   | `subscribe` `unsubscribe` `add_channel` |                                |
-| `exchange` | `binance` `okx` `polymarket`            |                                |
+| `exchange` | `binance` `okx` `polymarket` `hyperliquid` |                             |
 | `symbol`   | e.g. `BTCUSDT`, `BTC-USDT`, `<token_id>` | Exchange-native format       |
 | `type`     | `snapshot` `bba`                        | Required for subscribe         |
 | `interval` | milliseconds                            | Required for subscribe         |
@@ -429,6 +433,22 @@ PolymarketSubMsgBuilder::new()
 ```
 
 Token IDs can be fetched from the Polymarket API — see `scripts/fetch_polymarket_tokens.py`.
+
+### Hyperliquid
+
+```rust
+HyperliquidSubMsgBuilder::new()
+    .with_coin("BTC")
+    .with_coin("ETH")
+    .build()
+
+// or multiple at once:
+HyperliquidSubMsgBuilder::new()
+    .with_coins(&["BTC", "ETH", "SOL"])
+    .build()
+```
+
+Symbols are uppercase coin names only — no quote currency (e.g. `"BTC"` not `"BTCUSDT"`).
 
 ---
 
