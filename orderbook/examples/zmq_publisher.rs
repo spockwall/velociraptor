@@ -9,9 +9,11 @@
 ///
 /// Dynamically add a new channel:
 ///   python3 orderbook/examples/zmq_subscriber.py --add-channel --exchange binance --symbol SOLUSDT
+///   python3 orderbook/examples/zmq_subscriber.py --add-channel --exchange polymarket --symbol <asset_id>
 use anyhow::Result;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
+use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
@@ -20,6 +22,10 @@ use tracing::info;
 const PUB_ENDPOINT: &str = "tcp://*:5555";
 const ROUTER_ENDPOINT: &str = "tcp://*:5556";
 const DEPTH_LEVELS: usize = 10;
+
+// Example Polymarket asset ID — replace with an active market token ID.
+const POLYMARKET_ASSET: &str =
+    "71321045679252212594626385532706912750332728571942532289631379312455583992563";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,6 +38,13 @@ async fn main() -> Result<()> {
         ConnectionConfig::new(ExchangeName::Binance).set_subscription_message(
             BinanceSubMsgBuilder::new()
                 .with_orderbook_channel(&["btcusdt", "ethusdt"])
+                .build(),
+        ),
+    );
+    config.with_exchange(
+        ConnectionConfig::new(ExchangeName::Polymarket).set_subscription_message(
+            PolymarketSubMsgBuilder::new()
+                .with_asset(POLYMARKET_ASSET)
                 .build(),
         ),
     );
