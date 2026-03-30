@@ -1,0 +1,31 @@
+# Orderbook server configuration
+# Run with: cargo run --bin orderbook_server -- --config config/server.toml
+
+[server]
+pub_endpoint    = "tcp://*:5555"
+router_endpoint = "tcp://*:5556"
+depth           = 20
+log_level       = "info"
+log_json        = false
+
+[binance]
+enabled = true
+symbols = ["btcusdt", "ethusdt"]
+
+[okx]
+enabled = false
+symbols = ["BTC-USDT", "ETH-USDT-SWAP"]
+
+# Each Polymarket market is a pair of Yes/No tokens.
+# Use scripts/fetch_polymarket_tokens.py to find token IDs.
+[[polymarket]]
+enabled = true
+question = "BitBoy convicted?"
+yes = "75467129615908319583031474642658885479135630431889036121812713428992454630178"
+no  = "3842963720267267286970642336860752782302644680156535061700039388405652129691"
+
+# [[polymarket]]
+# enabled = true
+# question = "Will Jesus Christ return before GTA VI?"
+# yes = "90435811253665578014957380826505992530054077692143838383981805324273750424057"
+# no  = "92388629082681805622801622703528982922543286352927708208755887536971583436902"
