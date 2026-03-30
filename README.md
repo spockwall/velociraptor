@@ -2,34 +2,55 @@
 
 A high-performance Rust library and server for real-time cryptocurrency orderbook streaming from major exchanges.
 
-## Workspace
-
-```
-velociraptor/
-├── libs/        # Shared constants and exchange endpoint definitions
-└── orderbook/   # Core library + deployable server binary
-```
-
 ## Supported Exchanges
 
-| Exchange | Status | Stream Type |
-|----------|--------|-------------|
-| Binance  | Live   | Partial Book Depth 20 @ 100ms (`fstream.binance.com`) |
-| OKX      | Live   | `books` channel — snapshot + incremental updates |
+| Exchange    | Status | Stream Type |
+|-------------|--------|-------------|
+| Binance     | Live   | Partial Book Depth 20 @ 100ms (`fstream.binance.com`) |
+| OKX         | Live   | `books` channel — snapshot + incremental updates |
+| Polymarket  | Live   | `book` snapshot + `price_change` incremental diffs |
 
 ---
 
 ## Quick Start
 
+**Step 1 — Edit the config file**
+
+```toml
+# config/server.toml
+[binance]
+enabled = true
+symbols = ["btcusdt", "ethusdt"]
+
+[[polymarket]]
+enabled = true
+question = "BitBoy convicted?"
+yes = "75467129615908319583031474642658885479135630431889036121812713428992454630178"
+no  = "3842963720267267286970642336860752782302644680156535061700039388405652129691"
+```
+
+Find Polymarket token IDs with:
 ```bash
-# Build and run the server (streams Binance BTCUSDT + ETHUSDT by default)
-cargo run --bin orderbook_server --release
+python3 scripts/fetch_polymarket_tokens.py --search "bitcoin"
+```
 
-# Custom symbols
-BINANCE_SYMBOLS=btcusdt,solusdt OKX_SYMBOLS=BTC-USDT cargo run --bin orderbook_server --release
+**Step 2 — Start the server**
 
-# Subscribe from Python
+```bash
+cargo run --bin orderbook_server --release -- --config config/server.toml
+```
+
+**Step 3 — Subscribe from Python**
+
+```bash
+# Binance snapshot
 python3 orderbook/examples/zmq_subscriber.py --exchange binance --symbol BTCUSDT --type snapshot --interval 500
+
+# Polymarket snapshot (use token ID as symbol)
+python3 orderbook/examples/zmq_subscriber.py \
+    --exchange polymarket \
+    --symbol 75467129615908319583031474642658885479135630431889036121812713428992454630178 \
+    --type snapshot --interval 500
 ```
 
 ---
@@ -52,10 +73,11 @@ All options can be set via environment variables or CLI flags. CLI flags take pr
 | `PUB_ENDPOINT`   | `--pub-endpoint`  | `tcp://*:5555`    | ZMQ PUB socket — clients subscribe here |
 | `ROUTER_ENDPOINT`| `--router-endpoint`| `tcp://*:5556`   | ZMQ ROUTER socket — clients send requests here |
 | `DEPTH_LEVELS`   | `--depth`         | `20`              | Orderbook depth per published snapshot   |
-| `BINANCE_SYMBOLS`| `--binance`       | `btcusdt,ethusdt` | Comma-separated Binance symbols          |
-| `OKX_SYMBOLS`    | `--okx`           | *(none)*          | Comma-separated OKX SPOT symbols         |
-| `LOG_LEVEL`      | `--log-level`     | `info`            | Tracing filter (e.g. `debug`, `orderbook=trace`) |
-| `LOG_JSON`       | `--log-json`      | `false`           | JSON-formatted logs for log aggregators  |
+| `BINANCE_SYMBOLS`   | `--binance`       | `btcusdt,ethusdt` | Comma-separated Binance symbols          |
+| `OKX_SYMBOLS`       | `--okx`           | *(none)*          | Comma-separated OKX SPOT symbols         |
+| `POLYMARKET_ASSETS` | `--polymarket`    | *(none)*          | Comma-separated Polymarket token IDs     |
+| `LOG_LEVEL`         | `--log-level`     | `info`            | Tracing filter (e.g. `debug`, `orderbook=trace`) |
+| `LOG_JSON`          | `--log-json`      | `false`           | JSON-formatted logs for log aggregators  |
 
 A `.env` file in the working directory is loaded automatically if present.
 
@@ -67,6 +89,7 @@ ROUTER_ENDPOINT=tcp://*:5556
 DEPTH_LEVELS=10
 BINANCE_SYMBOLS=btcusdt,ethusdt,solusdt
 OKX_SYMBOLS=BTC-USDT,ETH-USDT
+POLYMARKET_ASSETS=71321045679252212594626385532706912750332728571942532289631379312455583992563
 LOG_LEVEL=info
 LOG_JSON=true
 ```
@@ -77,6 +100,7 @@ LOG_JSON=true
 ./orderbook_server \
     --binance btcusdt,ethusdt,solusdt \
     --okx BTC-USDT,ETH-USDT \
+    --polymarket 71321045...,52114319... \
     --depth 10 \
     --pub-endpoint tcp://*:5555 \
     --router-endpoint tcp://*:5556
@@ -104,6 +128,11 @@ The system has three layers: **exchange connectors** feed raw wire data into the
 │  ┌──────────────┐   mpsc::unbounded   │    "exchange:SYMBOL",  │ │
 │  │     OKX      │ ──────────────────► │    Arc<Orderbook>      │ │
 │  │  Connector   │                     │  >                     │ │
+│  └──────────────┘                     │                        │ │
+│                                       │                        │ │
+│  ┌──────────────┐   mpsc::unbounded   │                        │ │
+│  │ Polymarket   │ ──────────────────► │                        │ │
+│  │  Connector   │                     │                        │ │
 │  └──────────────┘                     │                        │ │
 │                                       └──────────┬─────────────┘ │
 └─────────────────────────────────────────────────│───────────────┘
@@ -165,6 +194,7 @@ tokio runtime
 │
 ├── [task] BinanceConnector        — WebSocket I/O, heartbeat, reconnect
 ├── [task] OkxConnector            — WebSocket I/O, heartbeat, reconnect
+├── [task] PolymarketConnector     — WebSocket I/O, reconnect (no heartbeat)
 ├── [task] OrderbookEngine         — recv loop, apply updates, broadcast events
 ├── [task] on_update handler(s)    — one task per registered callback
 └── [task] ZmqPublisher (optional) — reads broadcast, publishes over ZMQ
@@ -210,13 +240,13 @@ Client (DEALER)                       Server (ROUTER)
 }
 ```
 
-| Field      | Values                           | Notes                          |
-|------------|----------------------------------|--------------------------------|
-| `action`   | `subscribe` `unsubscribe` `add_channel` | |
-| `exchange` | `binance` `okx`                  |                                |
-| `symbol`   | e.g. `BTCUSDT`, `BTC-USDT`       | Exchange-native format         |
-| `type`     | `snapshot` `bba`                 | Required for subscribe         |
-| `interval` | milliseconds                     | Required for subscribe         |
+| Field      | Values                                  | Notes                          |
+|------------|-----------------------------------------|--------------------------------|
+| `action`   | `subscribe` `unsubscribe` `add_channel` |                                |
+| `exchange` | `binance` `okx` `polymarket`            |                                |
+| `symbol`   | e.g. `BTCUSDT`, `BTC-USDT`, `<token_id>` | Exchange-native format       |
+| `type`     | `snapshot` `bba`                        | Required for subscribe         |
+| `interval` | milliseconds                            | Required for subscribe         |
 
 ### Data types
 
@@ -256,16 +286,18 @@ python3 orderbook/examples/zmq_subscriber.py \
 ```bash
 python3 orderbook/examples/zmq_subscriber.py \
     --add-channel --exchange binance --symbol SOLUSDT
+
+python3 orderbook/examples/zmq_subscriber.py \
+    --add-channel --exchange polymarket --symbol 71321045...
 ```
 
-### Minimal Python snippet
+### Minimal Python snippet — Binance
 
 ```python
 import zmq, json
 
 ctx = zmq.Context()
 
-# Subscribe to data
 sub = ctx.socket(zmq.SUB)
 sub.connect("tcp://localhost:5555")
 sub.setsockopt(zmq.SUBSCRIBE, b"binance:BTCUSDT")
@@ -274,6 +306,47 @@ while True:
     topic, payload = sub.recv_multipart()
     snap = json.loads(payload)
     print(f"bid={snap['best_bid']}  ask={snap['best_ask']}  wmid={snap['wmid']:.4f}")
+```
+
+### Minimal Python snippet — Polymarket
+
+Subscribe to a Yes or No token by using its token ID as the symbol. The topic format is `polymarket:<token_id>`.
+
+```python
+import zmq, json
+
+YES_TOKEN = "75467129615908319583031474642658885479135630431889036121812713428992454630178"
+
+ctx = zmq.Context()
+
+# Request a snapshot subscription via ROUTER socket
+dealer = ctx.socket(zmq.DEALER)
+dealer.connect("tcp://localhost:5556")
+dealer.send_json({
+    "action":   "subscribe",
+    "exchange": "polymarket",
+    "symbol":   YES_TOKEN,
+    "type":     "snapshot",
+    "interval": 500,
+})
+ack = dealer.recv_json()
+print("ack:", ack)
+
+# Receive published snapshots
+sub = ctx.socket(zmq.SUB)
+sub.connect("tcp://localhost:5555")
+sub.setsockopt(zmq.SUBSCRIBE, f"polymarket:{YES_TOKEN}".encode())
+
+while True:
+    topic, payload = sub.recv_multipart()
+    snap = json.loads(payload)
+    print(f"bid={snap['best_bid']}  ask={snap['best_ask']}  spread={snap['spread']:.4f}")
+```
+
+Find Polymarket token IDs with:
+
+```bash
+python3 scripts/fetch_polymarket_tokens.py --search "bitcoin"
 ```
 
 ---
@@ -345,6 +418,17 @@ OkxSubMsgBuilder::new()
     .with_orderbook_channel_multi(vec!["ETH-USDT", "SOL-USDT"], "SPOT")
     .build()
 ```
+
+### Polymarket
+
+```rust
+PolymarketSubMsgBuilder::new()
+    .with_asset("71321045679252212594626385532706912750332728571942532289631379312455583992563")
+    .with_asset("52114319501245915516055106046884209969926127482827954674443846427813813222426")
+    .build()
+```
+
+Token IDs can be fetched from the Polymarket API — see `scripts/fetch_polymarket_tokens.py`.
 
 ---
 
