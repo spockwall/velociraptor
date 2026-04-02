@@ -24,6 +24,7 @@ use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
+use recorder::{RotationPolicy, StorageConfig, StorageWriter};
 use serde::Deserialize;
 use tracing::{error, info};
 
@@ -41,6 +42,34 @@ struct TomlConfig {
     polymarket: Vec<PolymarketMarket>,
     #[serde(default)]
     hyperliquid: HyperliquidConfig,
+    #[serde(default)]
+    storage: StorageTomlConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct StorageTomlConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_storage_path")]
+    base_path: String,
+    #[serde(default = "default_storage_depth")]
+    depth: usize,
+    #[serde(default = "default_flush_interval")]
+    flush_interval: u64,
+    #[serde(default = "default_rotation")]
+    rotation: String,
+}
+
+impl Default for StorageTomlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_path: default_storage_path(),
+            depth: default_storage_depth(),
+            flush_interval: default_flush_interval(),
+            rotation: default_rotation(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -96,6 +125,10 @@ fn default_router_endpoint() -> String { "tcp://*:5556".into() }
 fn default_depth() -> usize            { 20 }
 fn default_log_level() -> String       { "info".into() }
 fn bool_true() -> bool                 { true }
+fn default_storage_path() -> String    { "./data".into() }
+fn default_storage_depth() -> usize    { 10 }
+fn default_flush_interval() -> u64     { 1000 }
+fn default_rotation() -> String        { "daily".into() }
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -163,7 +196,6 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Load TOML config if provided, otherwise use defaults
     let toml_cfg: TomlConfig = match &args.config {
         Some(path) => {
             let contents = match std::fs::read_to_string(path) {
@@ -184,7 +216,6 @@ async fn main() {
         None => TomlConfig::default(),
     };
 
-    // CLI flags override config file
     let pub_endpoint    = args.pub_endpoint.unwrap_or_else(|| toml_cfg.server.pub_endpoint.clone());
     let router_endpoint = args.router_endpoint.unwrap_or_else(|| toml_cfg.server.router_endpoint.clone());
     let depth           = args.depth.unwrap_or(toml_cfg.server.depth);
@@ -208,37 +239,18 @@ async fn run(
     router_endpoint: String,
     depth: usize,
 ) -> anyhow::Result<()> {
-    // CLI flags override config file; config file overrides built-in defaults
     let binance_symbols: Vec<String> = cli_binance.unwrap_or_else(|| {
-        if toml_cfg.binance.enabled {
-            toml_cfg.binance.symbols.clone()
-        } else {
-            vec![]
-        }
+        if toml_cfg.binance.enabled { toml_cfg.binance.symbols.clone() } else { vec![] }
     });
-
     let okx_symbols: Vec<String> = cli_okx.unwrap_or_else(|| {
-        if toml_cfg.okx.enabled {
-            toml_cfg.okx.symbols.clone()
-        } else {
-            vec![]
-        }
+        if toml_cfg.okx.enabled { toml_cfg.okx.symbols.clone() } else { vec![] }
     });
-
-    // Collect enabled Polymarket markets from config
     let polymarket_assets: Vec<String> = toml_cfg
-        .polymarket
-        .iter()
-        .filter(|m| m.enabled)
+        .polymarket.iter().filter(|m| m.enabled)
         .flat_map(|m| [m.yes.clone(), m.no.clone()])
         .collect();
-
     let hyperliquid_coins: Vec<String> = cli_hyperliquid.unwrap_or_else(|| {
-        if toml_cfg.hyperliquid.enabled {
-            toml_cfg.hyperliquid.coins.clone()
-        } else {
-            vec![]
-        }
+        if toml_cfg.hyperliquid.enabled { toml_cfg.hyperliquid.coins.clone() } else { vec![] }
     });
 
     if binance_symbols.is_empty()
@@ -252,17 +264,11 @@ async fn run(
     }
 
     info!(
-        binance  = ?binance_symbols,
-        okx      = ?okx_symbols,
-        hyperliquid = ?hyperliquid_coins,
+        binance = ?binance_symbols, okx = ?okx_symbols, hyperliquid = ?hyperliquid_coins,
         polymarket_markets = toml_cfg.polymarket.iter().filter(|m| m.enabled).count(),
-        pub_endpoint  = %pub_endpoint,
-        router_endpoint = %router_endpoint,
-        depth,
+        pub_endpoint = %pub_endpoint, router_endpoint = %router_endpoint, depth,
         "Starting orderbook server"
     );
-
-    // Log Polymarket market names for visibility
     for m in toml_cfg.polymarket.iter().filter(|m| m.enabled) {
         info!(question = %m.question, yes = %m.yes, no = %m.no, "Polymarket market");
     }
@@ -323,6 +329,28 @@ async fn run(
         depth,
         channel_tx,
     ));
+
+    // ── Storage recorder ──────────────────────────────────────────────────────
+    if toml_cfg.storage.enabled {
+        let rotation = match toml_cfg.storage.rotation.as_str() {
+            "none" => RotationPolicy::None,
+            _ => RotationPolicy::Daily,
+        };
+        let storage_config = StorageConfig {
+            base_path: toml_cfg.storage.base_path.into(),
+            depth: toml_cfg.storage.depth,
+            flush_interval_ms: toml_cfg.storage.flush_interval,
+            rotation,
+        };
+        info!(
+            base_path = %storage_config.base_path.display(),
+            depth = storage_config.depth,
+            "Storage recorder enabled"
+        );
+        let rx = system.engine().subscribe_as_recorder(storage_config.depth);
+        let handle = StorageWriter::new(storage_config).start(rx);
+        system.attach_handle(handle);
+    }
 
     info!("ZMQ PUB    {pub_endpoint}");
     info!("ZMQ ROUTER {router_endpoint}");

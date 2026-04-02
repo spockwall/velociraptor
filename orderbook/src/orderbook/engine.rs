@@ -2,6 +2,7 @@ use crate::connection::SystemControl;
 use crate::orderbook::Orderbook;
 use crate::types::events::{OrderbookEvent, OrderbookSnapshot};
 use crate::types::orderbook::OrderbookMessage;
+use recorder::{RecorderEvent, RecorderSnapshot};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
@@ -43,6 +44,51 @@ impl OrderbookEngine {
     /// Subscribe directly to the event broadcast stream.
     pub fn subscribe(&self) -> broadcast::Receiver<OrderbookEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Subscribe and map to `RecorderEvent`, which `recorder::StorageWriter` consumes.
+    /// Spawns a lightweight forwarding task; the returned receiver can be passed
+    /// directly to `StorageWriter::start()`.
+    pub fn subscribe_as_recorder(
+        &self,
+        depth: usize,
+    ) -> broadcast::Receiver<RecorderEvent> {
+        let (tx, rx) = broadcast::channel(1024);
+        let mut src = self.event_tx.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                match src.recv().await {
+                    Ok(OrderbookEvent::Snapshot(snap)) => {
+                        let book = &snap.book;
+                        let (bids, asks) = book.depth(depth);
+                        let rec = RecorderSnapshot {
+                            exchange: snap.exchange.to_string(),
+                            symbol: snap.symbol.clone(),
+                            sequence: snap.sequence,
+                            timestamp: snap.timestamp,
+                            best_bid: book.best_bid(),
+                            best_ask: book.best_ask(),
+                            spread: book.spread(),
+                            mid: book.mid_price(),
+                            wmid: book.wmid(),
+                            bids,
+                            asks,
+                        };
+                        if tx.send(RecorderEvent::Snapshot(rec)).is_err() {
+                            break; // all receivers dropped
+                        }
+                    }
+                    Ok(OrderbookEvent::RawUpdate(_)) => {
+                        let _ = tx.send(RecorderEvent::RawUpdate);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        rx
     }
 
     /// Returns a shared handle to the live orderbook map.

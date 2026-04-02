@@ -106,6 +106,19 @@ impl OrderbookSystem {
         self.handles.extra_handles.push(handle);
     }
 
+    /// Return a reference to the underlying engine.
+    /// Use this to start external subscribers (e.g. `recorder::StorageWriter`)
+    /// without coupling the `orderbook` crate to the `recorder` crate.
+    pub fn engine(&self) -> &OrderbookEngine {
+        self.engine.as_ref().expect("engine() called after run()")
+    }
+
+    /// Attach an already-spawned task handle so it is awaited alongside the
+    /// system's other handles during `run()` and shutdown.
+    pub fn attach_handle(&mut self, handle: tokio::task::JoinHandle<()>) {
+        self.handles.extra_handles.push(handle);
+    }
+
     /// Access the live orderbook map directly.
     pub fn orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
         self.engine

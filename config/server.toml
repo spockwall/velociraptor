@@ -13,12 +13,19 @@ enabled = true
 symbols = ["btcusdt", "ethusdt"]
 
 [okx]
-enabled = false
+enabled = true
 symbols = ["BTC-USDT", "ETH-USDT-SWAP"]
 
 [hyperliquid]
 enabled = true
 coins   = ["BTC", "ETH"]   # uppercase coin names
+
+[storage]
+enabled        = false
+base_path      = "./data"
+depth          = 20          # depth levels to store (bids + asks)
+flush_interval = 1000        # ms between BufWriter flushes
+rotation       = "daily"     # "daily" | "none"
 
 # Each Polymarket market is a pair of Yes/No tokens.
 # Use scripts/fetch_polymarket_tokens.py to find token IDs.

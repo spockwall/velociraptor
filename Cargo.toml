@@ -1,5 +1,5 @@
 [workspace]
-members = ["libs","orderbook"]
+members = ["libs","orderbook","recorder"]
 resolver = "2"
 
 [workspace.dependencies]
