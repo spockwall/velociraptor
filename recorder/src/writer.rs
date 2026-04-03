@@ -157,7 +157,7 @@ fn get_or_open<'a>(
 }
 
 fn write_record(writer: &mut BufWriter<File>, record: &StorageRecord) -> anyhow::Result<()> {
-    let payload = rmp_serde::to_vec(record)?;
+    let payload = rmp_serde::to_vec_named(record)?;
     let len = payload.len() as u32;
     writer.write_all(&len.to_le_bytes())?;
     writer.write_all(&payload)?;
