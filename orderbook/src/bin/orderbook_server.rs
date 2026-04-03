@@ -6,16 +6,14 @@
 //!
 //! ```bash
 //! # Start with a TOML config file (recommended)
-//! cargo run --bin orderbook_server -- --config config/server.toml
+//! cargo run --bin orderbook_server -- --config configs/server.toml
 //!
 //! # CLI flags only (env vars also supported)
 //! cargo run --bin orderbook_server -- --binance btcusdt,ethusdt --depth 10
 //! ```
-//!
-//! # Config file takes precedence over CLI defaults.
-//! # CLI flags take precedence over config file values.
 
 use clap::Parser;
+use orderbook::configs::{Args, TomlConfig, init_logging};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -25,210 +23,51 @@ use orderbook::publisher::ZmqPublisher;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
 use recorder::{RotationPolicy, StorageConfig, StorageWriter};
-use serde::Deserialize;
 use tracing::{error, info};
 
-// ── TOML config structs ───────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, Default)]
-struct TomlConfig {
-    #[serde(default)]
-    server: ServerConfig,
-    #[serde(default)]
-    binance: BinanceConfig,
-    #[serde(default)]
-    okx: OkxConfig,
-    #[serde(default)]
-    polymarket: Vec<PolymarketMarket>,
-    #[serde(default)]
-    hyperliquid: HyperliquidConfig,
-    #[serde(default)]
-    storage: StorageTomlConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct StorageTomlConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default = "default_storage_path")]
-    base_path: String,
-    #[serde(default = "default_storage_depth")]
-    depth: usize,
-    #[serde(default = "default_flush_interval")]
-    flush_interval: u64,
-    #[serde(default = "default_rotation")]
-    rotation: String,
-}
-
-impl Default for StorageTomlConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            base_path: default_storage_path(),
-            depth: default_storage_depth(),
-            flush_interval: default_flush_interval(),
-            rotation: default_rotation(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct HyperliquidConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    coins: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ServerConfig {
-    #[serde(default = "default_pub_endpoint")]
-    pub_endpoint: String,
-    #[serde(default = "default_router_endpoint")]
-    router_endpoint: String,
-    #[serde(default = "default_depth")]
-    depth: usize,
-    #[serde(default = "default_log_level")]
-    log_level: String,
-    #[serde(default)]
-    log_json: bool,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct BinanceConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    symbols: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OkxConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    symbols: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PolymarketMarket {
-    #[serde(default = "bool_true")]
-    enabled: bool,
-    #[serde(default)]
-    question: String,
-    yes: String,
-    no: String,
-}
-
-fn default_pub_endpoint() -> String    { "tcp://*:5555".into() }
-fn default_router_endpoint() -> String { "tcp://*:5556".into() }
-fn default_depth() -> usize            { 20 }
-fn default_log_level() -> String       { "info".into() }
-fn bool_true() -> bool                 { true }
-fn default_storage_path() -> String    { "./data".into() }
-fn default_storage_depth() -> usize    { 10 }
-fn default_flush_interval() -> u64     { 1000 }
-fn default_rotation() -> String        { "daily".into() }
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            pub_endpoint:    default_pub_endpoint(),
-            router_endpoint: default_router_endpoint(),
-            depth:           default_depth(),
-            log_level:       default_log_level(),
-            log_json:        false,
-        }
-    }
-}
-
-// ── CLI args ──────────────────────────────────────────────────────────────────
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "orderbook_server",
-    about = "Real-time orderbook server — streams live data from exchanges over ZMQ",
-    version
-)]
-struct Args {
-    /// Path to TOML config file
-    #[arg(long, env = "CONFIG_FILE")]
-    config: Option<String>,
-
-    /// ZMQ PUB socket bind address (overrides config file)
-    #[arg(long, env = "PUB_ENDPOINT")]
-    pub_endpoint: Option<String>,
-
-    /// ZMQ ROUTER socket bind address (overrides config file)
-    #[arg(long, env = "ROUTER_ENDPOINT")]
-    router_endpoint: Option<String>,
-
-    /// Order book depth published per snapshot (overrides config file)
-    #[arg(long, env = "DEPTH_LEVELS")]
-    depth: Option<usize>,
-
-    /// Comma-separated Binance symbols (overrides config file)
-    #[arg(long, env = "BINANCE_SYMBOLS", value_delimiter = ',')]
-    binance: Option<Vec<String>>,
-
-    /// Comma-separated OKX SPOT symbols (overrides config file)
-    #[arg(long, env = "OKX_SYMBOLS", value_delimiter = ',')]
-    okx: Option<Vec<String>>,
-
-    /// Comma-separated Hyperliquid coin symbols, e.g. BTC,ETH (overrides config file)
-    #[arg(long, env = "HYPERLIQUID_COINS", value_delimiter = ',')]
-    hyperliquid: Option<Vec<String>>,
-
-    /// Tracing filter string (overrides config file)
-    #[arg(long, env = "LOG_LEVEL")]
-    log_level: Option<String>,
-
-    /// Emit JSON-formatted logs (overrides config file)
-    #[arg(long, env = "LOG_JSON")]
-    log_json: Option<bool>,
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() {
     let _ = dotenvy::dotenv();
-
     let args = Args::parse();
 
-    let toml_cfg: TomlConfig = match &args.config {
-        Some(path) => {
-            let contents = match std::fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to read config file '{path}': {e}");
-                    std::process::exit(1);
-                }
-            };
-            match toml::from_str(&contents) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to parse config file '{path}': {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
+    let toml_cfg = match &args.config {
+        Some(path) => TomlConfig::load(path),
         None => TomlConfig::default(),
     };
 
-    let pub_endpoint    = args.pub_endpoint.unwrap_or_else(|| toml_cfg.server.pub_endpoint.clone());
-    let router_endpoint = args.router_endpoint.unwrap_or_else(|| toml_cfg.server.router_endpoint.clone());
-    let depth           = args.depth.unwrap_or(toml_cfg.server.depth);
-    let log_level       = args.log_level.unwrap_or_else(|| toml_cfg.server.log_level.clone());
-    let log_json        = args.log_json.unwrap_or(toml_cfg.server.log_json);
+    let pub_endpoint = args
+        .pub_endpoint
+        .unwrap_or_else(|| toml_cfg.server.pub_endpoint.clone());
+    let router_endpoint = args
+        .router_endpoint
+        .unwrap_or_else(|| toml_cfg.server.router_endpoint.clone());
+    let depth = args.depth.unwrap_or(toml_cfg.server.depth);
+    let log_level = args
+        .log_level
+        .unwrap_or_else(|| toml_cfg.logging.level.clone());
+    let log_json = args.log_json.unwrap_or(toml_cfg.logging.json);
 
     init_logging(&log_level, log_json);
 
-    if let Err(e) = run(args.binance, args.okx, args.hyperliquid, toml_cfg, pub_endpoint, router_endpoint, depth).await {
+    if let Err(e) = run(
+        args.binance,
+        args.okx,
+        args.hyperliquid,
+        toml_cfg,
+        pub_endpoint,
+        router_endpoint,
+        depth,
+    )
+    .await
+    {
         error!("Fatal: {e:#}");
         std::process::exit(1);
     }
 }
+
+// ── Run ───────────────────────────────────────────────────────────────────────
 
 async fn run(
     cli_binance: Option<Vec<String>>,
@@ -239,18 +78,33 @@ async fn run(
     router_endpoint: String,
     depth: usize,
 ) -> anyhow::Result<()> {
+    // CLI flags take precedence over config file values.
     let binance_symbols: Vec<String> = cli_binance.unwrap_or_else(|| {
-        if toml_cfg.binance.enabled { toml_cfg.binance.symbols.clone() } else { vec![] }
+        if toml_cfg.binance.enabled {
+            toml_cfg.binance.symbols.clone()
+        } else {
+            vec![]
+        }
     });
     let okx_symbols: Vec<String> = cli_okx.unwrap_or_else(|| {
-        if toml_cfg.okx.enabled { toml_cfg.okx.symbols.clone() } else { vec![] }
+        if toml_cfg.okx.enabled {
+            toml_cfg.okx.symbols.clone()
+        } else {
+            vec![]
+        }
     });
     let polymarket_assets: Vec<String> = toml_cfg
-        .polymarket.iter().filter(|m| m.enabled)
+        .polymarket
+        .iter()
+        .filter(|m| m.enabled)
         .flat_map(|m| [m.yes.clone(), m.no.clone()])
         .collect();
     let hyperliquid_coins: Vec<String> = cli_hyperliquid.unwrap_or_else(|| {
-        if toml_cfg.hyperliquid.enabled { toml_cfg.hyperliquid.coins.clone() } else { vec![] }
+        if toml_cfg.hyperliquid.enabled {
+            toml_cfg.hyperliquid.coins.clone()
+        } else {
+            vec![]
+        }
     });
 
     if binance_symbols.is_empty()
@@ -273,64 +127,66 @@ async fn run(
         info!(question = %m.question, yes = %m.yes, no = %m.no, "Polymarket market");
     }
 
-    let mut config = OrderbookSystemConfig::new();
+    // ── Exchange connections ───────────────────────────────────────────────────
 
-    // ── Binance ───────────────────────────────────────────────────────────────
+    let mut system_config = OrderbookSystemConfig::new();
+
     if !binance_symbols.is_empty() {
-        let sym_refs: Vec<&str> = binance_symbols.iter().map(String::as_str).collect();
-        config.with_exchange(
+        let refs: Vec<&str> = binance_symbols.iter().map(String::as_str).collect();
+        system_config.with_exchange(
             ConnectionConfig::new(ExchangeName::Binance).set_subscription_message(
-                BinanceSubMsgBuilder::new().with_orderbook_channel(&sym_refs).build(),
+                BinanceSubMsgBuilder::new()
+                    .with_orderbook_channel(&refs)
+                    .build(),
             ),
         );
     }
 
-    // ── OKX ───────────────────────────────────────────────────────────────────
     if !okx_symbols.is_empty() {
-        let sym_refs: Vec<&str> = okx_symbols.iter().map(String::as_str).collect();
-        config.with_exchange(
+        let refs: Vec<&str> = okx_symbols.iter().map(String::as_str).collect();
+        system_config.with_exchange(
             ConnectionConfig::new(ExchangeName::Okx).set_subscription_message(
-                OkxSubMsgBuilder::new().with_orderbook_channel_multi(sym_refs, "SPOT").build(),
+                OkxSubMsgBuilder::new()
+                    .with_orderbook_channel_multi(refs, "SPOT")
+                    .build(),
             ),
         );
     }
 
-    // ── Polymarket ────────────────────────────────────────────────────────────
     if !polymarket_assets.is_empty() {
         let mut builder = PolymarketSubMsgBuilder::new();
-        for asset_id in &polymarket_assets {
-            builder = builder.with_asset(asset_id);
+        for id in &polymarket_assets {
+            builder = builder.with_asset(id);
         }
-        config.with_exchange(
+        system_config.with_exchange(
             ConnectionConfig::new(ExchangeName::Polymarket)
                 .set_subscription_message(builder.build()),
         );
     }
 
-    // ── Hyperliquid ───────────────────────────────────────────────────────────
     if !hyperliquid_coins.is_empty() {
-        let coin_refs: Vec<&str> = hyperliquid_coins.iter().map(String::as_str).collect();
-        config.with_exchange(
+        let refs: Vec<&str> = hyperliquid_coins.iter().map(String::as_str).collect();
+        system_config.with_exchange(
             ConnectionConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
-                HyperliquidSubMsgBuilder::new().with_coins(&coin_refs).build(),
+                HyperliquidSubMsgBuilder::new().with_coins(&refs).build(),
             ),
         );
     }
 
-    config.validate()?;
+    system_config.validate()?;
+
+    // ── System bootstrap ──────────────────────────────────────────────────────
 
     let system_control = SystemControl::new();
-    let mut system = OrderbookSystem::new(config, system_control.clone())?;
+    let mut system = OrderbookSystem::new(system_config, system_control.clone())?;
 
-    let channel_tx = system.channel_request_sender();
     system.attach_zmq_publisher(ZmqPublisher::new(
         &pub_endpoint,
         &router_endpoint,
         depth,
-        channel_tx,
+        system.channel_request_sender(),
     ));
 
-    // ── Storage recorder ──────────────────────────────────────────────────────
     if toml_cfg.storage.enabled {
         let rotation = match toml_cfg.storage.rotation.as_str() {
             "none" => RotationPolicy::None,
@@ -348,8 +204,7 @@ async fn run(
             "Storage recorder enabled"
         );
         let rx = system.engine().subscribe_as_recorder(storage_config.depth);
-        let handle = StorageWriter::new(storage_config).start(rx);
-        system.attach_handle(handle);
+        system.attach_handle(StorageWriter::new(storage_config).start(rx));
     }
 
     info!("ZMQ PUB    {pub_endpoint}");
@@ -361,22 +216,8 @@ async fn run(
             info!("Ctrl+C — shutting down");
             system_control.shutdown();
         }
-        result = system.run() => {
-            result?;
-        }
+        result = system.run() => { result?; }
     }
 
     Ok(())
-}
-
-// ── Logging ───────────────────────────────────────────────────────────────────
-
-fn init_logging(filter: &str, json: bool) {
-    use tracing_subscriber::EnvFilter;
-    let env_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
-    if json {
-        tracing_subscriber::fmt().json().with_env_filter(env_filter).init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    }
 }

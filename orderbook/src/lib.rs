@@ -1,3 +1,4 @@
+pub mod configs;
 pub mod connection;
 pub mod exchanges;
 pub mod heartbeat;

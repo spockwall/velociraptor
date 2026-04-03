@@ -1,12 +1,14 @@
 # Orderbook server configuration
-# Run with: cargo run --bin orderbook_server -- --config config/server.toml
+# Run with: cargo run --bin orderbook_server -- --config configs/server.toml
 
 [server]
 pub_endpoint    = "tcp://*:5555"
 router_endpoint = "tcp://*:5556"
 depth           = 20
-log_level       = "info"
-log_json        = false
+
+[logging]
+level = "info"
+json  = false
 
 [binance]
 enabled = true
