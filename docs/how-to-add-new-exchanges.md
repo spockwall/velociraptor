@@ -408,7 +408,7 @@ if !myexchange_symbols.is_empty() {
 }
 ```
 
-**`config/server.toml`**
+**`configs/server.toml`**
 
 ```toml
 [myexchange]
@@ -432,7 +432,7 @@ symbols = ["BTC", "ETH"]
 - [ ] `orderbook/system.rs` — `build_connection_config()` arm
 - [ ] `lib.rs` — public re-exports
 - [ ] `bin/orderbook_server.rs` — CLI flag + TOML struct + exchange block
-- [ ] `config/server.toml` — config section
+- [ ] `configs/server.toml` — config section
 - [ ] `cargo build` — fix any exhaustive match errors
 
 ---

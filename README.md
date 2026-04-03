@@ -18,7 +18,7 @@ A high-performance Rust library and server for real-time cryptocurrency orderboo
 **Step 1 — Edit the config file**
 
 ```toml
-# config/server.toml
+# configs/server.toml
 [binance]
 enabled = true
 symbols = ["btcusdt", "ethusdt"]
@@ -38,7 +38,7 @@ python3 scripts/fetch_polymarket_tokens.py --search "bitcoin"
 **Step 2 — Start the server**
 
 ```bash
-cargo run --bin orderbook_server --release -- --config config/server.toml
+cargo run --bin orderbook_server --release -- --config configs/server.toml
 ```
 
 **Step 3 — Subscribe from Python**
