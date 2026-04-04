@@ -192,15 +192,21 @@ async fn run(
             "none" => RotationPolicy::None,
             _ => RotationPolicy::Daily,
         };
+        let zstd_level = match toml_cfg.storage.zstd_level {
+            0 => None,
+            l => Some(l as i32),
+        };
         let storage_config = StorageConfig {
             base_path: toml_cfg.storage.base_path.into(),
             depth: toml_cfg.storage.depth,
             flush_interval_ms: toml_cfg.storage.flush_interval,
             rotation,
+            zstd_level,
         };
         info!(
             base_path = %storage_config.base_path.display(),
             depth = storage_config.depth,
+            zstd_level = ?storage_config.zstd_level,
             "Storage recorder enabled"
         );
         let rx = system.engine().subscribe_as_recorder(storage_config.depth);

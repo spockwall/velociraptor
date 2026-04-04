@@ -6,3 +6,7 @@ pub fn parse_timestamp_ms(ts: &str) -> DateTime<Utc> {
         .and_then(|ms| Utc.timestamp_millis_opt(ms).single())
         .unwrap_or_else(Utc::now)
 }
+
+pub fn current_date() -> String {
+    Utc::now().format("%Y-%m-%d").to_string()
+}

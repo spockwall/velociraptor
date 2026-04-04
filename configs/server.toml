@@ -28,6 +28,7 @@ base_path      = "./data"
 depth          = 20          # depth levels to store (bids + asks)
 flush_interval = 1000        # ms between BufWriter flushes
 rotation       = "daily"     # "daily" | "none"
+zstd_level     = 0           # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
 
 # Each Polymarket market is a pair of Yes/No tokens.
 # Use scripts/fetch_polymarket_tokens.py to find token IDs.

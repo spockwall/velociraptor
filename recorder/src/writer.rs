@@ -1,16 +1,14 @@
 use crate::config::{RotationPolicy, StorageConfig};
+use crate::event::RecorderEvent;
 use crate::format::StorageRecord;
-use chrono::Utc;
+use libs::time::current_date;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use tokio::sync::broadcast;
-use tokio::time::{Duration, interval};
+use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
-
-// Import only the event types — defined as a local mirror so recorder has no
-// dependency on the orderbook crate.  The caller passes a typed Receiver.
-use crate::event::RecorderEvent;
 
 pub struct StorageWriter {
     config: StorageConfig,
@@ -21,17 +19,6 @@ impl StorageWriter {
         Self { config }
     }
 
-    /// Spawn the writer task.
-    ///
-    /// Pass the receiver from `engine.subscribe()` directly — recorder does not
-    /// depend on `OrderbookEngine` or the `orderbook` crate.
-    ///
-    /// ```rust
-    /// let rx = system.engine().subscribe();
-    /// // convert OrderbookEvent → RecorderEvent using the From impl in recorder::event
-    /// let handle = StorageWriter::new(config).start(rx);
-    /// system.attach_handle(handle);
-    /// ```
     pub fn start(
         self,
         mut event_rx: broadcast::Receiver<RecorderEvent>,
@@ -46,6 +33,7 @@ impl StorageWriter {
             info!(
                 base_path = %config.base_path.display(),
                 depth = config.depth,
+                zstd_level = ?config.zstd_level,
                 "StorageWriter started"
             );
 
@@ -78,14 +66,30 @@ impl StorageWriter {
 
                     _ = flush_tick.tick() => {
                         let today = current_date();
+                        let zstd_level = config.zstd_level;
+
                         handles.retain(|key, (writer, date)| {
                             let stale = matches!(config.rotation, RotationPolicy::Daily)
                                 && date.as_str() != today;
+
                             if stale {
                                 let _ = writer.flush();
+                                let mut parts = key.splitn(2, ':');
+                                let exchange = parts.next().unwrap_or("unknown");
+                                let symbol = parts.next().unwrap_or("unknown");
+                                let path = config.base_path
+                                    .join(exchange)
+                                    .join(symbol)
+                                    .join(format!("{date}.mpack"));
+
                                 info!("StorageWriter: rotated {key} ({date} → {today})");
+
+                                if let Some(level) = zstd_level {
+                                    spawn_compress(path, level);
+                                }
                                 return false;
                             }
+
                             if let Err(e) = writer.flush() {
                                 error!("StorageWriter: flush failed for {key}: {e}");
                             }
@@ -95,11 +99,27 @@ impl StorageWriter {
                 }
             }
 
-            for (key, (mut writer, _)) in handles {
+            // Final flush on shutdown
+            for (key, (ref mut writer, date)) in &mut handles {
                 if let Err(e) = writer.flush() {
                     error!("StorageWriter: final flush failed for {key}: {e}");
                 }
+                // Compress if daily rotation and zstd enabled
+                if matches!(config.rotation, RotationPolicy::Daily) {
+                    if let Some(level) = config.zstd_level {
+                        let mut parts = key.splitn(2, ':');
+                        let exchange = parts.next().unwrap_or("unknown");
+                        let symbol = parts.next().unwrap_or("unknown");
+                        let path = config
+                            .base_path
+                            .join(exchange)
+                            .join(symbol)
+                            .join(format!("{date}.mpack"));
+                        spawn_compress(path, level);
+                    }
+                }
             }
+
             info!("StorageWriter stopped");
         })
     }
@@ -107,8 +127,34 @@ impl StorageWriter {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn current_date() -> String {
-    Utc::now().format("%Y-%m-%d").to_string()
+/// Spawn a blocking task to compress `path` with zstd, then delete the original.
+/// Produces `{path}.zst` alongside the original.
+fn spawn_compress(path: PathBuf, level: i32) {
+    tokio::task::spawn_blocking(move || {
+        let zst_path = path.with_extension("mpack.zst");
+        let result = (|| -> anyhow::Result<()> {
+            let input = File::open(&path)?;
+            let output = File::create(&zst_path)?;
+            let mut encoder = zstd::Encoder::new(output, level)?;
+            let mut reader = std::io::BufReader::new(input);
+            std::io::copy(&mut reader, &mut encoder)?;
+            encoder.finish()?;
+            fs::remove_file(&path)?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => info!(
+                "StorageWriter: compressed {} → {}",
+                path.display(),
+                zst_path.display()
+            ),
+            Err(e) => error!(
+                "StorageWriter: compression failed for {}: {e}",
+                path.display()
+            ),
+        }
+    });
 }
 
 fn get_or_open<'a>(

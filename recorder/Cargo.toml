@@ -12,3 +12,5 @@ rmp-serde = { workspace = true }
 serde     = { workspace = true }
 tokio     = { workspace = true }
 tracing   = { workspace = true }
+zstd      = { workspace = true }
+libs      = { path = "../libs" }

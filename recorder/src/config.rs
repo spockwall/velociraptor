@@ -18,6 +18,9 @@ pub struct StorageConfig {
     pub flush_interval_ms: u64,
     /// File rotation policy. Default: `Daily`
     pub rotation: RotationPolicy,
+    /// zstd compression level (1–22). `None` disables compression.
+    /// Files are compressed after rotation, producing `{date}.mpack.zst`.
+    pub zstd_level: Option<i32>,
 }
 
 impl Default for StorageConfig {
@@ -27,6 +30,7 @@ impl Default for StorageConfig {
             depth: 10,
             flush_interval_ms: 1000,
             rotation: RotationPolicy::Daily,
+            zstd_level: None,
         }
     }
 }
