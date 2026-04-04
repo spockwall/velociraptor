@@ -52,10 +52,6 @@ Each record contains the following fields:
 | `symbol`       | string          | Symbol, e.g. `"BTCUSDT"`                         |
 | `sequence`     | u64             | Monotonically increasing update counter          |
 | `ts_ns`        | i64             | UTC timestamp in nanoseconds since Unix epoch    |
-| `best_bid_px`  | f64 or null     | Best bid price                                   |
-| `best_bid_qty` | f64 or null     | Best bid quantity                                |
-| `best_ask_px`  | f64 or null     | Best ask price                                   |
-| `best_ask_qty` | f64 or null     | Best ask quantity                                |
 | `spread`       | f64 or null     | `best_ask_px - best_bid_px`                      |
 | `mid`          | f64 or null     | `(best_bid_px + best_ask_px) / 2`                |
 | `wmid`         | f64             | Quantity-weighted mid price                      |
