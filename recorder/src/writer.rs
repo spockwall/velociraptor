@@ -65,36 +65,11 @@ impl StorageWriter {
                     },
 
                     _ = flush_tick.tick() => {
-                        let today = current_date();
-                        let zstd_level = config.zstd_level;
-
-                        handles.retain(|key, (writer, date)| {
-                            let stale = matches!(config.rotation, RotationPolicy::Daily)
-                                && date.as_str() != today;
-
-                            if stale {
-                                let _ = writer.flush();
-                                let mut parts = key.splitn(2, ':');
-                                let exchange = parts.next().unwrap_or("unknown");
-                                let symbol = parts.next().unwrap_or("unknown");
-                                let path = config.base_path
-                                    .join(exchange)
-                                    .join(symbol)
-                                    .join(format!("{date}.mpack"));
-
-                                info!("StorageWriter: rotated {key} ({date} → {today})");
-
-                                if let Some(level) = zstd_level {
-                                    spawn_compress(path, level);
-                                }
-                                return false;
-                            }
-
+                        for (key, (writer, _)) in &mut handles {
                             if let Err(e) = writer.flush() {
                                 error!("StorageWriter: flush failed for {key}: {e}");
                             }
-                            true
-                        });
+                        }
                     }
                 }
             }
@@ -163,14 +138,31 @@ fn get_or_open<'a>(
     today: &str,
     config: &StorageConfig,
 ) -> Option<&'a mut BufWriter<File>> {
-    let needs_open = match handles.get(key) {
-        None => true,
-        Some((_, date)) => {
-            matches!(config.rotation, RotationPolicy::Daily) && date.as_str() != today
-        }
-    };
+    let stale = matches!(handles.get(key), Some((_, date))
+        if matches!(config.rotation, RotationPolicy::Daily) && date.as_str() != today);
 
-    if needs_open {
+    if stale {
+        // Flush and close the old writer before opening a new one.
+        if let Some((mut old_writer, old_date)) = handles.remove(key) {
+            if let Err(e) = old_writer.flush() {
+                error!("StorageWriter: flush on rotate failed for {key}: {e}");
+            }
+            // old_writer dropped here — file handle closed before compress reads it
+            if let Some(level) = config.zstd_level {
+                let mut parts = key.splitn(2, ':');
+                let exchange = parts.next().unwrap_or("unknown");
+                let symbol = parts.next().unwrap_or("unknown");
+                let path = config.base_path
+                    .join(exchange)
+                    .join(symbol)
+                    .join(format!("{old_date}.mpack"));
+                info!("StorageWriter: rotated {key} ({old_date} → {today})");
+                spawn_compress(path, level);
+            }
+        }
+    }
+
+    if !handles.contains_key(key) {
         let mut parts = key.splitn(2, ':');
         let exchange = parts.next().unwrap_or("unknown");
         let symbol = parts.next().unwrap_or("unknown");
