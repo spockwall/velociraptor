@@ -54,6 +54,11 @@ python3 orderbook/examples/zmq_subscriber.py \
     --type snapshot --interval 500
 ```
 
+**Step 4 - Orderbook Snaphost Record Reader**
+```bash
+python3 scripts/read_mpack.py data/binance/BTCUSDT/ 
+```
+
 ---
 
 ## Deploying the Server
@@ -351,6 +356,35 @@ Find Polymarket token IDs with:
 
 ```bash
 python3 scripts/fetch_polymarket_tokens.py --search "bitcoin"
+```
+
+---
+
+## Storage & Replay
+
+Enable storage in `configs/server.toml`:
+
+```toml
+[storage]
+enabled        = true
+base_path      = "./data"
+depth          = 20
+flush_interval = 1000    # ms between flushes
+rotation       = "daily" # "daily" | "none"
+```
+
+Snapshots are written as append-only MessagePack files:
+
+```
+data/{exchange}/{symbol}/{YYYY-MM-DD}.mpack
+```
+
+Read them back in Python:
+
+```bash
+pip install msgpack pandas
+python3 scripts/read_mpack.py data/binance/BTCUSDT/2026-04-03.mpack
+python3 scripts/read_mpack.py data/binance/BTCUSDT/   # all dates for that symbol
 ```
 
 ---
