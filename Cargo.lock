@@ -1294,6 +1294,7 @@ dependencies = [
  "rand 0.10.0",
  "recorder",
  "reqwest",
+ "rmp-serde",
  "serde",
  "serde_json",
  "sha2",
@@ -1309,6 +1310,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
