@@ -152,7 +152,8 @@ fn get_or_open<'a>(
                 let mut parts = key.splitn(2, ':');
                 let exchange = parts.next().unwrap_or("unknown");
                 let symbol = parts.next().unwrap_or("unknown");
-                let path = config.base_path
+                let path = config
+                    .base_path
                     .join(exchange)
                     .join(symbol)
                     .join(format!("{old_date}.mpack"));

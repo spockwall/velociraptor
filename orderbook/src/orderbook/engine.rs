@@ -49,10 +49,7 @@ impl OrderbookEngine {
     /// Subscribe and map to `RecorderEvent`, which `recorder::StorageWriter` consumes.
     /// Spawns a lightweight forwarding task; the returned receiver can be passed
     /// directly to `StorageWriter::start()`.
-    pub fn subscribe_as_recorder(
-        &self,
-        depth: usize,
-    ) -> broadcast::Receiver<RecorderEvent> {
+    pub fn subscribe_as_recorder(&self, depth: usize) -> broadcast::Receiver<RecorderEvent> {
         let (tx, rx) = broadcast::channel(1024);
         let mut src = self.event_tx.subscribe();
 

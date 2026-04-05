@@ -1,15 +1,15 @@
 use crate::connection::{ConnectionConfig, SystemControl};
+use crate::exchanges::ConnectionFactory;
 use crate::exchanges::binance::BinanceSubMsgBuilder;
 use crate::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use crate::exchanges::okx::OkxSubMsgBuilder;
 use crate::exchanges::polymarket::PolymarketSubMsgBuilder;
-use crate::exchanges::ConnectionFactory;
 use crate::orderbook::{Orderbook, OrderbookEngine, OrderbookEngineHandle};
 use crate::publisher::types::ChannelRequest;
+use crate::types::ExchangeName;
 use crate::types::errors::{ApiError, ApiResult};
 use crate::types::events::OrderbookEvent;
 use crate::types::orderbook::OrderbookMessage;
-use crate::types::ExchangeName;
 use futures_util::StreamExt;
 use std::future::Future;
 use std::sync::Arc;
@@ -101,7 +101,9 @@ impl OrderbookSystem {
     /// alongside the system's other handles.
     pub fn attach_zmq_publisher(&mut self, publisher: crate::publisher::ZmqPublisher) {
         let handle = publisher.start(
-            self.engine.as_ref().expect("attach_zmq_publisher called after run()"),
+            self.engine
+                .as_ref()
+                .expect("attach_zmq_publisher called after run()"),
         );
         self.handles.extra_handles.push(handle);
     }

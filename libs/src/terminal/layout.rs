@@ -1,5 +1,4 @@
 /// Terminal size detection and grid layout calculation.
-
 use crossterm::terminal::size as terminal_size;
 
 /// Live terminal dimensions, falling back to 80×24 when not a TTY.

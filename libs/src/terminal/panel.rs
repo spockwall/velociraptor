@@ -2,7 +2,6 @@
 ///
 /// To add a new panel layout, implement the `PanelRenderer` trait and pass it
 /// to `OrderbookUi::new_with_renderer`.
-
 use super::ansi::*;
 
 // ── Snapshot data ─────────────────────────────────────────────────────────────
@@ -56,7 +55,9 @@ pub trait PanelRenderer: Send + Sync {
 pub struct DefaultRenderer;
 
 impl PanelRenderer for DefaultRenderer {
-    fn panel_width(&self) -> usize { 46 }
+    fn panel_width(&self) -> usize {
+        46
+    }
 
     fn panel_height(&self, depth: usize) -> usize {
         depth * 2 + 4 // title + header + asks + spread + bids + bottom
@@ -85,10 +86,20 @@ pub fn hline(n: usize) -> String {
 }
 
 /// One full-width content row: `│ c1  c2  c3 │`
-pub fn content_row(color: &str, c1: &str, c2: &str, c3: &str, w1: usize, w2: usize, w3: usize) -> String {
+pub fn content_row(
+    color: &str,
+    c1: &str,
+    c2: &str,
+    c3: &str,
+    w1: usize,
+    w2: usize,
+    w3: usize,
+) -> String {
     format!(
         "│{color}{}{RESET}  {color}{}{RESET}  {color}{}{RESET}│",
-        rpad(c1, w1), rpad(c2, w2), rpad(c3, w3),
+        rpad(c1, w1),
+        rpad(c2, w2),
+        rpad(c3, w3),
         color = color,
     )
 }
@@ -119,26 +130,48 @@ fn build_panel_lines(snap: &SymbolSnapshot, depth: usize, width: usize) -> Vec<S
 
     // ── Asks: worst → best ────────────────────────────────────────────────────
     for (price, qty) in snap.asks.iter().rev() {
-        lines.push(content_row(RED, &format!("{price:.4}"), &format!("{qty:.6}"), "ask", w1, w2, w3));
+        lines.push(content_row(
+            RED,
+            &format!("{price:.4}"),
+            &format!("{qty:.6}"),
+            "ask",
+            w1,
+            w2,
+            w3,
+        ));
     }
     for _ in snap.asks.len()..depth {
         lines.push(content_row(DIM, "─", "─", "ask", w1, w2, w3));
     }
 
     // ── Spread / mid separator ────────────────────────────────────────────────
-    let spread_str = snap.spread.map(|v| format!("{v:.4}")).unwrap_or_else(|| "─".into());
-    let mid_str    = snap.mid.map(|v| format!("{v:.4}")).unwrap_or_else(|| "─".into());
+    let spread_str = snap
+        .spread
+        .map(|v| format!("{v:.4}"))
+        .unwrap_or_else(|| "─".into());
+    let mid_str = snap
+        .mid
+        .map(|v| format!("{v:.4}"))
+        .unwrap_or_else(|| "─".into());
     let esc_extra = visible_len(BOLD) + visible_len(RESET);
     lines.push(format!(
         "├{}  {}  {}┤",
         rpad(&format!("{BOLD}{spread_str}{RESET}"), w1 + esc_extra),
-        rpad(&format!("{BOLD}{mid_str}{RESET}"),    w2 + esc_extra),
-        rpad(&format!("{BOLD}sprd/mid{RESET}"),     w3 + esc_extra),
+        rpad(&format!("{BOLD}{mid_str}{RESET}"), w2 + esc_extra),
+        rpad(&format!("{BOLD}sprd/mid{RESET}"), w3 + esc_extra),
     ));
 
     // ── Bids: best → worst ────────────────────────────────────────────────────
     for (price, qty) in &snap.bids {
-        lines.push(content_row(GREEN, &format!("{price:.4}"), &format!("{qty:.6}"), "bid", w1, w2, w3));
+        lines.push(content_row(
+            GREEN,
+            &format!("{price:.4}"),
+            &format!("{qty:.6}"),
+            "bid",
+            w1,
+            w2,
+            w3,
+        ));
     }
     for _ in snap.bids.len()..depth {
         lines.push(content_row(DIM, "─", "─", "bid", w1, w2, w3));

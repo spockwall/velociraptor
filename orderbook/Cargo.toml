@@ -36,6 +36,7 @@ tmq = "0.5"
 toml = "0.8"
 libs      = { path = "../libs" }
 recorder  = { path = "../recorder" }
+reqwest   = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.8"

@@ -32,8 +32,16 @@ pub fn visible_len(s: &str) -> usize {
     let mut len = 0;
     let mut in_escape = false;
     for c in s.chars() {
-        if c == '\x1B' { in_escape = true; continue; }
-        if in_escape   { if c == 'm' { in_escape = false; } continue; }
+        if c == '\x1B' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+            continue;
+        }
         len += 1;
     }
     len

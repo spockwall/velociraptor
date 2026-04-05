@@ -32,8 +32,6 @@ pub struct PolymarketMarket {
     pub slug: String,
     /// Window size in seconds. 0 = static market (slug used as-is).
     pub interval_secs: u64,
-    /// Subscribe to current + next N windows ahead. 0 = current window only.
-    pub prefetch_windows: usize,
 }
 
 impl Default for PolymarketMarket {
@@ -42,7 +40,6 @@ impl Default for PolymarketMarket {
             enabled: true,
             slug: String::new(),
             interval_secs: 0,
-            prefetch_windows: 0,
         }
     }
 }

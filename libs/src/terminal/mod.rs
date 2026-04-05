@@ -28,7 +28,6 @@
 ///
 /// let mut ui = OrderbookUi::new_with_renderer(5, MyRenderer).unwrap();
 /// ```
-
 pub mod ansi;
 pub mod layout;
 pub mod panel;
@@ -36,7 +35,7 @@ pub mod polymarket;
 
 pub use polymarket::PolymarketUi;
 
-use ansi::{ERASE_LINE, RESTORE, SAVE, up};
+use ansi::{up, ERASE_LINE, RESTORE, SAVE};
 use layout::{fit_depth, max_columns, term_size};
 use panel::{DefaultRenderer, PanelRenderer, SymbolSnapshot};
 
@@ -66,7 +65,10 @@ impl OrderbookUi {
     }
 
     /// Create a display with a custom [`panel::PanelRenderer`].
-    pub fn new_with_renderer(depth: usize, renderer: impl PanelRenderer + 'static) -> io::Result<Self> {
+    pub fn new_with_renderer(
+        depth: usize,
+        renderer: impl PanelRenderer + 'static,
+    ) -> io::Result<Self> {
         Ok(Self {
             depth,
             renderer: Box::new(renderer),
@@ -98,16 +100,19 @@ impl OrderbookUi {
             self.order.push(key.clone());
         }
         let depth = self.depth;
-        self.snapshots.insert(key, SymbolSnapshot {
-            exchange: exchange.to_string(),
-            symbol: symbol.to_string(),
-            sequence,
-            spread,
-            mid,
-            wmid,
-            bids: bids[..bids.len().min(depth)].to_vec(),
-            asks: asks[..asks.len().min(depth)].to_vec(),
-        });
+        self.snapshots.insert(
+            key,
+            SymbolSnapshot {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                sequence,
+                spread,
+                mid,
+                wmid,
+                bids: bids[..bids.len().min(depth)].to_vec(),
+                asks: asks[..asks.len().min(depth)].to_vec(),
+            },
+        );
         self.draw();
     }
 
@@ -120,20 +125,24 @@ impl OrderbookUi {
 
     fn draw(&mut self) {
         let n = self.order.len();
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
 
         let (term_cols, term_rows) = term_size();
-        let panel_width  = self.renderer.panel_width();
-        let cols         = n.min(max_columns(term_cols, panel_width, 2));
-        let grid_rows    = n.div_ceil(cols);
-        let depth        = self.depth.min(fit_depth(term_rows, grid_rows, 4, 2).max(1));
+        let panel_width = self.renderer.panel_width();
+        let cols = n.min(max_columns(term_cols, panel_width, 2));
+        let grid_rows = n.div_ceil(cols);
+        let depth = self.depth.min(fit_depth(term_rows, grid_rows, 4, 2).max(1));
         let panel_height = self.renderer.panel_height(depth);
         let total_height = grid_rows * panel_height;
 
         let mut out = Vec::with_capacity(8192);
 
         if !self.initialized {
-            for _ in 0..total_height { out.extend_from_slice(b"\n"); }
+            for _ in 0..total_height {
+                out.extend_from_slice(b"\n");
+            }
             out.extend_from_slice(up(total_height).as_bytes());
             out.extend_from_slice(SAVE.as_bytes());
             self.initialized = true;
@@ -142,7 +151,9 @@ impl OrderbookUi {
             out.extend_from_slice(RESTORE.as_bytes());
             if total_height > self.block_height {
                 let extra = total_height - self.block_height;
-                for _ in 0..extra { out.extend_from_slice(b"\n"); }
+                for _ in 0..extra {
+                    out.extend_from_slice(b"\n");
+                }
                 out.extend_from_slice(up(total_height).as_bytes());
             }
             out.extend_from_slice(SAVE.as_bytes());
@@ -153,18 +164,22 @@ impl OrderbookUi {
         }
 
         // Build all panel line buffers
-        let all_panels: Vec<Vec<String>> = self.order.iter().map(|key| {
-            if let Some(snap) = self.snapshots.get(key) {
-                self.renderer.render(snap, depth)
-            } else {
-                vec![" ".repeat(panel_width); panel_height]
-            }
-        }).collect();
+        let all_panels: Vec<Vec<String>> = self
+            .order
+            .iter()
+            .map(|key| {
+                if let Some(snap) = self.snapshots.get(key) {
+                    self.renderer.render(snap, depth)
+                } else {
+                    vec![" ".repeat(panel_width); panel_height]
+                }
+            })
+            .collect();
 
         // Render grid row by row
         for grid_row in 0..grid_rows {
             let start = grid_row * cols;
-            let end   = (start + cols).min(n);
+            let end = (start + cols).min(n);
             let slice = &all_panels[start..end];
 
             for line_idx in 0..panel_height {
@@ -172,7 +187,9 @@ impl OrderbookUi {
                 for (i, panel) in slice.iter().enumerate() {
                     let line = panel.get(line_idx).map(String::as_str).unwrap_or("");
                     out.extend_from_slice(line.as_bytes());
-                    if i + 1 < slice.len() { out.extend_from_slice(b"  "); }
+                    if i + 1 < slice.len() {
+                        out.extend_from_slice(b"  ");
+                    }
                 }
                 out.extend_from_slice(b"\n");
             }

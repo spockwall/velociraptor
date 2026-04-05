@@ -18,7 +18,6 @@ use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
-use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
@@ -93,12 +92,6 @@ async fn run(
             vec![]
         }
     });
-    let polymarket_assets: Vec<String> = toml_cfg
-        .polymarket
-        .iter()
-        .filter(|m| m.enabled)
-        .flat_map(|m| [m.yes.clone(), m.no.clone()])
-        .collect();
     let hyperliquid_coins: Vec<String> = cli_hyperliquid.unwrap_or_else(|| {
         if toml_cfg.hyperliquid.enabled {
             toml_cfg.hyperliquid.coins.clone()
@@ -107,11 +100,7 @@ async fn run(
         }
     });
 
-    if binance_symbols.is_empty()
-        && okx_symbols.is_empty()
-        && polymarket_assets.is_empty()
-        && hyperliquid_coins.is_empty()
-    {
+    if binance_symbols.is_empty() && okx_symbols.is_empty() && hyperliquid_coins.is_empty() {
         anyhow::bail!(
             "No symbols configured. Provide a --config file or use --binance / --okx / --hyperliquid flags."
         );
@@ -119,13 +108,9 @@ async fn run(
 
     info!(
         binance = ?binance_symbols, okx = ?okx_symbols, hyperliquid = ?hyperliquid_coins,
-        polymarket_markets = toml_cfg.polymarket.iter().filter(|m| m.enabled).count(),
         pub_endpoint = %pub_endpoint, router_endpoint = %router_endpoint, depth,
         "Starting orderbook server"
     );
-    for m in toml_cfg.polymarket.iter().filter(|m| m.enabled) {
-        info!(question = %m.question, yes = %m.yes, no = %m.no, "Polymarket market");
-    }
 
     // ── Exchange connections ───────────────────────────────────────────────────
 
@@ -150,17 +135,6 @@ async fn run(
                     .with_orderbook_channel_multi(refs, "SPOT")
                     .build(),
             ),
-        );
-    }
-
-    if !polymarket_assets.is_empty() {
-        let mut builder = PolymarketSubMsgBuilder::new();
-        for id in &polymarket_assets {
-            builder = builder.with_asset(id);
-        }
-        system_config.with_exchange(
-            ConnectionConfig::new(ExchangeName::Polymarket)
-                .set_subscription_message(builder.build()),
         );
     }
 
