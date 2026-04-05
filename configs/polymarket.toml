@@ -1,0 +1,42 @@
+# Polymarket example configuration
+# Run with: cargo run --example polymarket_orderbook -- --config configs/polymarket.toml
+
+# Display settings
+[server]
+depth          = 8    # depth levels per side
+render_interval = 300  # ms between screen redraws
+
+# Rolling up/down markets — token IDs resolved automatically from the Gamma API.
+# interval_secs: window size in seconds (900 = 15min, 300 = 5min)
+# prefetch_windows: also subscribe to the next N upcoming windows
+
+#[[polymarket]]
+#enabled          = true
+#slug             = "btc-updown-15m"
+#interval_secs    = 900
+#prefetch_windows = 1
+
+#[[polymarket]]
+#enabled          = true
+#slug             = "eth-updown-15m"
+#interval_secs    = 900
+#prefetch_windows = 1
+
+[[polymarket]]
+enabled          = true
+slug             = "btc-updown-5m"
+interval_secs    = 300
+prefetch_windows = 3
+
+[[polymarket]]
+enabled          = true
+slug             = "eth-updown-5m"
+interval_secs    = 300
+prefetch_windows = 3
+
+# Static market (no rolling window — slug used directly):
+# [[polymarket]]
+# enabled          = true
+# slug             = "will-btc-reach-100k-in-2025"
+# interval_secs    = 0
+# prefetch_windows = 0

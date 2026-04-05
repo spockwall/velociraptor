@@ -30,16 +30,3 @@ flush_interval = 1000        # ms between BufWriter flushes
 rotation       = "daily"     # "daily" | "none"
 zstd_level     = 0           # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
 
-# Each Polymarket market is a pair of Yes/No tokens.
-# Use scripts/fetch_polymarket_tokens.py to find token IDs.
-[[polymarket]]
-enabled = true
-question = "BitBoy convicted?"
-yes = "75467129615908319583031474642658885479135630431889036121812713428992454630178"
-no  = "3842963720267267286970642336860752782302644680156535061700039388405652129691"
-
-# [[polymarket]]
-# enabled = true
-# question = "Will Jesus Christ return before GTA VI?"
-# yes = "90435811253665578014957380826505992530054077692143838383981805324273750424057"
-# no  = "92388629082681805622801622703528982922543286352927708208755887536971583436902"
