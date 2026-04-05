@@ -2,9 +2,13 @@
 # Run with: cargo run --example polymarket_orderbook -- --config configs/polymarket.toml
 
 # Display settings
+
 [server]
-depth          = 8    # depth levels per side
-render_interval = 300  # ms between screen redraws
+depth           = 8    # orderbook levels to record per side
+render_interval = 300   # ms between terminal redraws (independent of write rate)
+base_path       = "./data"
+flush_interval  = 500  # ms between BufWriter flushes
+zstd_level      = 3     # 0 = disabled, 1–22 = zstd level
 
 # Rolling up/down markets — token IDs resolved automatically from the Gamma API.
 # interval_secs: window size in seconds (900 = 15min, 300 = 5min)
