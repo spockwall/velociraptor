@@ -23,16 +23,16 @@ A high-performance Rust library and server for real-time cryptocurrency orderboo
 enabled = true
 symbols = ["btcusdt", "ethusdt"]
 
-[[polymarket]]
+[hyperliquid]
 enabled = true
-question = "BitBoy convicted?"
-yes = "75467129615908319583031474642658885479135630431889036121812713428992454630178"
-no  = "3842963720267267286970642336860752782302644680156535061700039388405652129691"
-```
+coins   = ["BTC", "ETH"]
 
-Find Polymarket token IDs with:
-```bash
-python3 scripts/fetch_polymarket_tokens.py --search "bitcoin"
+# Polymarket: token IDs are resolved automatically from the Gamma API at startup.
+# Specify the slug and window size; no manual token IDs needed.
+[[polymarket]]
+enabled       = true
+slug          = "btc-updown-5m"
+interval_secs = 300
 ```
 
 **Step 2 — Start the server**
@@ -47,17 +47,54 @@ cargo run --bin orderbook_server --release -- --config configs/server.toml
 # Binance snapshot
 python3 orderbook/examples/zmq_subscriber.py --exchange binance --symbol BTCUSDT --type snapshot --interval 500
 
-# Polymarket snapshot (use token ID as symbol)
+# Polymarket snapshot (use token ID as symbol; printed in server logs at startup)
 python3 orderbook/examples/zmq_subscriber.py \
     --exchange polymarket \
     --symbol 75467129615908319583031474642658885479135630431889036121812713428992454630178 \
     --type snapshot --interval 500
 ```
 
-**Step 4 - Orderbook Snaphost Record Reader**
+**Step 4 — Read stored snapshots**
+
 ```bash
-python3 scripts/read_mpack.py data/binance/BTCUSDT/ 
+python3 scripts/read_mpack.py data/binance/BTCUSDT/
+python3 scripts/read_mpack.py data/polymarket/btc-updown-5m/2026-04-05/
 ```
+
+---
+
+## Polymarket Tools
+
+### Live terminal visualiser
+
+```bash
+cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
+# or
+cargo run --example polymarket_orderbook --release -- \
+    --slug btc-updown-5m --interval-secs 300 \
+    --slug eth-updown-5m --interval-secs 300
+```
+
+Shows a live terminal UI with bids, asks, spread and mid for each market side. Rotates automatically to the next window as windows expire.
+
+### Disk recorder
+
+```bash
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
+# or
+cargo run --bin polymarket_recorder --release -- \
+    --slug btc-updown-5m --interval-secs 300 \
+    --base-path ./data --depth 10 --zstd-level 3
+```
+
+Writes every orderbook snapshot to disk (at the WebSocket update rate, not the render rate). One file per window per side:
+
+```
+data/polymarket/btc-updown-5m/2026-04-05/09:55-10:00-up.mpack
+                                         09:55-10:00-down.mpack
+```
+
+Files are optionally zstd-compressed after each window closes. See `docs/polymarket.md` for the full file format and Python reader.
 
 ---
 
@@ -501,6 +538,10 @@ cargo run --bin orderbook_server --release -- --binance btcusdt,solusdt --depth 
 cargo run --example stream_orderbook_instance
 cargo run --example zmq_publisher
 cargo run --example exchange_websocket
+
+# Polymarket tools
+cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
 
 # Dev
 cargo check
