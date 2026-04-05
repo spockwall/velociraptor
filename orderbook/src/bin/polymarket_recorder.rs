@@ -50,16 +50,15 @@ const EARLY_START_SECS: u64 = 10;
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
-struct Config {
+struct ServerConfig {
     depth: usize,
     render_interval: u64,
     base_path: String,
     flush_interval: u64,
     zstd_level: u8,
-    polymarket: Vec<PolymarketMarket>,
 }
 
-impl Default for Config {
+impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             depth: 10,
@@ -67,6 +66,21 @@ impl Default for Config {
             base_path: "./data".into(),
             flush_interval: 1000,
             zstd_level: 0,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct Config {
+    server: ServerConfig,
+    polymarket: Vec<PolymarketMarket>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server: ServerConfig::default(),
             polymarket: vec![],
         }
     }
@@ -587,13 +601,13 @@ async fn main() -> Result<()> {
     let mut cfg = args.config.as_deref().map(Config::load).unwrap_or_default();
 
     if let Some(d) = args.depth {
-        cfg.depth = d;
+        cfg.server.depth = d;
     }
     if let Some(p) = args.base_path {
-        cfg.base_path = p;
+        cfg.server.base_path = p;
     }
     if let Some(z) = args.zstd_level {
-        cfg.zstd_level = z;
+        cfg.server.zstd_level = z;
     }
 
     if !args.slugs.is_empty() {
@@ -616,10 +630,10 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let depth = cfg.depth;
-    let render_interval = Duration::from_millis(cfg.render_interval);
-    let base_path = PathBuf::from(&cfg.base_path);
-    let zstd_level = match cfg.zstd_level {
+    let depth = cfg.server.depth;
+    let render_interval = Duration::from_millis(cfg.server.render_interval);
+    let base_path = PathBuf::from(&cfg.server.base_path);
+    let zstd_level = match cfg.server.zstd_level {
         0 => None,
         l => Some(l as i32),
     };
