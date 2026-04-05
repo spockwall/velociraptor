@@ -10,3 +10,10 @@ pub fn parse_timestamp_ms(ts: &str) -> DateTime<Utc> {
 pub fn current_date() -> String {
     Utc::now().format("%Y-%m-%d").to_string()
 }
+
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs()
+}

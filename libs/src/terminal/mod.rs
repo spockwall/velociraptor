@@ -32,6 +32,9 @@
 pub mod ansi;
 pub mod layout;
 pub mod panel;
+pub mod polymarket;
+
+pub use polymarket::PolymarketUi;
 
 use ansi::{ERASE_LINE, RESTORE, SAVE, up};
 use layout::{fit_depth, max_columns, term_size};
