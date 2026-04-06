@@ -28,13 +28,12 @@ use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
-use orderbook::configs::exchanges::PolymarketMarket;
+use orderbook::configs::{PolymarketArgs, PolymarketMarket, PolymarketTomlConfig};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
 use recorder::format::StorageRecord;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -46,82 +45,7 @@ use tracing::{error, info, warn};
 /// How many seconds before a window ends to start the next window's connection.
 const EARLY_START_SECS: u64 = 10;
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-struct ServerConfig {
-    depth: usize,
-    render_interval: u64,
-    base_path: String,
-    flush_interval: u64,
-    zstd_level: u8,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            depth: 10,
-            render_interval: 300,
-            base_path: "./data".into(),
-            flush_interval: 1000,
-            zstd_level: 0,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-struct Config {
-    server: ServerConfig,
-    polymarket: Vec<PolymarketMarket>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            polymarket: vec![],
-        }
-    }
-}
-
-impl Config {
-    fn load(path: &str) -> Self {
-        let s = fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("Failed to read config '{path}': {e}");
-            std::process::exit(1);
-        });
-        toml::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("Failed to parse config '{path}': {e}");
-            std::process::exit(1);
-        })
-    }
-}
-
-// ── CLI ───────────────────────────────────────────────────────────────────────
-
-#[derive(Parser, Debug)]
-#[clap(about = "Polymarket orderbook recorder with live UI")]
-struct Args {
-    #[clap(long)]
-    config: Option<String>,
-
-    #[clap(long = "slug", action = clap::ArgAction::Append)]
-    slugs: Vec<String>,
-
-    #[clap(long = "interval-secs", action = clap::ArgAction::Append)]
-    intervals: Vec<u64>,
-
-    #[clap(long)]
-    depth: Option<usize>,
-
-    #[clap(long)]
-    base_path: Option<String>,
-
-    #[clap(long)]
-    zstd_level: Option<u8>,
-}
+// Config and CLI args are defined in orderbook::configs::{PolymarketTomlConfig, PolymarketArgs}.
 
 // ── Shared snap store (for UI) ────────────────────────────────────────────────
 
@@ -283,13 +207,14 @@ impl MarketTask {
         }
 
         // Build writers for Up and Down sides.
+        // Use `base_slug` (from the caller, no timestamp) as the directory name so all
+        // windows for the same market land under the same slug folder.
         let mut writers: HashMap<String, PolymarketWriter> = HashMap::new();
-        for (_, base_slug_from_resolver, _, is_up) in &labeled {
+        for (_, _, _, is_up) in &labeled {
             let side_key = side_key(&full_slug, *is_up);
             if let Some(w) = PolymarketWriter::open(
                 &base_path,
-                // Use the config base slug (no timestamp) as the directory name.
-                base_slug_from_resolver,
+                &base_slug,
                 win_start_secs,
                 win_end_secs,
                 *is_up,
@@ -597,31 +522,9 @@ fn spawn_render_loop(
 async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
 
-    let args = Args::parse();
-    let mut cfg = args.config.as_deref().map(Config::load).unwrap_or_default();
-
-    if let Some(d) = args.depth {
-        cfg.server.depth = d;
-    }
-    if let Some(p) = args.base_path {
-        cfg.server.base_path = p;
-    }
-    if let Some(z) = args.zstd_level {
-        cfg.server.zstd_level = z;
-    }
-
-    if !args.slugs.is_empty() {
-        cfg.polymarket = args
-            .slugs
-            .into_iter()
-            .enumerate()
-            .map(|(i, slug)| PolymarketMarket {
-                enabled: true,
-                slug,
-                interval_secs: *args.intervals.get(i).unwrap_or(&0),
-            })
-            .collect();
-    }
+    let args = PolymarketArgs::parse();
+    let mut cfg = args.config.as_deref().map(PolymarketTomlConfig::load).unwrap_or_default();
+    cfg.apply_args(args);
 
     if cfg.polymarket.is_empty() {
         eprintln!(

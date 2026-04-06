@@ -17,12 +17,11 @@ use anyhow::Result;
 use clap::Parser;
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
-use orderbook::configs::exchanges::PolymarketMarket;
+use orderbook::configs::{PolymarketArgs, PolymarketMarket, PolymarketTomlConfig};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
 use orderbook::types::ExchangeName;
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,55 +29,7 @@ use std::time::Duration;
 /// How many seconds before a window ends to start the next window's connection.
 const EARLY_START_SECS: u64 = 10;
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-struct ExampleConfig {
-    depth:           usize,
-    render_interval: u64,
-    polymarket:      Vec<PolymarketMarket>,
-}
-
-impl Default for ExampleConfig {
-    fn default() -> Self {
-        Self { depth: 8, render_interval: 300, polymarket: vec![] }
-    }
-}
-
-impl ExampleConfig {
-    fn load(path: &str) -> Self {
-        let s = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("Failed to read config '{path}': {e}");
-            std::process::exit(1);
-        });
-        toml::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("Failed to parse config '{path}': {e}");
-            std::process::exit(1);
-        })
-    }
-}
-
-// ── CLI ───────────────────────────────────────────────────────────────────────
-
-#[derive(Parser, Debug)]
-#[clap(about = "Polymarket live orderbook viewer")]
-struct Args {
-    #[clap(long)]
-    config: Option<String>,
-
-    #[clap(long = "slug", action = clap::ArgAction::Append)]
-    slugs: Vec<String>,
-
-    #[clap(long = "interval-secs", action = clap::ArgAction::Append)]
-    intervals: Vec<u64>,
-
-    #[clap(long)]
-    depth: Option<usize>,
-
-    #[clap(long)]
-    render_interval: Option<u64>,
-}
+// Config and CLI args are defined in orderbook::configs::{PolymarketTomlConfig, PolymarketArgs}.
 
 // ── Shared store ──────────────────────────────────────────────────────────────
 
@@ -318,29 +269,17 @@ fn spawn_render_loop(
 async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
 
-    let args = Args::parse();
-    let mut cfg = args.config.as_deref().map(ExampleConfig::load).unwrap_or_default();
-
-    if let Some(d) = args.depth           { cfg.depth           = d; }
-    if let Some(r) = args.render_interval { cfg.render_interval = r; }
-
-    if !args.slugs.is_empty() {
-        cfg.polymarket = args.slugs.into_iter().enumerate()
-            .map(|(i, slug)| PolymarketMarket {
-                enabled:       true,
-                slug,
-                interval_secs: *args.intervals.get(i).unwrap_or(&0),
-            })
-            .collect();
-    }
+    let args = PolymarketArgs::parse();
+    let mut cfg = args.config.as_deref().map(PolymarketTomlConfig::load).unwrap_or_default();
+    cfg.apply_args(args);
 
     if cfg.polymarket.is_empty() {
         eprintln!("No markets configured. Pass --config <file> or --slug <slug> --interval-secs <n>.");
         std::process::exit(1);
     }
 
-    let depth           = cfg.depth;
-    let render_interval = Duration::from_millis(cfg.render_interval);
+    let depth           = cfg.server.depth;
+    let render_interval = Duration::from_millis(cfg.server.render_interval);
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
     let ui = Arc::new(Mutex::new(PolymarketUi::new(depth)));
 

@@ -3,7 +3,10 @@ pub mod logging;
 pub mod server;
 pub mod storage;
 
-pub use exchanges::{BinanceConfig, HyperliquidConfig, OkxConfig, PolymarketMarket};
+pub use exchanges::{
+    BinanceConfig, HyperliquidConfig, OkxConfig, PolymarketArgs, PolymarketConfig,
+    PolymarketMarket, PolymarketTomlConfig,
+};
 pub use logging::{LoggingConfig, init_logging};
 pub use server::{Args, ServerConfig};
 pub use storage::StorageConfig;

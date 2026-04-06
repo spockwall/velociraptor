@@ -6,7 +6,7 @@
 [server]
 depth           = 8    # orderbook levels to record per side
 render_interval = 300   # ms between terminal redraws (independent of write rate)
-base_path       = "./data"
+base_path       = "/tmp/polymarket_data"
 flush_interval  = 500  # ms between BufWriter flushes
 zstd_level      = 3     # 0 = disabled, 1–22 = zstd level
 
