@@ -91,7 +91,7 @@ impl PolymarketWriter {
         let side_str = if is_up { "up" } else { "down" };
         let filename = format!("{interval_str}-{side_str}.mpack");
 
-        let dir = base_path.join("polymarket").join(slug).join(&date_str);
+        let dir = base_path.join(slug).join(&date_str);
         if let Err(e) = fs::create_dir_all(&dir) {
             error!(
                 "PolymarketWriter: failed to create dir {}: {e}",
@@ -288,13 +288,8 @@ impl MarketTask {
                     if let Ok(mut map) = writers.lock() {
                         if let Some(w) = map.get_mut(&sk) {
                             let rec = StorageRecord {
-                                exchange: "polymarket".into(),
-                                symbol: full.clone(),
                                 sequence: snap.sequence,
                                 ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
-                                spread: book.spread(),
-                                mid: book.mid_price(),
-                                wmid: book.wmid(),
                                 bids: bids.iter().map(|&(p, q)| [p, q]).collect(),
                                 asks: asks.iter().map(|&(p, q)| [p, q]).collect(),
                             };
@@ -523,7 +518,11 @@ async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
 
     let args = PolymarketArgs::parse();
-    let mut cfg = args.config.as_deref().map(PolymarketTomlConfig::load).unwrap_or_default();
+    let mut cfg = args
+        .config
+        .as_deref()
+        .map(PolymarketTomlConfig::load)
+        .unwrap_or_default();
     cfg.apply_args(args);
 
     if cfg.polymarket.is_empty() {
@@ -540,7 +539,6 @@ async fn main() -> Result<()> {
         0 => None,
         l => Some(l as i32),
     };
-
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
     let ui = Arc::new(Mutex::new(PolymarketUi::new(depth)));
 

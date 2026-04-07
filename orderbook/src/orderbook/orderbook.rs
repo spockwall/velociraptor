@@ -310,11 +310,11 @@ impl Orderbook {
     pub fn wmid(&self) -> f64 {
         let (best_bid, best_ask) = (self.best_bid(), self.best_ask());
         if let (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) = (best_bid, best_ask) {
+            // imbalance = bid_qty / total; high bid qty → price pulled toward bid
             let imbalance = bid_qty / (bid_qty + ask_qty);
-            let weighted_bid = bid_price * (1.0 - imbalance);
-            let weighted_ask = ask_price * imbalance;
-            return (weighted_bid + weighted_ask) / 2.0;
+            ask_price * imbalance + bid_price * (1.0 - imbalance)
+        } else {
+            0.0
         }
-        return 0.0;
     }
 }

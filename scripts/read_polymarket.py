@@ -64,6 +64,16 @@ def _to_df(records: list) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if "ts_ns" in df.columns:
         df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
+    # Derive mid, spread, wmid from bids/asks if present.
+    if "bids" in df.columns and "asks" in df.columns:
+        best_bid = df["bids"].map(lambda x: x[0][0] if x else float("nan"))
+        best_bid_qty = df["bids"].map(lambda x: x[0][1] if x else float("nan"))
+        best_ask = df["asks"].map(lambda x: x[0][0] if x else float("nan"))
+        best_ask_qty = df["asks"].map(lambda x: x[0][1] if x else float("nan"))
+        df["mid"] = (best_bid + best_ask) / 2
+        df["spread"] = best_ask - best_bid
+        total_qty = best_bid_qty + best_ask_qty
+        df["wmid"] = (best_ask * best_bid_qty + best_bid * best_ask_qty) / total_qty
     return df
 
 

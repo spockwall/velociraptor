@@ -127,13 +127,24 @@ impl PolymarketTomlConfig {
 
     /// Apply CLI overrides and inline slug flags, then validate.
     pub fn apply_args(&mut self, args: PolymarketArgs) {
-        if let Some(d) = args.depth          { self.server.depth           = d; }
-        if let Some(r) = args.render_interval { self.server.render_interval = r; }
-        if let Some(p) = args.base_path      { self.server.base_path       = p; }
-        if let Some(z) = args.zstd_level     { self.server.zstd_level      = z; }
+        if let Some(d) = args.depth {
+            self.server.depth = d;
+        }
+        if let Some(r) = args.render_interval {
+            self.server.render_interval = r;
+        }
+        if let Some(p) = args.base_path {
+            self.server.base_path = p;
+        }
+        if let Some(z) = args.zstd_level {
+            self.server.zstd_level = z;
+        }
 
         if !args.slugs.is_empty() {
-            self.polymarket = args.slugs.into_iter().enumerate()
+            self.polymarket = args
+                .slugs
+                .into_iter()
+                .enumerate()
                 .map(|(i, slug)| PolymarketMarket {
                     enabled: true,
                     slug,

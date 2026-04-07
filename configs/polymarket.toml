@@ -6,22 +6,22 @@
 [server]
 depth           = 8    # orderbook levels to record per side
 render_interval = 300   # ms between terminal redraws (independent of write rate)
-base_path       = "/tmp/polymarket_data"
+base_path       = "/data/polymarket"
 flush_interval  = 500  # ms between BufWriter flushes
 zstd_level      = 3     # 0 = disabled, 1–22 = zstd level
 
 # Rolling up/down markets — token IDs resolved automatically from the Gamma API.
 # interval_secs: window size in seconds (900 = 15min, 300 = 5min)
 
-#[[polymarket]]
-#enabled          = true
-#slug             = "btc-updown-15m"
-#interval_secs    = 900
+[[polymarket]]
+enabled          = true
+slug             = "btc-updown-15m"
+interval_secs    = 900
 
-#[[polymarket]]
-#enabled          = true
-#slug             = "eth-updown-15m"
-#interval_secs    = 900
+[[polymarket]]
+enabled          = true
+slug             = "eth-updown-15m"
+interval_secs    = 900
 
 [[polymarket]]
 enabled          = true
