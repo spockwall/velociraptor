@@ -1,0 +1,45 @@
+[Unit]
+Description=Velociraptor Orderbook Server
+Documentation=https://github.com/spockwall/velociraptor
+After=network-online.target
+Wants=network-online.target
+# Restart after polymarket-recorder if both are running on the same host
+# (remove this if they run independently)
+
+[Service]
+Type=simple
+User=spockwall
+WorkingDirectory=/Users/spockwall/Desktop/velociraptor
+
+# Use the release binary directly after building.
+# Build first: cargo build --bin orderbook_server --release
+ExecStartPre=/Users/spockwall/.cargo/bin/cargo build --bin orderbook_server --release
+ExecStart=/Users/spockwall/Desktop/velociraptor/target/release/orderbook_server \
+    --config /Users/spockwall/Desktop/velociraptor/configs/server.toml
+
+# --- Restart policy (designed for >1 year uptime) ---
+Restart=always
+# Wait 10 s before each restart to avoid tight crash loops
+RestartSec=10s
+# Reset the failure counter after the service has been up for 5 minutes
+StartLimitIntervalSec=300
+# Allow up to 10 rapid restarts within that window before giving up
+StartLimitBurst=10
+
+# --- Resource limits ---
+# Raise open-file limit for many simultaneous WebSocket connections
+LimitNOFILE=65536
+
+# --- Logging ---
+# Logs go to journald; read with: journalctl -u orderbook-server -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orderbook-server
+
+# --- Environment ---
+# Override any defaults here if not using a .env file
+# Environment=LOG_LEVEL=info
+# Environment=LOG_JSON=true
+
+[Install]
+WantedBy=multi-user.target

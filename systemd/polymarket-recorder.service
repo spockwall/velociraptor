@@ -1,0 +1,40 @@
+[Unit]
+Description=Velociraptor Polymarket Recorder
+Documentation=https://github.com/spockwall/velociraptor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spockwall
+WorkingDirectory=/Users/spockwall/Desktop/velociraptor
+
+# Use the release binary directly after building.
+# Build first: cargo build --bin polymarket_recorder --release
+ExecStartPre=/Users/spockwall/.cargo/bin/cargo build --bin polymarket_recorder --release
+ExecStart=/Users/spockwall/Desktop/velociraptor/target/release/polymarket_recorder \
+    --config /Users/spockwall/Desktop/velociraptor/configs/polymarket.toml
+
+# --- Restart policy (designed for >1 year uptime) ---
+Restart=always
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# --- Resource limits ---
+LimitNOFILE=65536
+
+# --- Disk space guard ---
+# The recorder writes continuously to /data/polymarket.
+# Monitor free space externally (e.g. a cron job / Prometheus node_exporter).
+
+# --- Logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-recorder
+
+# --- Environment ---
+# Environment=LOG_LEVEL=info
+
+[Install]
+WantedBy=multi-user.target
