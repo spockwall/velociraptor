@@ -155,6 +155,37 @@ LOG_JSON=true
 ./orderbook_server --help
 ```
 
+### Run as systemd Services (Linux)
+
+For unattended, long-running production deployments use the provided systemd units.
+
+**Quick start:**
+
+```bash
+# 1. Edit User= and all absolute paths in each .service file to match your host
+#    (search for /Users/spockwall and replace with your home/repo path)
+
+# 2. Build release binaries
+cargo build --bin orderbook_server --release
+cargo build --bin polymarket_recorder --release
+
+# 3. Install and enable
+sudo cp systemd/orderbook-server.service    /etc/systemd/system/
+sudo cp systemd/polymarket-recorder.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now orderbook-server
+sudo systemctl enable --now polymarket-recorder
+
+# 4. Check status and follow logs
+sudo systemctl status orderbook-server
+sudo journalctl -u orderbook-server -f
+
+sudo systemctl status polymarket-recorder
+sudo journalctl -u polymarket-recorder -f
+```
+
+Both services use `Restart=always` with a 10-second back-off, so they recover automatically from crashes, OOM kills, or network drops. See [`docs/systemd.md`](docs/systemd.md) for the full reference — restart policy details, log commands, disk-space monitoring for the recorder, and how to roll out a binary update.
+
 ---
 
 ## Architecture
