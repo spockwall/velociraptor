@@ -2,6 +2,7 @@ use crate::connection::{ConnectionConfig, SystemControl};
 use crate::exchanges::ConnectionFactory;
 use crate::exchanges::binance::BinanceSubMsgBuilder;
 use crate::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
+use crate::exchanges::kalshi::KalshiSubMsgBuilder;
 use crate::exchanges::okx::OkxSubMsgBuilder;
 use crate::exchanges::polymarket::PolymarketSubMsgBuilder;
 use crate::orderbook::{Orderbook, OrderbookEngine, OrderbookEngineHandle};
@@ -291,7 +292,9 @@ fn build_connection_config(req: &ChannelRequest) -> Result<ConnectionConfig, Str
         ExchangeName::Hyperliquid => HyperliquidSubMsgBuilder::new()
             .with_coin(&req.symbol)
             .build(),
-        ExchangeName::Kalshi => unimplemented!(),
+        ExchangeName::Kalshi => KalshiSubMsgBuilder::new()
+            .with_ticker(&req.symbol)
+            .build(),
     };
 
     Ok(ConnectionConfig::new(exchange).set_subscription_message(sub_msg))

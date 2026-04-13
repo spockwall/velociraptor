@@ -25,6 +25,15 @@ pub struct HyperliquidConfig {
     pub coins: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct KalshiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Kalshi market tickers, e.g. `["FED-23DEC-T3.00", "PRES-2028"]`.
+    #[serde(default)]
+    pub tickers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct PolymarketMarket {

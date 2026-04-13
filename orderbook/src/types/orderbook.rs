@@ -26,7 +26,7 @@ pub struct OrderInfo {
     pub qty: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderbookAction {
     Snapshot,
     Update,
