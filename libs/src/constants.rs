@@ -26,6 +26,9 @@ pub const WS_STATUS_SOCKET: &str = "ipc:///tmp/trading/ws_status.sock";
 /// Default ZMQ engine metrics socket path
 pub const ENGINE_METRICS_SOCKET: &str = "ipc:///tmp/trading/engine_metrics.sock";
 
+/// Default ZMQ executor order socket path (REQ/REP between engine and executor)
+pub const EXECUTOR_ORDER_SOCKET: &str = "ipc:///tmp/trading/executor_orders.sock";
+
 // ===========================================
 // Redis Keys
 // ===========================================
@@ -159,6 +162,10 @@ mod tests {
             ENGINE_METRICS_SOCKET,
             "ipc:///tmp/trading/engine_metrics.sock"
         );
+        assert_eq!(
+            EXECUTOR_ORDER_SOCKET,
+            "ipc:///tmp/trading/executor_orders.sock"
+        );
     }
 
     #[test]
@@ -168,6 +175,7 @@ mod tests {
         assert!(WS_ORDERS_SOCKET.starts_with("ipc://"));
         assert!(WS_STATUS_SOCKET.starts_with("ipc://"));
         assert!(ENGINE_METRICS_SOCKET.starts_with("ipc://"));
+        assert!(EXECUTOR_ORDER_SOCKET.starts_with("ipc://"));
     }
 
     #[test]
@@ -177,6 +185,7 @@ mod tests {
         assert!(WS_ORDERS_SOCKET.contains("/tmp/trading/"));
         assert!(WS_STATUS_SOCKET.contains("/tmp/trading/"));
         assert!(ENGINE_METRICS_SOCKET.contains("/tmp/trading/"));
+        assert!(EXECUTOR_ORDER_SOCKET.contains("/tmp/trading/"));
     }
 
     // ===========================================
