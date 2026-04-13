@@ -1,0 +1,33 @@
+# Kalshi orderbook visualizer configuration
+# Run with: cargo run --example kalshi_orderbook -- --config configs/kalshi.toml
+#
+# API key — required. Get one at https://kalshi.com/account/profile/api-keys
+# Keep this file out of version control.
+
+api_key = ""   # <-- paste your Kalshi API key here
+
+# ── Display ───────────────────────────────────────────────────────────────────
+
+[display]
+depth               = 10    # orderbook levels per side (YES / NO)
+render_interval_ms  = 300   # terminal redraw interval in milliseconds
+early_start_secs    = 60    # seconds before close to open the next window
+
+# ── Rolling 15-minute markets ─────────────────────────────────────────────────
+#
+# series  — Kalshi series ticker (the part before the date stamp).
+# label   — short name shown in the panel title (optional, defaults to series).
+#
+# The scheduler computes the current and next window tickers from the wall
+# clock and auto-rotates every 15 minutes.
+#
+# Ticker format: {series}-{YYMONDDHHММ (Eastern time)}-15
+# Example:       KXBTC15M-26APR130415-15  (closes 08:15 UTC = 04:15 EDT)
+
+[[markets]]
+series = "KXBTC15M"
+label  = "BTC 15m ↑↓"
+
+[[markets]]
+series = "KXETH15M"
+label  = "ETH 15m ↑↓"

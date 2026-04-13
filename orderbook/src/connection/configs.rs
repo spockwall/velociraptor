@@ -1,4 +1,4 @@
-use crate::types::endpoints::{binance, hyperliquid, okx, polymarket};
+use crate::types::endpoints::{binance, hyperliquid, kalshi, okx, polymarket};
 use libs::protocol::ExchangeName;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -23,7 +23,10 @@ impl ConnectionConfig {
             ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 45u64),
-            ExchangeName::Kalshi => unimplemented!(),
+
+            // Kalshi sends server pings every 10s; client ping interval unused
+            // but set conservatively to match their documented 10s window.
+            ExchangeName::Kalshi => (kalshi::ws::PUBLIC_STREAM, 10u64),
         };
 
         Self {
@@ -61,6 +64,13 @@ impl ConnectionConfig {
 
     pub fn set_max_reconnect_attempts(mut self, attempts: u32) -> Self {
         self.max_reconnect_attempts = attempts;
+        self
+    }
+
+    /// Set only the API key (for exchanges that authenticate via a single token,
+    /// e.g. Kalshi appends it as `?apiKey=<key>` to the WS URL).
+    pub fn set_api_key(mut self, api_key: String) -> Self {
+        self.api_key = Some(api_key);
         self
     }
 

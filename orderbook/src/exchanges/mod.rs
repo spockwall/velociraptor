@@ -1,11 +1,13 @@
 pub mod binance;
 pub mod hyperliquid;
+pub mod kalshi;
 pub mod okx;
 pub mod polymarket;
 
 use crate::connection::{ConnectionConfig, ConnectionTrait, SystemControl};
 use crate::exchanges::binance::BinanceConnection;
 use crate::exchanges::hyperliquid::HyperliquidConnection;
+use crate::exchanges::kalshi::KalshiConnection;
 use crate::exchanges::okx::OkxConnection;
 use crate::exchanges::polymarket::PolymarketConnection;
 use crate::types::orderbook::OrderbookMessage;
@@ -40,7 +42,11 @@ impl ConnectionFactory {
                 self.message_tx.clone(),
                 system_control,
             )),
-            ExchangeName::Kalshi => unimplemented!(),
+            ExchangeName::Kalshi => Box::new(KalshiConnection::new(
+                self.config.clone(),
+                self.message_tx.clone(),
+                system_control,
+            )),
         }
     }
 }

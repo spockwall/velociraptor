@@ -18,6 +18,16 @@ pub mod polymarket {
     }
 }
 
+pub mod kalshi {
+    pub const REST_BASE: &str = "https://api.elections.kalshi.com/trade-api/v2";
+
+    pub mod ws {
+        /// Kalshi public WebSocket feed.
+        /// Auth: pass API key as query param `?apiKey=<key>` or via header.
+        pub const PUBLIC_STREAM: &str = "wss://api.elections.kalshi.com/trade-api/ws/v2";
+    }
+}
+
 pub mod okx {
     pub const BASE_URL: &str = "https://www.okx.com";
 

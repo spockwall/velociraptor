@@ -4,7 +4,7 @@ pub mod server;
 pub mod storage;
 
 pub use exchanges::{
-    BinanceConfig, HyperliquidConfig, OkxConfig, PolymarketArgs, PolymarketConfig,
+    BinanceConfig, HyperliquidConfig, KalshiConfig, OkxConfig, PolymarketArgs, PolymarketConfig,
     PolymarketMarket, PolymarketTomlConfig,
 };
 pub use logging::{LoggingConfig, init_logging};
@@ -26,6 +26,8 @@ pub struct TomlConfig {
     pub okx: OkxConfig,
     #[serde(default)]
     pub hyperliquid: HyperliquidConfig,
+    #[serde(default)]
+    pub kalshi: KalshiConfig,
     #[serde(default)]
     pub polymarket: Vec<PolymarketMarket>,
     #[serde(default)]

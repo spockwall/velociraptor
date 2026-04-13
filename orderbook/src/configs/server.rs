@@ -54,6 +54,10 @@ pub struct Args {
     #[arg(long, env = "HYPERLIQUID_COINS", value_delimiter = ',')]
     pub hyperliquid: Option<Vec<String>>,
 
+    /// Comma-separated Kalshi market tickers, e.g. FED-23DEC-T3.00 (overrides config file)
+    #[arg(long, env = "KALSHI_TICKERS", value_delimiter = ',')]
+    pub kalshi: Option<Vec<String>>,
+
     /// Tracing filter string (overrides config file)
     #[arg(long, env = "LOG_LEVEL")]
     pub log_level: Option<String>,
