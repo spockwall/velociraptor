@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
+use libs::protocol::ExchangeName;
 use libs::terminal::OrderbookUi;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
-use orderbook::types::ExchangeName;
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

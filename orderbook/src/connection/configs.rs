@@ -1,5 +1,5 @@
-use crate::types::ExchangeName;
 use crate::types::endpoints::{binance, hyperliquid, okx, polymarket};
+use libs::protocol::ExchangeName;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -23,6 +23,7 @@ impl ConnectionConfig {
             ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 45u64),
+            ExchangeName::Kalshi => unimplemented!(),
         };
 
         Self {

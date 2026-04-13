@@ -13,13 +13,13 @@
 //! ```
 
 use clap::Parser;
+use libs::protocol::ExchangeName;
 use orderbook::configs::{Args, TomlConfig, init_logging};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
-use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
 use recorder::{RotationPolicy, StorageConfig, StorageWriter};
 use tracing::{error, info};

@@ -11,11 +11,11 @@
 ///   python3 orderbook/examples/zmq_subscriber.py --add-channel --exchange binance --symbol SOLUSDT
 ///   python3 orderbook/examples/zmq_subscriber.py --add-channel --exchange polymarket --symbol <asset_id>
 use anyhow::Result;
+use libs::protocol::ExchangeName;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::polymarket::PolymarketSubMsgBuilder;
 use orderbook::publisher::ZmqPublisher;
-use orderbook::types::ExchangeName;
 use orderbook::{OrderbookSystem, OrderbookSystemConfig};
 use tracing::info;
 

@@ -1,8 +1,8 @@
 use crate::connection::{BasicConnectionMsgTrait, MessageParserTrait};
-use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
 use anyhow::{Result, anyhow};
 use chrono::Utc;
+use libs::protocol::ExchangeName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{error, info, warn};

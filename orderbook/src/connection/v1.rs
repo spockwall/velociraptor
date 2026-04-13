@@ -1,9 +1,9 @@
 use super::{PAUSE_DELAY, SystemControl};
 use crate::connection::{BasicConnectionMsgTrait, ConnectionConfig, MessageParserTrait};
 use crate::heartbeat::{HealthStatus, HearthbeatConfig, HearthbeatManager, HearthbeatProtocol};
-use crate::types::ExchangeName;
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
+use libs::protocol::ExchangeName;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{Duration, interval, sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};

@@ -1,7 +1,7 @@
 use crate::orderbook::Orderbook;
-use crate::types::ExchangeName;
 use crate::types::orderbook::OrderbookUpdate;
 use chrono::{DateTime, Utc};
+use libs::protocol::ExchangeName;
 use std::sync::Arc;
 
 /// A (price, quantity) pair.

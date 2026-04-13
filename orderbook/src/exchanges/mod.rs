@@ -8,8 +8,8 @@ use crate::exchanges::binance::BinanceConnection;
 use crate::exchanges::hyperliquid::HyperliquidConnection;
 use crate::exchanges::okx::OkxConnection;
 use crate::exchanges::polymarket::PolymarketConnection;
-use crate::types::ExchangeName;
 use crate::types::orderbook::OrderbookMessage;
+use libs::protocol::ExchangeName;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub struct ConnectionFactory {
@@ -40,6 +40,7 @@ impl ConnectionFactory {
                 self.message_tx.clone(),
                 system_control,
             )),
+            ExchangeName::Kalshi => unimplemented!(),
         }
     }
 }

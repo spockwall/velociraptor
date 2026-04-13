@@ -1,6 +1,6 @@
 use crate::connection::{BaseConnectionMessage, BasicConnectionMsgTrait};
-use crate::types::ExchangeName;
 use chrono::{DateTime, Utc};
+use libs::protocol::ExchangeName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 use crate::connection::{BasicConnectionMsgTrait, MessageParserTrait};
-use crate::types::ExchangeName;
+use libs::protocol::ExchangeName;
 use tokio_tungstenite::tungstenite::Message;
 
 pub struct HearthbeatProtocol<'a, M: BasicConnectionMsgTrait> {
