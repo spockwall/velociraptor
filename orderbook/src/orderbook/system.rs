@@ -6,11 +6,11 @@ use crate::exchanges::okx::OkxSubMsgBuilder;
 use crate::exchanges::polymarket::PolymarketSubMsgBuilder;
 use crate::orderbook::{Orderbook, OrderbookEngine, OrderbookEngineHandle};
 use crate::publisher::types::ChannelRequest;
-use crate::types::ExchangeName;
 use crate::types::errors::{ApiError, ApiResult};
 use crate::types::events::OrderbookEvent;
 use crate::types::orderbook::OrderbookMessage;
 use futures_util::StreamExt;
+use libs::protocol::ExchangeName;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -291,6 +291,7 @@ fn build_connection_config(req: &ChannelRequest) -> Result<ConnectionConfig, Str
         ExchangeName::Hyperliquid => HyperliquidSubMsgBuilder::new()
             .with_coin(&req.symbol)
             .build(),
+        ExchangeName::Kalshi => unimplemented!(),
     };
 
     Ok(ConnectionConfig::new(exchange).set_subscription_message(sub_msg))

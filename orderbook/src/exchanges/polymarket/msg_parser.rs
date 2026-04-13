@@ -1,8 +1,8 @@
 use crate::connection::MessageParserTrait;
 use crate::exchanges::polymarket::types::{PolymarketBookEvent, PolymarketPriceChangeEvent};
-use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
 use anyhow::Result;
+use libs::protocol::ExchangeName;
 use libs::time::parse_timestamp_ms;
 use std::collections::HashMap;
 use tracing::{error, warn};

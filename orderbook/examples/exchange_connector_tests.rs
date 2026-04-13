@@ -1,9 +1,9 @@
 use anyhow::Ok;
+use libs::protocol::ExchangeName;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::ConnectionFactory;
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
-use orderbook::types::ExchangeName;
 use orderbook::types::endpoints::{binance, okx};
 
 async fn test_bitmex_connection() -> Result<(), anyhow::Error> {

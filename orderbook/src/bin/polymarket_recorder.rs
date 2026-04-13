@@ -26,12 +26,12 @@
 use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
+use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
 use orderbook::configs::{PolymarketArgs, PolymarketMarket, PolymarketTomlConfig};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
-use orderbook::types::ExchangeName;
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
 use recorder::format::StorageRecord;
 use std::collections::HashMap;

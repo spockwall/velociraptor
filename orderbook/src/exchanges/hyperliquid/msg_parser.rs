@@ -1,9 +1,9 @@
 use crate::connection::MessageParserTrait;
 use crate::exchanges::hyperliquid::types::{HlBookData, HlWsMessage};
-use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
+use libs::protocol::ExchangeName;
 use tracing::{error, info, warn};
 
 pub struct HyperliquidMessageParser {

@@ -1,9 +1,9 @@
 use crate::connection::MessageParserTrait;
 use crate::exchanges::binance::types::{BinanceDepthData, BinanceSubscribeResponse};
-use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
 use anyhow::Result;
 use chrono::Utc;
+use libs::protocol::ExchangeName;
 use tracing::{error, info};
 
 pub struct BinanceMessageParser {

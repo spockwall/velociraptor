@@ -1,9 +1,9 @@
 use crate::connection::{ConnectionConfig, ConnectionTrait, SystemControl, v1::ConnectionBase};
 use crate::exchanges::okx::OkxMessageParser;
-use crate::types::ExchangeName;
 use crate::types::orderbook::OrderbookMessage;
 use anyhow::Result;
 use async_trait::async_trait;
+use libs::protocol::ExchangeName;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub struct OkxConnection {
