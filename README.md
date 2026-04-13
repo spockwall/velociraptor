@@ -513,7 +513,7 @@ cargo run --example polymarket_orderbook --release -- --config configs/polymarke
 cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
 
 # Examples
-cargo run --example stream_orderbook_instance
+cargo run --example orderbook
 cargo run --example zmq_publisher
 cargo run --example exchange_websocket
 
