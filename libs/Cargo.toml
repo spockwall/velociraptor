@@ -5,8 +5,22 @@ edition = {workspace = true}
 authors = {workspace = true}
 license = {workspace = true}
 
+[features]
+default = []
+# Opt-in Redis helper (used by orderbook-server, executor, backend).
+# Keeps `libs` usable by consumers that only need constants/protocol.
+redis = ["dep:redis", "dep:tokio", "dep:tracing", "dep:anyhow", "dep:zstd"]
+
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 crossterm = { version = "0.29.0", default-features = false }
 chrono = { workspace = true }
+rmp-serde = { workspace = true }
+
+# Optional — enabled by `redis` feature.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"], optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }

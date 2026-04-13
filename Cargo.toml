@@ -1,5 +1,5 @@
 [workspace]
-members = ["libs","orderbook","recorder"]
+members = ["libs","orderbook","recorder","executor","backend"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -53,6 +53,13 @@ zmq = { version = "0.10" }
 
 # HTTP client (used at startup for Polymarket token resolution)
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+# Redis (tokio async, connection manager)
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }
+
+# Axum + tower-http (backend HTTP API)
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 [workspace.package]
 version = "0.1.0"
