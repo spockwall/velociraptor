@@ -14,7 +14,10 @@ pub mod binance {
 
 pub mod polymarket {
     pub mod ws {
+        /// Public market orderbook channel.
         pub const PUBLIC_STREAM: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+        /// Private user channel — requires L2 API key/secret/passphrase in the subscription body.
+        pub const USER_STREAM: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
     }
 }
 
