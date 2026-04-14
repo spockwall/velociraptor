@@ -20,18 +20,19 @@ impl KalshiCredentials {
 mod tests {
     use super::*;
 
-    fn example_toml() -> std::path::PathBuf {
+    fn example_yaml() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("credentials/example.toml")
+            .join("credentials/example.yaml")
     }
 
     #[test]
     fn deserializes_from_example() {
-        let raw = std::fs::read_to_string(example_toml()).unwrap();
-        let mut root: toml::Table = toml::from_str(&raw).unwrap();
-        let creds: KalshiCredentials = root.remove("kalshi").unwrap().try_into().unwrap();
+        let raw = std::fs::read_to_string(example_yaml()).unwrap();
+        let mut root: serde_yaml::Mapping = serde_yaml::from_str(&raw).unwrap();
+        let creds: KalshiCredentials =
+            serde_yaml::from_value(root.remove("kalshi").unwrap()).unwrap();
         assert!(!creds.api_key.is_empty());
     }
 }

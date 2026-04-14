@@ -8,7 +8,6 @@ pub struct OkxCredentials {
     pub api_key: String,
     #[serde(default)]
     pub secret: String,
-    /// OKX requires a passphrase for private endpoints.
     #[serde(default)]
     pub passphrase: Option<String>,
 }
@@ -26,22 +25,20 @@ impl OkxCredentials {
 mod tests {
     use super::*;
 
-    fn example_toml() -> std::path::PathBuf {
+    fn example_yaml() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("credentials/example.toml")
+            .join("credentials/example.yaml")
     }
 
     #[test]
-    fn section_absent_defaults_to_empty() {
-        // example.toml has no [okx] section — deserialization falls back to Default.
-        let raw = std::fs::read_to_string(example_toml()).unwrap();
-        let mut root: toml::Table = toml::from_str(&raw).unwrap();
-        let creds: OkxCredentials = root
-            .remove("okx")
-            .map(|v| v.try_into().unwrap())
-            .unwrap_or_default();
-        assert!(creds.api_key.is_empty());
+    fn deserializes_from_example() {
+        let raw = std::fs::read_to_string(example_yaml()).unwrap();
+        let mut root: serde_yaml::Mapping = serde_yaml::from_str(&raw).unwrap();
+        let creds: OkxCredentials =
+            serde_yaml::from_value(root.remove("okx").unwrap()).unwrap();
+        assert!(!creds.api_key.is_empty());
+        assert!(!creds.secret.is_empty());
     }
 }

@@ -25,6 +25,6 @@ target
 .vscode/
 
 credentials/*
-!credentials/example.toml
+!credentials/example.yaml
 
 CLAUDE.md
