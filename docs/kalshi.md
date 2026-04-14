@@ -81,13 +81,14 @@ wss://api.elections.kalshi.com/trade-api/ws/v2?apiKey=<key>
 
 **Get a key:** https://kalshi.com/account/profile/api-keys
 
-Set it in `configs/kalshi.toml`:
+Store it in `credentials/kalshi.toml` (excluded from git via `.gitignore`):
 
 ```toml
-api_key = "your-api-key-here"
+[kalshi]
+api_key = "<your-api-key>"
 ```
 
-Keep the config file out of version control.
+Copy `credentials/example.toml` as a starting point. The file is separate from the display config (`configs/kalshi.toml`) so secrets never end up in version control.
 
 ---
 
@@ -208,12 +209,18 @@ Logged as an error. Most commonly caused by a missing or invalid API key.
 
 ## Configuration
 
+### Credentials (`credentials/kalshi.toml`)
+
+```toml
+[kalshi]
+api_key = "<your-api-key>"
+```
+
+Pass to the visualiser with `--credentials credentials/kalshi.toml` (default path). This file is separate from the display config so secrets stay out of version control.
+
 ### Visualiser config (`configs/kalshi.toml`)
 
 ```toml
-# API key — required
-api_key = "your-api-key-here"
-
 [display]
 depth              = 10   # orderbook levels per side
 render_interval_ms = 300  # terminal redraw interval in milliseconds
@@ -230,7 +237,6 @@ label  = "ETH 15m ↑↓"
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `api_key` | string | Kalshi API key (required) |
 | `depth` | usize | Orderbook levels per side to display |
 | `render_interval_ms` | u64 | Terminal redraw interval |
 | `early_start_secs` | u64 | How early to pre-start the next window's connection |
@@ -255,18 +261,22 @@ The `kalshi_orderbook` example renders a live terminal UI showing YES/NO orderbo
 
 ```bash
 # Config file (recommended)
-cargo run --example kalshi_orderbook --release -- --config configs/kalshi.toml
+cargo run --example kalshi_orderbook --release -- \
+    --config configs/kalshi.toml \
+    --credentials credentials/kalshi.toml
 
 # CLI flags
 cargo run --example kalshi_orderbook --release -- \
     --series KXBTC15M \
     --series KXETH15M \
-    --depth 8
+    --depth 8 \
+    --credentials credentials/kalshi.toml
 
 # Single series with custom rotation timing
 cargo run --example kalshi_orderbook --release -- \
     --config configs/kalshi.toml \
-    --early-start-secs 30
+    --early-start-secs 30 \
+    --credentials credentials/kalshi.toml
 ```
 
 ### Terminal display
