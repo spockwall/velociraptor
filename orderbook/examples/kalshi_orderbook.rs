@@ -119,8 +119,6 @@ impl Default for DisplayConfig {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct KalshiTomlConfig {
-    /// Kalshi API key. Required. Get one at https://kalshi.com/account/profile/api-keys
-    pub api_key: Option<String>,
     #[serde(default)]
     pub display: DisplayConfig,
     #[serde(default)]
@@ -129,15 +127,46 @@ pub struct KalshiTomlConfig {
 
 impl KalshiTomlConfig {
     pub fn load(path: &str) -> Self {
-        let s = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("Failed to read config '{path}': {e}");
-            std::process::exit(1);
-        });
-        toml::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("Failed to parse config '{path}': {e}");
-            std::process::exit(1);
-        })
+        load_toml(path)
     }
+}
+
+// ── Credentials ───────────────────────────────────────────────────────────────
+
+/// Mirrors the `[kalshi]` section of `credentials/example.toml`.
+#[derive(Debug, Deserialize, Default)]
+struct KalshiCredentials {
+    api_key: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CredentialsFile {
+    kalshi: KalshiCredentials,
+}
+
+const DEFAULT_CREDENTIALS_PATH: &str = "credentials/kalshi.toml";
+
+fn load_credentials(path: &str) -> String {
+    let file: CredentialsFile = load_toml(path);
+    let key = file.kalshi.api_key;
+    if key.is_empty() || key.starts_with('<') {
+        eprintln!("Error: api_key in '{path}' is not set. Edit the file and try again.");
+        std::process::exit(1);
+    }
+    key
+}
+
+// ── Shared TOML loader ────────────────────────────────────────────────────────
+
+fn load_toml<T: for<'de> serde::Deserialize<'de>>(path: &str) -> T {
+    let s = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Failed to read '{path}': {e}");
+        std::process::exit(1);
+    });
+    toml::from_str(&s).unwrap_or_else(|e| {
+        eprintln!("Failed to parse '{path}': {e}");
+        std::process::exit(1);
+    })
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -148,9 +177,12 @@ impl KalshiTomlConfig {
     about = "Kalshi BTC/ETH 15-min orderbook visualizer with auto-rotating scheduler"
 )]
 struct Args {
-    /// TOML config file
+    /// Display + markets config file (default: configs/kalshi.toml)
     #[arg(long)]
     config: Option<String>,
+    /// Credentials file (default: credentials/kalshi.toml)
+    #[arg(long, default_value = DEFAULT_CREDENTIALS_PATH)]
+    credentials: String,
     /// Series ticker to subscribe (repeatable). Default: KXBTC15M + KXETH15M.
     #[arg(long = "series", action = clap::ArgAction::Append)]
     series: Vec<String>,
@@ -437,10 +469,7 @@ async fn main() -> Result<()> {
         None => KalshiTomlConfig::default(),
     };
 
-    let api_key = cfg.api_key.unwrap_or_else(|| {
-        eprintln!("Error: api_key is missing from configs/kalshi.toml. Exiting.");
-        std::process::exit(1);
-    });
+    let api_key = load_credentials(&args.credentials);
 
     if let Some(d) = args.depth {
         cfg.display.depth = d;
