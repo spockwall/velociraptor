@@ -119,28 +119,28 @@ Key layout rules:
 
 ### Standard exchanges
 
-All storage options live under `[storage]` in `configs/server.toml`:
+All storage options live under `storage:` in `configs/server.yaml`:
 
-```toml
-[storage]
-enabled        = true
-base_path      = "./data"   # root directory for all data files
-depth          = 20         # number of bid/ask levels stored per snapshot
-flush_interval = 1000       # ms between BufWriter flushes to disk
-rotation       = "daily"    # "daily" | "none"
-zstd_level     = 0          # 0 = disabled; 1–22 = zstd compression level
+```yaml
+storage:
+  enabled: true
+  base_path: "./data"     # root directory for all data files
+  depth: 20               # number of bid/ask levels stored per snapshot
+  flush_interval: 1000    # ms between BufWriter flushes to disk
+  rotation: "daily"       # "daily" | "none"
+  zstd_level: 0           # 0 = disabled; 1–22 = zstd compression level
 ```
 
 ### Polymarket
 
-Options live under `[server]` in `configs/polymarket.toml`:
+Options live under `storage:` in `configs/polymarket.yaml`:
 
-```toml
-[server]
-depth           = 8      # orderbook levels to record per side
-base_path       = "./data"
-flush_interval  = 500    # ms between BufWriter flushes
-zstd_level      = 3      # 0 = disabled; 1–22 = zstd compression level
+```yaml
+storage:
+  depth: 8                # orderbook levels to record per side
+  base_path: "./data"
+  flush_interval: 500     # ms between BufWriter flushes
+  zstd_level: 3           # 0 = disabled; 1–22 = zstd compression level
 ```
 
 ### Rotation policy

@@ -16,44 +16,45 @@ A high-performance Rust library and server for real-time cryptocurrency orderboo
 
 ### 1. Configure
 
-Edit `configs/server.toml` to enable the exchanges you want:
+Edit `configs/server.yaml` to enable the exchanges you want:
 
-```toml
-[binance]
-enabled = true
-symbols = ["btcusdt", "ethusdt"]
+```yaml
+binance:
+  enabled: true
+  symbols: ["btcusdt", "ethusdt"]
 
-[hyperliquid]
-enabled = true
-coins   = ["BTC", "ETH"]
+hyperliquid:
+  enabled: true
+  coins: ["BTC", "ETH"]
 
-[kalshi]
-enabled = true
-tickers = ["KXBTC15M-26APR130415-15"]   # specific window ticker
+kalshi:
+  enabled: true
+  tickers: ["KXBTC15M-26APR130415-15"]   # specific window ticker
 
 # Polymarket token IDs are resolved automatically from the Gamma API.
-[[polymarket]]
-enabled       = true
-slug          = "btc-updown-5m"
-interval_secs = 300
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
 ```
 
-For the Kalshi orderbook server, set your API key in `credentials/kalshi.toml` — Kalshi requires authentication even for market data:
+For the Kalshi orderbook server, set your API key in `credentials/kalshi.yaml` — Kalshi requires authentication even for market data:
 
-```toml
-# credentials/kalshi.toml
-[kalshi]
-api_key = "<your-api-key>"
+```yaml
+# credentials/kalshi.yaml
+kalshi:
+  api_key: "<your-api-key>"
 ```
 
 ```bash
-cargo run --bin orderbook_server --release -- --config configs/server.toml
+cargo run --bin orderbook_server --release -- --config configs/server.yaml
 ```
 
 ### 2. Start the server
 
 ```bash
-cargo run --bin orderbook_server --release -- --config configs/server.toml
+cargo run --bin orderbook_server --release -- --config configs/server.yaml
 ```
 
 ### 3. Subscribe from Python
@@ -118,7 +119,7 @@ See [`docs/systemd.md`](docs/systemd.md) for restart policy details, log command
 Shows a live terminal UI with bids, asks, spread, and mid. Rotates to the next window automatically.
 
 ```bash
-cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
+cargo run --example polymarket_orderbook --release -- --config configs/polymarket.yaml
 ```
 
 ### Disk recorder
@@ -131,7 +132,7 @@ data/polymarket/btc-updown-5m/2026-04-05/09:55-10:00-up.mpack
 ```
 
 ```bash
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
 ```
 
 Files are optionally zstd-compressed after each window closes. See [`docs/polymarket.md`](docs/polymarket.md) for the full file format and Python reader.
@@ -150,42 +151,44 @@ Shows YES/NO orderbooks for BTC and ETH 15-minute markets. Auto-rotates every 15
 
 ```bash
 # 1. Copy the credentials template and fill in your key
-cp credentials/example.toml credentials/kalshi.toml
-# edit credentials/kalshi.toml: set api_key under [kalshi]
+cp credentials/example.yaml credentials/kalshi.yaml
+# edit credentials/kalshi.yaml: set api_key under kalshi:
 
 # 2. Run the visualiser
 cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.toml \
-    --credentials credentials/kalshi.toml
+    --config configs/kalshi.yaml \
+    --credentials credentials/kalshi.yaml
 
 # Or pass the series on the command line
 cargo run --example kalshi_orderbook --release -- \
     --series KXBTC15M --series KXETH15M \
-    --credentials credentials/kalshi.toml
+    --credentials credentials/kalshi.yaml
 ```
 
-Credentials file (`credentials/kalshi.toml`, **not committed to git**):
+Credentials file (`credentials/kalshi.yaml`, **not committed to git**):
 
-```toml
-[kalshi]
-api_key = "<your-api-key>"
+```yaml
+kalshi:
+  api_key: "<your-api-key>"
 ```
 
-Config file (`configs/kalshi.toml`):
+Config file (`configs/kalshi.yaml`):
 
-```toml
-[display]
-depth              = 10
-render_interval_ms = 300
-early_start_secs   = 60   # seconds before close to open the next window
+```yaml
+server:
+  render_interval: 300
 
-[[markets]]
-series = "KXBTC15M"
-label  = "BTC 15m ↑↓"
+storage:
+  depth: 10
 
-[[markets]]
-series = "KXETH15M"
-label  = "ETH 15m ↑↓"
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
 ```
 
 See [`docs/kalshi.md`](docs/kalshi.md) for the ticker format, wire protocol, and scheduler details.
@@ -252,15 +255,15 @@ LOG_JSON=true
 
 ## Storage & Replay
 
-Enable storage in `configs/server.toml`:
+Enable storage in `configs/server.yaml`:
 
-```toml
-[storage]
-enabled        = true
-base_path      = "./data"
-depth          = 20
-flush_interval = 1000    # ms between flushes
-rotation       = "daily" # "daily" | "none"
+```yaml
+storage:
+  enabled: true
+  base_path: "./data"
+  depth: 20
+  flush_interval: 1000    # ms between flushes
+  rotation: "daily"       # "daily" | "none"
 ```
 
 Snapshots are written as append-only MessagePack files:
@@ -589,15 +592,15 @@ cargo build --release
 cargo build --bin orderbook_server --release
 
 # Run server
-cargo run --bin orderbook_server --release -- --config configs/server.toml
+cargo run --bin orderbook_server --release -- --config configs/server.yaml
 cargo run --bin orderbook_server --release -- --binance btcusdt,solusdt --depth 10
 
 # Polymarket tools
-cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
+cargo run --example polymarket_orderbook --release -- --config configs/polymarket.yaml
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
 
 # Kalshi tools
-cargo run --example kalshi_orderbook --release -- --config configs/kalshi.toml
+cargo run --example kalshi_orderbook --release -- --config configs/kalshi.yaml
 
 # Examples
 cargo run --example orderbook

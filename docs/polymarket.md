@@ -83,26 +83,25 @@ This happens synchronously before the WebSocket connection is opened. If the mar
 
 ## Configuration
 
-Both the visualiser and recorder are configured identically. Create a TOML file:
+Both the visualiser and recorder are configured identically. Create a YAML file:
 
-```toml
-# configs/polymarket.toml
+```yaml
+# configs/polymarket.yaml
 
-[[polymarket]]
-enabled          = true
-slug             = "btc-updown-5m"
-interval_secs    = 300          # window size in seconds; 0 = static market
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300    # window size in seconds; 0 = static market
 
-[[polymarket]]
-enabled          = true
-slug             = "eth-updown-5m"
-interval_secs    = 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300
 
-# Static market (slug is used directly, no timestamp appended):
-# [[polymarket]]
-# enabled       = true
-# slug          = "will-btc-reach-100k-in-2025"
-# interval_secs = 0
+    # Static market (slug is used directly, no timestamp appended):
+    # - enabled: true
+    #   slug: "will-btc-reach-100k-in-2025"
+    #   interval_secs: 0
 ```
 
 | Field | Type | Description |
@@ -119,7 +118,7 @@ The `polymarket_orderbook` example shows a live terminal UI with the orderbook f
 
 ```bash
 # From config file
-cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
+cargo run --example polymarket_orderbook --release -- --config configs/polymarket.yaml
 
 # From CLI flags
 cargo run --example polymarket_orderbook --release -- \
@@ -138,7 +137,7 @@ The `polymarket_recorder` binary does everything the visualiser does, plus write
 
 ```bash
 # From config file
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
 
 # From CLI flags
 cargo run --bin polymarket_recorder --release -- \
@@ -150,15 +149,17 @@ cargo run --bin polymarket_recorder --release -- \
 
 ### Recorder Config
 
-Add these fields to the TOML config file (in addition to `[[polymarket]]` entries):
+Add these fields to the YAML config file (alongside the `polymarket:` section):
 
-```toml
-[server]
-depth           = 10    # orderbook levels to record per side
-render_interval = 300   # ms between terminal redraws (independent of write rate)
-base_path       = "./data"
-flush_interval  = 1000  # ms between BufWriter flushes
-zstd_level      = 3     # 0 = disabled, 1–22 = zstd level
+```yaml
+server:
+  render_interval: 300    # ms between terminal redraws (independent of write rate)
+
+storage:
+  depth: 10               # orderbook levels to record per side
+  base_path: "./data"
+  flush_interval: 1000    # ms between BufWriter flushes
+  zstd_level: 3           # 0 = disabled, 1–22 = zstd level
 ```
 
 ---
