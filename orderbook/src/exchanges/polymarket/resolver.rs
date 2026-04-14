@@ -2,7 +2,7 @@
 //! slug-based config entries into `clobTokenIds` for WebSocket subscription,
 //! and spawns a rotator task that re-resolves tokens as rolling windows expire.
 
-use crate::configs::exchanges::PolymarketMarket;
+use libs::configs::PolymarketMarketConfig;
 use libs::time::now_secs;
 use tracing::{info, warn};
 
@@ -77,7 +77,7 @@ fn build_rest_client() -> Option<reqwest::blocking::Client> {
 
 /// Call the Gamma REST API to resolve token IDs for all enabled polymarket entries.
 /// Runs synchronously at startup — not on the hot path.
-pub fn resolve_assets(markets: &[PolymarketMarket]) -> Vec<String> {
+pub fn resolve_assets(markets: &[PolymarketMarketConfig]) -> Vec<String> {
     resolve_assets_with_labels(markets)
         .into_iter()
         .map(|(id, _, _, _)| id)
@@ -90,7 +90,7 @@ pub fn resolve_assets(markets: &[PolymarketMarket]) -> Vec<String> {
 ///   - `full_slug`  — the fully-resolved slug with timestamp (e.g. "btc-updown-5m-1775308500")
 ///   - `is_up`      — true = Up/Yes outcome, false = Down/No outcome
 pub fn resolve_assets_with_labels(
-    markets: &[PolymarketMarket],
+    markets: &[PolymarketMarketConfig],
 ) -> Vec<(String, String, String, bool)> {
     let Some(client) = build_rest_client() else {
         return vec![];

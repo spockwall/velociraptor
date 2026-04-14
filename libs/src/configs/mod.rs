@@ -10,7 +10,7 @@ pub use binance::BinanceConfig;
 pub use hyperliquid::HyperliquidConfig;
 pub use kalshi::{KalshiConfig, KalshiMarketConfig};
 pub use okx::OkxConfig;
-pub use polymarket::{PolymarketConfig, PolymarketMarketConfig};
+pub use polymarket::{PolymarketConfig, PolymarketFileConfig, PolymarketMarketConfig};
 pub use server::ServerConfig;
 pub use storage::StorageConfig;
 

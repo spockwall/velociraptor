@@ -29,6 +29,8 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 use chrono_tz::US::Eastern;
 use clap::Parser;
+use libs::configs::load_yaml_or_exit;
+use libs::credentials::KalshiCredentials;
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ConnectionConfig, SystemControl};
@@ -38,7 +40,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
-use toml;
 
 // ── Ticker computation ────────────────────────────────────────────────────────
 
@@ -127,47 +128,11 @@ pub struct KalshiTomlConfig {
 
 impl KalshiTomlConfig {
     pub fn load(path: &str) -> Self {
-        load_toml(path)
+        load_yaml_or_exit(path)
     }
-}
-
-// ── Credentials ───────────────────────────────────────────────────────────────
-
-/// Mirrors the `[kalshi]` section of `credentials/example.toml`.
-#[derive(Debug, Deserialize, Default)]
-struct KalshiCredentials {
-    api_key: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct CredentialsFile {
-    kalshi: KalshiCredentials,
 }
 
 const DEFAULT_CREDENTIALS_PATH: &str = "credentials/kalshi.toml";
-
-fn load_credentials(path: &str) -> String {
-    let file: CredentialsFile = load_toml(path);
-    let key = file.kalshi.api_key;
-    if key.is_empty() || key.starts_with('<') {
-        eprintln!("Error: api_key in '{path}' is not set. Edit the file and try again.");
-        std::process::exit(1);
-    }
-    key
-}
-
-// ── Shared TOML loader ────────────────────────────────────────────────────────
-
-fn load_toml<T: for<'de> serde::Deserialize<'de>>(path: &str) -> T {
-    let s = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Failed to read '{path}': {e}");
-        std::process::exit(1);
-    });
-    toml::from_str(&s).unwrap_or_else(|e| {
-        eprintln!("Failed to parse '{path}': {e}");
-        std::process::exit(1);
-    })
-}
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -469,7 +434,7 @@ async fn main() -> Result<()> {
         None => KalshiTomlConfig::default(),
     };
 
-    let api_key = load_credentials(&args.credentials);
+    let api_key = KalshiCredentials::load(&args.credentials).api_key;
 
     if let Some(d) = args.depth {
         cfg.display.depth = d;
