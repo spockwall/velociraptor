@@ -8,6 +8,7 @@ A high-performance Rust library and server for real-time cryptocurrency orderboo
 | OKX         | Live   | `books` channel — snapshot + incremental updates |
 | Polymarket  | Live   | `book` snapshot + `price_change` incremental diffs |
 | Hyperliquid | Live   | `l2Book` full snapshot on every update |
+| Kalshi      | Live   | `orderbook_snapshot` + signed `orderbook_delta` — requires API key |
 
 ---
 
@@ -26,11 +27,27 @@ symbols = ["btcusdt", "ethusdt"]
 enabled = true
 coins   = ["BTC", "ETH"]
 
+[kalshi]
+enabled = true
+tickers = ["KXBTC15M-26APR130415-15"]   # specific window ticker
+
 # Polymarket token IDs are resolved automatically from the Gamma API.
 [[polymarket]]
 enabled       = true
 slug          = "btc-updown-5m"
 interval_secs = 300
+```
+
+For the Kalshi orderbook server, set your API key in `credentials/kalshi.toml` — Kalshi requires authentication even for market data:
+
+```toml
+# credentials/kalshi.toml
+[kalshi]
+api_key = "<your-api-key>"
+```
+
+```bash
+cargo run --bin orderbook_server --release -- --config configs/server.toml
 ```
 
 ### 2. Start the server
@@ -118,6 +135,60 @@ cargo run --bin polymarket_recorder --release -- --config configs/polymarket.tom
 ```
 
 Files are optionally zstd-compressed after each window closes. See [`docs/polymarket.md`](docs/polymarket.md) for the full file format and Python reader.
+
+---
+
+## Kalshi Tools
+
+Kalshi is a CFTC-regulated prediction market. This project streams rolling 15-minute BTC and ETH price direction markets (`KXBTC15M`, `KXETH15M`). Each market has YES (price up) and NO (price down) sides displayed as bids and asks.
+
+**Authentication required:** Kalshi's WebSocket requires an API key even for market data. Get one at https://kalshi.com/account/profile/api-keys
+
+### Live terminal visualiser
+
+Shows YES/NO orderbooks for BTC and ETH 15-minute markets. Auto-rotates every 15 minutes — the next window's connection is opened 60 seconds before the current one closes, with no data gap.
+
+```bash
+# 1. Copy the credentials template and fill in your key
+cp credentials/example.toml credentials/kalshi.toml
+# edit credentials/kalshi.toml: set api_key under [kalshi]
+
+# 2. Run the visualiser
+cargo run --example kalshi_orderbook --release -- \
+    --config configs/kalshi.toml \
+    --credentials credentials/kalshi.toml
+
+# Or pass the series on the command line
+cargo run --example kalshi_orderbook --release -- \
+    --series KXBTC15M --series KXETH15M \
+    --credentials credentials/kalshi.toml
+```
+
+Credentials file (`credentials/kalshi.toml`, **not committed to git**):
+
+```toml
+[kalshi]
+api_key = "<your-api-key>"
+```
+
+Config file (`configs/kalshi.toml`):
+
+```toml
+[display]
+depth              = 10
+render_interval_ms = 300
+early_start_secs   = 60   # seconds before close to open the next window
+
+[[markets]]
+series = "KXBTC15M"
+label  = "BTC 15m ↑↓"
+
+[[markets]]
+series = "KXETH15M"
+label  = "ETH 15m ↑↓"
+```
+
+See [`docs/kalshi.md`](docs/kalshi.md) for the ticker format, wire protocol, and scheduler details.
 
 ---
 
@@ -245,7 +316,7 @@ Client (DEALER)                       Server (ROUTER)
 | Field      | Values                                     | Notes                    |
 |------------|--------------------------------------------|--------------------------|
 | `action`   | `subscribe` `unsubscribe` `add_channel`    |                          |
-| `exchange` | `binance` `okx` `polymarket` `hyperliquid` |                          |
+| `exchange` | `binance` `okx` `polymarket` `hyperliquid` `kalshi` |              |
 | `symbol`   | e.g. `BTCUSDT`, `BTC-USDT`, `<token_id>`  | Exchange-native format   |
 | `type`     | `snapshot` `bba`                           | Required for subscribe   |
 | `interval` | milliseconds                               | Required for subscribe   |
@@ -398,6 +469,8 @@ tokio runtime
 ├── [task] BinanceConnector        — WebSocket I/O, heartbeat, reconnect
 ├── [task] OkxConnector            — WebSocket I/O, heartbeat, reconnect
 ├── [task] PolymarketConnector     — WebSocket I/O, reconnect
+├── [task] HyperliquidConnector    — WebSocket I/O, heartbeat, reconnect
+├── [task] KalshiConnector         — WebSocket I/O, server-ping response, reconnect
 ├── [task] OrderbookEngine         — recv loop, apply updates, broadcast events
 ├── [task] on_update handler(s)    — one task per registered callback
 └── [task] ZmqPublisher (optional) — reads broadcast, publishes over ZMQ
@@ -495,6 +568,17 @@ HyperliquidSubMsgBuilder::new()
 
 Symbols are uppercase coin names only — no quote currency (e.g. `"BTC"` not `"BTCUSDT"`).
 
+### Kalshi
+
+```rust
+KalshiSubMsgBuilder::new()
+    .with_ticker("KXBTC15M-26APR130415-15")
+    .with_ticker("KXETH15M-26APR130415-15")
+    .build()
+```
+
+Tickers are full window identifiers including the close-time stamp in Eastern Time. The `kalshi_orderbook` example computes these automatically from the wall clock. For the rolling 15-minute series, the ticker format is `{SERIES}-{YYMONDDHHММ}-15` where `YYMONDDHHММ` is the close time in US Eastern Time. See [`docs/kalshi.md`](docs/kalshi.md) for details.
+
 ---
 
 ## Commands
@@ -511,6 +595,9 @@ cargo run --bin orderbook_server --release -- --binance btcusdt,solusdt --depth 
 # Polymarket tools
 cargo run --example polymarket_orderbook --release -- --config configs/polymarket.toml
 cargo run --bin polymarket_recorder --release -- --config configs/polymarket.toml
+
+# Kalshi tools
+cargo run --example kalshi_orderbook --release -- --config configs/kalshi.toml
 
 # Examples
 cargo run --example orderbook
