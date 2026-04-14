@@ -26,3 +26,5 @@ target
 
 credentials/*
 !credentials/example.toml
+
+CLAUDE.md
