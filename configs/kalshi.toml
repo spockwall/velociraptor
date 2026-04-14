@@ -1,11 +1,5 @@
 # Kalshi orderbook visualizer configuration
 # Run with: cargo run --example kalshi_orderbook -- --config configs/kalshi.toml
-#
-# API key — required. Get one at https://kalshi.com/account/profile/api-keys
-# Keep this file out of version control.
-
-api_key = ""   # <-- paste your Kalshi API key here
-
 # ── Display ───────────────────────────────────────────────────────────────────
 
 [display]

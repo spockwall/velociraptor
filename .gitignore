@@ -23,3 +23,6 @@ target
 .DS_Store
 .markdownlint.json
 .vscode/
+
+credentials/*
+!credentials/example.toml
