@@ -81,14 +81,14 @@ wss://api.elections.kalshi.com/trade-api/ws/v2?apiKey=<key>
 
 **Get a key:** https://kalshi.com/account/profile/api-keys
 
-Store it in `credentials/kalshi.toml` (excluded from git via `.gitignore`):
+Store it in `credentials/kalshi.yaml` (excluded from git via `.gitignore`):
 
-```toml
-[kalshi]
-api_key = "<your-api-key>"
+```yaml
+kalshi:
+  api_key: "<your-api-key>"
 ```
 
-Copy `credentials/example.toml` as a starting point. The file is separate from the display config (`configs/kalshi.toml`) so secrets never end up in version control.
+Copy `credentials/example.yaml` as a starting point. The file is separate from the display config (`configs/kalshi.yaml`) so secrets never end up in version control.
 
 ---
 
@@ -209,49 +209,41 @@ Logged as an error. Most commonly caused by a missing or invalid API key.
 
 ## Configuration
 
-### Credentials (`credentials/kalshi.toml`)
+### Credentials (`credentials/kalshi.yaml`)
 
-```toml
-[kalshi]
-api_key = "<your-api-key>"
+```yaml
+kalshi:
+  api_key: "<your-api-key>"
 ```
 
-Pass to the visualiser with `--credentials credentials/kalshi.toml` (default path). This file is separate from the display config so secrets stay out of version control.
+Pass to the visualiser with `--credentials credentials/kalshi.yaml` (default path). This file is separate from the display config so secrets stay out of version control.
 
-### Visualiser config (`configs/kalshi.toml`)
+### Visualiser config (`configs/kalshi.yaml`)
 
-```toml
-[display]
-depth              = 10   # orderbook levels per side
-render_interval_ms = 300  # terminal redraw interval in milliseconds
-early_start_secs   = 60   # seconds before window close to open the next connection
+```yaml
+server:
+  render_interval: 300    # terminal redraw interval in milliseconds
 
-[[markets]]
-series = "KXBTC15M"
-label  = "BTC 15m ↑↓"
+storage:
+  depth: 10               # orderbook levels per side
 
-[[markets]]
-series = "KXETH15M"
-label  = "ETH 15m ↑↓"
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `depth` | usize | Orderbook levels per side to display |
-| `render_interval_ms` | u64 | Terminal redraw interval |
-| `early_start_secs` | u64 | How early to pre-start the next window's connection |
-| `series` | string | Kalshi series ticker (e.g. `KXBTC15M`) |
-| `label` | string | Display name in panel title (optional) |
-
-### Orderbook server config (`configs/server.toml`)
-
-```toml
-[kalshi]
-enabled = true
-tickers = ["KXBTC15M-26APR130415-15"]  # specific window tickers
-```
-
-Note: the server takes explicit tickers, not series names. Use the visualiser example for rolling window support.
+| `server.render_interval` | u64 | Terminal redraw interval in milliseconds |
+| `storage.depth` | usize | Orderbook levels per side to display |
+| `kalshi.market[].enable` | bool | Skip this entry if false |
+| `kalshi.market[].series` | string | Kalshi series ticker (e.g. `KXBTC15M`) |
+| `kalshi.market[].interval_secs` | u64 | Window size in seconds (900 = 15 min) |
 
 ---
 
@@ -262,21 +254,21 @@ The `kalshi_orderbook` example renders a live terminal UI showing YES/NO orderbo
 ```bash
 # Config file (recommended)
 cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.toml \
-    --credentials credentials/kalshi.toml
+    --config configs/kalshi.yaml \
+    --credentials credentials/kalshi.yaml
 
 # CLI flags
 cargo run --example kalshi_orderbook --release -- \
     --series KXBTC15M \
     --series KXETH15M \
     --depth 8 \
-    --credentials credentials/kalshi.toml
+    --credentials credentials/kalshi.yaml
 
 # Single series with custom rotation timing
 cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.toml \
+    --config configs/kalshi.yaml \
     --early-start-secs 30 \
-    --credentials credentials/kalshi.toml
+    --credentials credentials/kalshi.yaml
 ```
 
 ### Terminal display

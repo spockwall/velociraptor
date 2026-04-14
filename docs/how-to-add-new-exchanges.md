@@ -365,24 +365,25 @@ pub use exchanges::myexchange::MyExchangeSubMsgBuilder;
 
 ## 8. Add server CLI + config support
 
-**`orderbook/src/bin/orderbook_server.rs`**
+**`libs/src/configs/`**
 
-Add a TOML config struct:
+Add a config struct for the new exchange (or add fields to the top-level `Config` in `libs/src/configs/mod.rs`):
+
 ```rust
-#[derive(Debug, Deserialize, Default)]
-struct MyExchangeConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    symbols: Vec<String>,
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct MyExchangeConfig {
+    pub enabled: bool,
+    pub symbols: Vec<String>,
 }
 ```
 
-Add to `TomlConfig`:
+Add to the top-level `Config`:
 ```rust
-#[serde(default)]
-myexchange: MyExchangeConfig,
+pub myexchange: MyExchangeConfig,
 ```
+
+**`orderbook/src/bin/orderbook_server.rs`**
 
 Add a CLI flag in `Args`:
 ```rust
@@ -394,7 +395,7 @@ myexchange: Option<Vec<String>>,
 Add to `run()`:
 ```rust
 let myexchange_symbols: Vec<String> = cli_myexchange.unwrap_or_else(|| {
-    if toml_cfg.myexchange.enabled { toml_cfg.myexchange.symbols.clone() } else { vec![] }
+    if cfg.myexchange.enabled { cfg.myexchange.symbols.clone() } else { vec![] }
 });
 
 // ...include in empty-check...
@@ -408,12 +409,12 @@ if !myexchange_symbols.is_empty() {
 }
 ```
 
-**`configs/server.toml`**
+**`configs/server.yaml`**
 
-```toml
-[myexchange]
-enabled = false
-symbols = ["BTC", "ETH"]
+```yaml
+myexchange:
+  enabled: false
+  symbols: ["BTC", "ETH"]
 ```
 
 ---
@@ -431,8 +432,9 @@ symbols = ["BTC", "ETH"]
 - [ ] `exchanges/mod.rs` — factory arm
 - [ ] `orderbook/system.rs` — `build_connection_config()` arm
 - [ ] `lib.rs` — public re-exports
-- [ ] `bin/orderbook_server.rs` — CLI flag + TOML struct + exchange block
-- [ ] `configs/server.toml` — config section
+- [ ] `libs/src/configs/` — config struct for new exchange
+- [ ] `bin/orderbook_server.rs` — CLI flag + exchange block
+- [ ] `configs/server.yaml` — config section
 - [ ] `cargo build` — fix any exhaustive match errors
 
 ---
