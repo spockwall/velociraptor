@@ -10,14 +10,13 @@
 //!                                            {HH:MM}-{HH:MM}-down.mpack
 //! ```
 //!
-//! Each file contains length-prefixed MessagePack records (same format as the
-//! main orderbook server). Files are optionally zstd-compressed after each
-//! window closes, producing `*.mpack.zst`.
+//! Each file contains length-prefixed MessagePack records. Files are optionally
+//! zstd-compressed after each window closes, producing `*.mpack.zst`.
 //!
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin polymarket_recorder -- --config configs/polymarket.toml
+//! cargo run --bin polymarket_recorder -- --config configs/polymarket.yaml
 //! cargo run --bin polymarket_recorder -- \
 //!     --slug btc-updown-5m --interval-secs 300 \
 //!     --base-path ./data --depth 10
@@ -26,10 +25,10 @@
 use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
+use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
-use orderbook::configs::{PolymarketArgs, PolymarketMarket, PolymarketTomlConfig};
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
@@ -45,7 +44,38 @@ use tracing::{error, info, warn};
 /// How many seconds before a window ends to start the next window's connection.
 const EARLY_START_SECS: u64 = 10;
 
-// Config and CLI args are defined in orderbook::configs::{PolymarketTomlConfig, PolymarketArgs}.
+// ── CLI args ──────────────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+struct Args {
+    /// Path to YAML config file (e.g. configs/polymarket.yaml)
+    #[clap(long)]
+    config: Option<String>,
+
+    /// Market slug (repeatable, e.g. --slug btc-updown-5m)
+    #[clap(long = "slug", action = clap::ArgAction::Append)]
+    slugs: Vec<String>,
+
+    /// Window size in seconds paired with each --slug (repeatable)
+    #[clap(long = "interval-secs", action = clap::ArgAction::Append)]
+    intervals: Vec<u64>,
+
+    /// Orderbook depth levels
+    #[clap(long)]
+    depth: Option<usize>,
+
+    /// Terminal render interval in milliseconds
+    #[clap(long)]
+    render_interval: Option<u64>,
+
+    /// Root directory for recorded files
+    #[clap(long)]
+    base_path: Option<String>,
+
+    /// zstd compression level (0 = disabled)
+    #[clap(long)]
+    zstd_level: Option<u8>,
+}
 
 // ── Shared snap store (for UI) ────────────────────────────────────────────────
 
@@ -87,7 +117,7 @@ impl PolymarketWriter {
         let win_end: DateTime<Utc> = Utc.timestamp_opt(win_end_secs as i64, 0).single()?;
 
         let date_str = win_start.format("%Y-%m-%d").to_string();
-        let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"),);
+        let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"));
         let side_str = if is_up { "up" } else { "down" };
         let filename = format!("{interval_str}-{side_str}.mpack");
 
@@ -178,7 +208,7 @@ struct MarketTask {
 
 impl MarketTask {
     async fn spawn(
-        market: &PolymarketMarket,
+        market: &PolymarketMarketConfig,
         base_slug: String,
         full_slug: String,
         win_start_secs: u64,
@@ -188,10 +218,10 @@ impl MarketTask {
         depth: usize,
         zstd_level: Option<i32>,
     ) -> Option<Self> {
-        let single = vec![PolymarketMarket {
+        let single = vec![PolymarketMarketConfig {
+            enabled: market.enabled,
             slug: full_slug.clone(),
             interval_secs: 0,
-            ..market.clone()
         }];
 
         let labeled = tokio::task::spawn_blocking({
@@ -211,7 +241,7 @@ impl MarketTask {
         // windows for the same market land under the same slug folder.
         let mut writers: HashMap<String, PolymarketWriter> = HashMap::new();
         for (_, _, _, is_up) in &labeled {
-            let side_key = side_key(&full_slug, *is_up);
+            let sk = side_key(&full_slug, *is_up);
             if let Some(w) = PolymarketWriter::open(
                 &base_path,
                 &base_slug,
@@ -220,7 +250,7 @@ impl MarketTask {
                 *is_up,
                 zstd_level,
             ) {
-                writers.insert(side_key, w);
+                writers.insert(sk, w);
             }
         }
         let writers = Arc::new(Mutex::new(writers));
@@ -368,7 +398,7 @@ fn side_key(full_slug: &str, is_up: bool) -> String {
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 fn spawn_scheduler(
-    market: PolymarketMarket,
+    market: PolymarketMarketConfig,
     store: SnapStore,
     ui: Arc<Mutex<PolymarketUi>>,
     base_path: PathBuf,
@@ -517,33 +547,67 @@ fn spawn_render_loop(
 async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
 
-    let args = PolymarketArgs::parse();
+    let args = Args::parse();
+
     let mut cfg = args
         .config
         .as_deref()
-        .map(PolymarketTomlConfig::load)
+        .map(PolymarketFileConfig::load)
         .unwrap_or_default();
-    cfg.apply_args(args);
 
-    if cfg.polymarket.is_empty() {
+    // CLI overrides.
+    if let Some(r) = args.render_interval {
+        cfg.server.render_interval = r;
+    }
+    if let Some(d) = args.depth {
+        cfg.storage.depth = d;
+    }
+    if let Some(p) = args.base_path {
+        cfg.storage.base_path = p;
+    }
+    if let Some(z) = args.zstd_level {
+        cfg.storage.zstd_level = z;
+    }
+
+    // CLI --slug flags override config markets entirely.
+    if !args.slugs.is_empty() {
+        cfg.polymarket.markets = args
+            .slugs
+            .into_iter()
+            .enumerate()
+            .map(|(i, slug)| PolymarketMarketConfig {
+                enabled: true,
+                slug,
+                interval_secs: *args.intervals.get(i).unwrap_or(&0),
+            })
+            .collect();
+    }
+
+    let markets: Vec<PolymarketMarketConfig> = cfg
+        .polymarket
+        .markets
+        .into_iter()
+        .filter(|m| m.enabled)
+        .collect();
+
+    if markets.is_empty() {
         eprintln!(
             "No markets configured. Pass --config <file> or --slug <slug> --interval-secs <n>."
         );
         std::process::exit(1);
     }
 
-    let depth = cfg.server.depth;
+    let depth = cfg.storage.depth;
     let render_interval = Duration::from_millis(cfg.server.render_interval);
-    let base_path = PathBuf::from(&cfg.server.base_path);
-    let zstd_level = match cfg.server.zstd_level {
+    let base_path = PathBuf::from(&cfg.storage.base_path);
+    let zstd_level = match cfg.storage.zstd_level {
         0 => None,
         l => Some(l as i32),
     };
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
     let ui = Arc::new(Mutex::new(PolymarketUi::new(depth)));
 
-    let _schedulers: Vec<_> = cfg
-        .polymarket
+    let _schedulers: Vec<_> = markets
         .into_iter()
         .map(|market| {
             spawn_scheduler(
