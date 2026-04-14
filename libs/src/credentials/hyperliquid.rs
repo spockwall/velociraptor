@@ -4,8 +4,6 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct HyperliquidCredentials {
-    /// Hyperliquid uses wallet-based auth, but we still surface an api_key
-    /// field so the same "unset" check works for every exchange.
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
@@ -25,22 +23,20 @@ impl HyperliquidCredentials {
 mod tests {
     use super::*;
 
-    fn example_toml() -> std::path::PathBuf {
+    fn example_yaml() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("credentials/example.toml")
+            .join("credentials/example.yaml")
     }
 
     #[test]
-    fn section_absent_defaults_to_empty() {
-        // example.toml has no [hyperliquid] section.
-        let raw = std::fs::read_to_string(example_toml()).unwrap();
-        let mut root: toml::Table = toml::from_str(&raw).unwrap();
-        let creds: HyperliquidCredentials = root
-            .remove("hyperliquid")
-            .map(|v| v.try_into().unwrap())
-            .unwrap_or_default();
-        assert!(creds.api_key.is_empty());
+    fn deserializes_from_example() {
+        let raw = std::fs::read_to_string(example_yaml()).unwrap();
+        let mut root: serde_yaml::Mapping = serde_yaml::from_str(&raw).unwrap();
+        let creds: HyperliquidCredentials =
+            serde_yaml::from_value(root.remove("hyperliquid").unwrap()).unwrap();
+        assert!(!creds.api_key.is_empty());
+        assert!(!creds.secret.is_empty());
     }
 }
