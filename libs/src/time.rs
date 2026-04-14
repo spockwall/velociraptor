@@ -17,3 +17,7 @@ pub fn now_secs() -> u64 {
         .expect("system clock")
         .as_secs()
 }
+
+pub fn now_ns() -> i64 {
+    Utc::now().timestamp_nanos_opt().unwrap_or(0)
+}
