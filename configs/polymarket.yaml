@@ -1,0 +1,37 @@
+# Polymarket orderbook configuration
+# Run with: cargo run --example polymarket_orderbook -- --config configs/polymarket.toml
+
+server:
+  render_interval: 300
+
+storage:
+  enabled: false
+  base_path: "./data/polymarket"
+  depth: 8 # depth levels to store (bids + asks)
+  flush_interval: 500 # ms between BufWriter flushes
+  rotation: "none" # "daily" | "none"
+  zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
+
+# Rolling up/down markets — token IDs resolved automatically from the Gamma API.
+# interval_secs: window size in seconds (900 = 15min, 300 = 5min, 0 = static market)
+
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300
+
+    - enabled: true
+      slug: "will-btc-reach-100k-in-2025"
+      interval_secs: 0

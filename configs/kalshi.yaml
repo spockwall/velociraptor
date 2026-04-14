@@ -1,0 +1,29 @@
+# Kalshi orderbook visualizer configuration
+# Run with: cargo run --example kalshi_orderbook -- --config configs/kalshi.toml
+
+server:
+  render_interval: 300
+
+storage:
+  enabled: true
+  base_path: "./data"
+  depth: 8 # depth levels to store (bids + asks)
+  flush_interval: 500 # ms between BufWriter flushes
+  rotation: "none" # "daily" | "none"
+  zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
+
+# Rolling 15-minute markets.
+# series — Kalshi series ticker (the part before the date stamp).
+# label  — short name shown in the panel title (optional, defaults to series).
+#
+# Ticker format: {series}-{YYMONDDHHММ (Eastern time)}-15
+# Example:       KXBTC15M-26APR130415-15  (closes 08:15 UTC = 04:15 EDT)
+
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
