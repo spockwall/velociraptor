@@ -69,23 +69,29 @@ For example at 08:07 UTC on 2026-04-13:
 
 ## Authentication
 
-**Kalshi's WebSocket requires an API key even for the public orderbook feed.**
+**Kalshi's WebSocket requires signed HTTP headers on the upgrade request.**
 
-The key is passed as a query parameter on the WebSocket URL:
+Three headers are added to every `GET /trade-api/ws/v2` upgrade:
 
-```
-wss://api.elections.kalshi.com/trade-api/ws/v2?apiKey=<key>
-```
+| Header | Value |
+|--------|-------|
+| `KALSHI-ACCESS-KEY` | API key UUID from Kalshi dashboard |
+| `KALSHI-ACCESS-TIMESTAMP` | Current Unix time in milliseconds (string) |
+| `KALSHI-ACCESS-SIGNATURE` | base64( RSA-PSS-SHA256( `timestamp + "GET" + "/trade-api/ws/v2"` ) ) |
 
-`KalshiConnection::new` appends this automatically when `ConnectionConfig::api_key` is set. Without a key the server returns `HTTP 401` and no data flows.
+`KalshiConnection` signs the request automatically using `key_id` and `private_key` from the credentials file. Without valid headers the server returns `HTTP 401` and no data flows.
 
-**Get a key:** https://kalshi.com/account/profile/api-keys
+**Get a key pair:** https://kalshi.com/account/profile/api-keys — generate an RSA key pair, register the public key on Kalshi, store the private key locally.
 
-Store it in `credentials/kalshi.yaml` (excluded from git via `.gitignore`):
+Store credentials in `credentials/kalshi.yaml` (excluded from git via `.gitignore`):
 
 ```yaml
 kalshi:
-  api_key: "<your-api-key>"
+  key_id: "<your-key-id-uuid>"
+  private_key: |
+    -----BEGIN PRIVATE KEY-----
+    <your-rsa-private-key-pem>
+    -----END PRIVATE KEY-----
 ```
 
 Copy `credentials/example.yaml` as a starting point. The file is separate from the display config (`configs/kalshi.yaml`) so secrets never end up in version control.
@@ -213,10 +219,16 @@ Logged as an error. Most commonly caused by a missing or invalid API key.
 
 ```yaml
 kalshi:
-  api_key: "<your-api-key>"
+  key_id: "<your-key-id-uuid>"       # API key UUID from kalshi.com/account/profile/api-keys
+  private_key: |
+    -----BEGIN PRIVATE KEY-----
+    <your-rsa-private-key-pem>
+    -----END PRIVATE KEY-----
 ```
 
 Pass to the visualiser with `--credentials credentials/kalshi.yaml` (default path). This file is separate from the display config so secrets stay out of version control.
+
+Kalshi uses **RSA-PSS / SHA-256** authentication. Each WebSocket upgrade request is signed with the private key; the `key_id` UUID identifies which public key Kalshi should verify against. Both fields are mandatory.
 
 ### Visualiser config (`configs/kalshi.yaml`)
 
