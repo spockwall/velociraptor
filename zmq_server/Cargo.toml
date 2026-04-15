@@ -1,0 +1,24 @@
+[package]
+name = "zmq_server"
+version = {workspace = true}
+edition = {workspace = true}
+authors = {workspace = true}
+license = {workspace = true}
+
+[dependencies]
+libs = { path = "../libs" }
+orderbook = { path = "../orderbook" }
+recorder = { path = "../recorder" }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+tracing = { workspace = true }
+tmq = "0.5"
+chrono = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4.5.27", features = ["derive", "env"] }
+tracing-subscriber = { workspace = true }
+dotenvy = "0.15.7"
+dashmap = { workspace = true }
