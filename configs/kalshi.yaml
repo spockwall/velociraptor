@@ -1,5 +1,5 @@
 # Kalshi orderbook visualizer configuration
-# Run with: cargo run --example kalshi_orderbook -- --config configs/kalshi.toml
+# Run with: cargo run --example kalshi_orderbook -- --config configs/kalshi.yaml
 
 server:
   render_interval: 300

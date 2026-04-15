@@ -46,6 +46,7 @@ impl ConnectionFactory {
                 self.config.clone(),
                 self.message_tx.clone(),
                 system_control,
+                true,
             )),
         }
     }
