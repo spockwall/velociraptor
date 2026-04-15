@@ -30,6 +30,7 @@ impl HyperliquidConnection {
             ExchangeName::Hyperliquid,
             vec![], // no pre-subscription messages
             rest,   // remaining coin subscriptions
+            None,
         );
 
         Self { inner }
