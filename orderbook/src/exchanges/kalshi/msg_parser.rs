@@ -90,7 +90,7 @@ impl KalshiMessageParser {
         let ts_str = timestamp.to_rfc3339();
         let mut orders = Vec::new();
 
-        // YES side → bids
+        // YES side → bids. Price and size are decimal strings in dollars.
         for level in &snap.yes_dollars_fp {
             let (price, qty) = match parse_level(level, "bid", &symbol) {
                 Some(v) => v,
@@ -105,7 +105,7 @@ impl KalshiMessageParser {
             });
         }
 
-        // NO side → asks
+        // NO side → asks.
         for level in &snap.no_dollars_fp {
             let (price, qty) = match parse_level(level, "ask", &symbol) {
                 Some(v) => v,
@@ -223,6 +223,8 @@ mod tests {
         KalshiMessageParser::new()
     }
 
+    /// Real wire payload captured from Kalshi's WebSocket for an
+    /// `orderbook_snapshot` frame — fields are string decimals, not cents.
     #[test]
     fn parses_snapshot() {
         let raw = r#"{
@@ -232,8 +234,14 @@ mod tests {
             "msg": {
                 "market_ticker": "FED-23DEC-T3.00",
                 "market_id": "9b0f6b43-5b68-4f9f-9f02-9a2d1b8ac1a1",
-                "yes_dollars_fp": [["0.0800","300.00"],["0.2200","333.00"]],
-                "no_dollars_fp":  [["0.5400","20.00"], ["0.5600","146.00"]]
+                "yes_dollars_fp": [
+                    ["0.0800", "300.00"],
+                    ["0.2200", "333.00"]
+                ],
+                "no_dollars_fp": [
+                    ["0.5400", "20.00"],
+                    ["0.5600", "146.00"]
+                ]
             }
         }"#;
 
@@ -250,14 +258,17 @@ mod tests {
             assert_eq!(bids.len(), 2);
             assert_eq!(asks.len(), 2);
 
-            // Check a specific bid level
             assert!((bids[0].price - 0.08).abs() < 1e-9);
             assert!((bids[0].qty - 300.0).abs() < 1e-9);
+            assert!((asks[0].price - 0.54).abs() < 1e-9);
+            assert!((asks[0].qty - 20.0).abs() < 1e-9);
         } else {
             panic!("Expected OrderbookUpdate");
         }
     }
 
+    /// Real wire payload for an `orderbook_delta` frame: string decimal
+    /// `price_dollars` + signed string `delta_fp`.
     #[test]
     fn parses_positive_delta() {
         let raw = r#"{
@@ -287,19 +298,20 @@ mod tests {
         }
     }
 
+    /// Exact payload the user pasted: negative delta on the YES side.
     #[test]
     fn parses_negative_delta_as_delete() {
         let raw = r#"{
             "type": "orderbook_delta",
             "sid": 2,
-            "seq": 4,
+            "seq": 3,
             "msg": {
                 "market_ticker": "FED-23DEC-T3.00",
                 "market_id": "9b0f6b43-5b68-4f9f-9f02-9a2d1b8ac1a1",
                 "price_dollars": "0.960",
                 "delta_fp": "-54.00",
-                "side": "no",
-                "ts": "2022-11-22T20:44:02Z"
+                "side": "yes",
+                "ts": "2022-11-22T20:44:01Z"
             }
         }"#;
 
@@ -308,8 +320,10 @@ mod tests {
 
         if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
             assert_eq!(u.action, OrderbookAction::Delete);
-            assert_eq!(u.orders[0].side, "Ask");
+            // side: "yes" → bid
+            assert_eq!(u.orders[0].side, "Bid");
             assert_eq!(u.orders[0].qty, 0.0);
+            assert!((u.orders[0].price - 0.960).abs() < 1e-9);
         } else {
             panic!("Expected OrderbookUpdate");
         }
@@ -341,9 +355,12 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
         assert_eq!(v["cmd"], "subscribe");
         let channels = v["params"]["channels"].as_array().unwrap();
-        assert_eq!(channels.len(), 2);
-        assert_eq!(channels[0], "orderbook_delta:FED-23DEC-T3.00");
-        assert_eq!(channels[1], "orderbook_delta:PRES-2028");
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0], "orderbook_delta");
+        let tickers = v["params"]["market_tickers"].as_array().unwrap();
+        assert_eq!(tickers.len(), 2);
+        assert_eq!(tickers[0], "FED-23DEC-T3.00");
+        assert_eq!(tickers[1], "PRES-2028");
     }
 }
 
@@ -371,3 +388,4 @@ fn parse_level(level: &[String; 2], side: &str, symbol: &str) -> Option<(f64, f6
     };
     Some((price, qty))
 }
+
