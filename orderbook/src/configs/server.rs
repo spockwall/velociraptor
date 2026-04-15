@@ -1,23 +1,4 @@
 use clap::Parser;
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-pub struct ServerConfig {
-    pub pub_endpoint: String,
-    pub router_endpoint: String,
-    pub depth: usize,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            pub_endpoint: "tcp://*:5555".into(),
-            router_endpoint: "tcp://*:5556".into(),
-            depth: 20,
-        }
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(
