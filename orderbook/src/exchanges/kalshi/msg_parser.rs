@@ -120,11 +120,10 @@ impl KalshiMessageParser {
             });
         }
 
-        if orders.is_empty() {
-            warn!("Kalshi: snapshot for {symbol} had no parseable levels");
-            return Ok(vec![]);
-        }
-
+        // An empty snapshot is normal: Kalshi sends one immediately on
+        // subscribe, and freshly-opened 15-min windows may have zero levels
+        // until the first quote arrives. Emit it anyway so the engine
+        // registers the book.
         Ok(vec![OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,
@@ -388,4 +387,3 @@ fn parse_level(level: &[String; 2], side: &str, symbol: &str) -> Option<(f64, f6
     };
     Some((price, qty))
 }
-
