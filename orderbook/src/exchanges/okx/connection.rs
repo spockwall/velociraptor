@@ -27,6 +27,7 @@ impl OkxConnection {
             ExchangeName::Okx,
             vec![], // No pre-subscription messages
             vec![], // No post-subscription messages
+            None,
         );
 
         Self { inner }

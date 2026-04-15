@@ -26,6 +26,7 @@ impl PolymarketConnection {
             ExchangeName::Polymarket,
             vec![],
             vec![],
+            None,
         );
 
         Self { inner }
