@@ -67,22 +67,15 @@ impl ConnectionConfig {
         self
     }
 
-    /// Set only the API key (for exchanges that authenticate via a single token,
-    /// e.g. Kalshi appends it as `?apiKey=<key>` to the WS URL).
-    pub fn set_api_key(mut self, api_key: String) -> Self {
-        self.api_key = Some(api_key);
-        self
-    }
-
     pub fn set_api_credentials(
         mut self,
         api_key: String,
         api_secret: String,
-        passphrase: String,
+        passphrase: Option<String>,
     ) -> Self {
         self.api_key = Some(api_key);
         self.api_secret = Some(api_secret);
-        self.passphrase = Some(passphrase);
+        self.passphrase = passphrase;
         self
     }
 

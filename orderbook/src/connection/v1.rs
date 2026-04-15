@@ -1,11 +1,15 @@
 use super::{PAUSE_DELAY, SystemControl};
-use crate::connection::{BasicConnectionMsgTrait, ConnectionConfig, MessageParserTrait};
+use crate::connection::{
+    AuthHeader, BasicConnectionMsgTrait, ConnectionConfig, MessageParserTrait,
+};
 use crate::heartbeat::{HealthStatus, HearthbeatConfig, HearthbeatManager, HearthbeatProtocol};
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use libs::protocol::ExchangeName;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{Duration, interval, sleep};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use url::Url;
@@ -20,9 +24,14 @@ pub struct ConnectionBase<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> 
     exchange_name: ExchangeName,
     pre_subscription_messages: Vec<String>,
     post_subscription_messages: Vec<String>,
+    /// Optional HTTP header injector for exchanges with signed upgrade requests.
+    /// `None` → plain `connect_async`; `Some(b)` → b.build_headers() is called
+    /// on the tungstenite `Request` before every connect attempt.
+    auth_header: Option<AuthHeader>,
 }
 
 impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> {
+    /// Create a `ConnectionBase` without custom HTTP headers (most exchanges).
     pub fn new(
         config: ConnectionConfig,
         message_tx: UnboundedSender<M>,
@@ -31,6 +40,7 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
         exchange_name: ExchangeName,
         pre_subscription_messages: Vec<String>,
         post_subscription_messages: Vec<String>,
+        auth_header: Option<AuthHeader>,
     ) -> Self {
         let hearthbeat_config = HearthbeatConfig {
             ping_interval: Duration::from_secs(config.ping_interval),
@@ -56,6 +66,7 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
             exchange_name,
             pre_subscription_messages,
             post_subscription_messages,
+            auth_header,
         }
     }
 
@@ -89,8 +100,28 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
         let url = Url::parse(&self.config.ws_url)?;
         info!("Connecting to {}: {url}", self.exchange_name);
 
+        // The WS upgrade is an HTTP GET with Upgrade/Connection headers; any
+        // exchange-specific auth headers (e.g. Kalshi's signed triple) ride on
+        // that same request.
+        let mut request = url.as_str().into_client_request()?;
+        if let Some(ref headers) = self.auth_header {
+            let h = request.headers_mut();
+            for (name, value) in headers {
+                let v = HeaderValue::from_str(value)
+                    .map_err(|e| anyhow!("invalid header value for {name}: {e}"))?;
+                h.insert(
+                    tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(
+                        name.as_bytes(),
+                    )
+                    .map_err(|e| anyhow!("invalid header name {name}: {e}"))?,
+                    v,
+                );
+            }
+            debug!("{} auth headers injected", self.exchange_name);
+        }
+
         let (ws_stream, _) =
-            tokio::time::timeout(Duration::from_secs(10), connect_async(url.as_str())).await??;
+            tokio::time::timeout(Duration::from_secs(10), connect_async(request)).await??;
         let (mut ws_sink, mut ws_stream) = ws_stream.split();
         let protocol = HearthbeatProtocol::new(&self.message_parser, &self.exchange_name);
 
@@ -160,21 +191,23 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
                     }
                 }
 
-                                // Health check
+                // Health check
                 _ = health_check_interval.tick() => {
                     match self.hearthbeat_manager.check_health() {
                         Ok(health) => {
                             // Log connection stats periodically for stable connections
                             if self.hearthbeat_manager.is_stable_connection() {
                                 let stats = self.hearthbeat_manager.get_stats();
-                                if stats.total_pings % 20 == 0 { // Every 20 pings for stable connections
+                                // Every 20 pings for stable connections
+                                if stats.total_pings % 20 == 0 {
                                     info!("{} connection stats: {}", self.exchange_name, stats.format_summary());
                                 }
                             }
 
                             // Simple health-based reconnection logic
                             if let crate::heartbeat::state::HealthStatus::Critical { missed_count, .. } = health {
-                                if missed_count >= 3 { // Simple threshold
+                                // Simple threshold
+                                if missed_count >= 3 {
                                     return Err(anyhow!("Heartbeat failure - connection unhealthy"));
                                 }
                             }
