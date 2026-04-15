@@ -1,10 +1,8 @@
 /// Builder for Kalshi orderbook subscription messages.
 ///
-/// Kalshi accepts multiple tickers in a single subscribe command by listing
-/// multiple channels. Each ticker generates one channel string of the form
-/// `"orderbook_delta:<ticker>"`.
-///
-/// The resulting JSON is sent as a single text frame on connect.
+/// Per Kalshi docs: one subscribe command names the channel once and lists
+/// all market tickers in `market_tickers`. The resulting JSON is sent as a
+/// single text frame on connect.
 ///
 /// # Example
 /// ```
@@ -12,7 +10,7 @@
 /// let msg = KalshiSubMsgBuilder::new()
 ///     .with_ticker("FED-23DEC-T3.00")
 ///     .build();
-/// // {"id":1,"cmd":"subscribe","params":{"channels":["orderbook_delta:FED-23DEC-T3.00"]}}
+/// // {"id":1,"cmd":"subscribe","params":{"channels":["orderbook_delta"],"market_tickers":["FED-23DEC-T3.00"]}}
 /// ```
 pub struct KalshiSubMsgBuilder {
     tickers: Vec<String>,
@@ -43,16 +41,13 @@ impl KalshiSubMsgBuilder {
     }
 
     pub fn build(self) -> String {
-        let channels: Vec<String> = self
-            .tickers
-            .iter()
-            .map(|t| format!("orderbook_delta:{t}"))
-            .collect();
-
         serde_json::json!({
             "id": self.cmd_id,
             "cmd": "subscribe",
-            "params": { "channels": channels }
+            "params": {
+                "channels": ["orderbook_delta"],
+                "market_tickers": self.tickers,
+            }
         })
         .to_string()
     }
