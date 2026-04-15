@@ -26,6 +26,7 @@ impl BinanceConnection {
             ExchangeName::Binance,
             vec![], // No pre-subscription messages
             vec![], // No post-subscription messages
+            None,
         );
 
         Self { inner }
