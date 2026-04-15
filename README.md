@@ -39,12 +39,16 @@ polymarket:
       interval_secs: 300
 ```
 
-For the Kalshi orderbook server, set your API key in `credentials/kalshi.yaml` — Kalshi requires authentication even for market data:
+For Kalshi, set your RSA key pair in `credentials/kalshi.yaml` — Kalshi requires signed authentication even for market data:
 
 ```yaml
 # credentials/kalshi.yaml
 kalshi:
-  api_key: "<your-api-key>"
+  key_id: "<your-key-id-uuid>"
+  private_key: |
+    -----BEGIN PRIVATE KEY-----
+    <your-rsa-private-key-pem>
+    -----END PRIVATE KEY-----
 ```
 
 ```bash
@@ -169,7 +173,11 @@ Credentials file (`credentials/kalshi.yaml`, **not committed to git**):
 
 ```yaml
 kalshi:
-  api_key: "<your-api-key>"
+  key_id: "<your-key-id-uuid>"
+  private_key: |
+    -----BEGIN PRIVATE KEY-----
+    <your-rsa-private-key-pem>
+    -----END PRIVATE KEY-----
 ```
 
 Config file (`configs/kalshi.yaml`):
