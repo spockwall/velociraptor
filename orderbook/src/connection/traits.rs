@@ -2,6 +2,11 @@ use crate::connection::ConnectionConfig;
 use anyhow::Result;
 use async_trait::async_trait;
 
+/// HTTP headers to inject on the WebSocket upgrade request.
+/// A list of (name, value) pairs. Rebuilt per connect attempt so auth
+/// timestamps/signatures stay current.
+pub type AuthHeader = Vec<(String, String)>;
+
 /// Trait for exchange-specific connections
 #[async_trait]
 pub trait ConnectionTrait: Send + Sync {

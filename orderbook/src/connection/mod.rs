@@ -5,7 +5,7 @@ pub mod v1;
 
 pub use configs::ConnectionConfig;
 pub use constants::PAUSE_DELAY;
-pub use traits::{BasicConnectionMsgTrait, ConnectionTrait, MessageParserTrait};
+pub use traits::{AuthHeader, BasicConnectionMsgTrait, ConnectionTrait, MessageParserTrait};
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
