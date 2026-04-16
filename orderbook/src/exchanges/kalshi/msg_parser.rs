@@ -90,9 +90,12 @@ impl KalshiMessageParser {
         let ts_str = timestamp.to_rfc3339();
         let mut orders = Vec::new();
 
-        // YES side → bids. Price and size are decimal strings in dollars.
+        // Kalshi sends two bid-ladders per market: one for YES buyers, one for
+        // NO buyers. A traditional two-sided book is built from the YES
+        // contract's perspective: NO bids at price `p` are equivalent to YES
+        // asks at `1 - p` (binary-market complement).
         for level in &snap.yes_dollars_fp {
-            let (price, qty) = match parse_level(level, "bid", &symbol) {
+            let (price, qty) = match parse_level(level, "yes", &symbol) {
                 Some(v) => v,
                 None => continue,
             };
@@ -105,14 +108,13 @@ impl KalshiMessageParser {
             });
         }
 
-        // NO side → asks.
         for level in &snap.no_dollars_fp {
-            let (price, qty) = match parse_level(level, "ask", &symbol) {
+            let (price, qty) = match parse_level(level, "no", &symbol) {
                 Some(v) => v,
                 None => continue,
             };
             orders.push(GenericOrder {
-                price,
+                price: 1.0 - price,
                 qty,
                 side: "Ask".to_string(),
                 symbol: symbol.clone(),
@@ -172,9 +174,11 @@ impl KalshiMessageParser {
             .unwrap_or_else(Utc::now);
         let ts_str = timestamp.to_rfc3339();
 
-        let side = match delta.side.to_lowercase().as_str() {
-            "yes" => "Bid",
-            "no" => "Ask",
+        // View the book from the YES contract's perspective: YES-side deltas
+        // are bids at `price`; NO-side deltas are asks at `1 - price`.
+        let (side, book_price) = match delta.side.to_lowercase().as_str() {
+            "yes" => ("Bid", price),
+            "no" => ("Ask", 1.0 - price),
             other => {
                 error!("Kalshi: unrecognised delta side '{other}'");
                 return Ok(vec![]);
@@ -195,7 +199,7 @@ impl KalshiMessageParser {
         };
 
         let order = GenericOrder {
-            price,
+            price: book_price,
             qty,
             side: side.to_string(),
             symbol: symbol.clone(),
@@ -257,9 +261,10 @@ mod tests {
             assert_eq!(bids.len(), 2);
             assert_eq!(asks.len(), 2);
 
+            // YES bid at 0.08 stays as-is; NO bid at 0.54 becomes YES ask at 1 - 0.54 = 0.46.
             assert!((bids[0].price - 0.08).abs() < 1e-9);
             assert!((bids[0].qty - 300.0).abs() < 1e-9);
-            assert!((asks[0].price - 0.54).abs() < 1e-9);
+            assert!((asks[0].price - 0.46).abs() < 1e-9);
             assert!((asks[0].qty - 20.0).abs() < 1e-9);
         } else {
             panic!("Expected OrderbookUpdate");
@@ -323,6 +328,35 @@ mod tests {
             assert_eq!(u.orders[0].side, "Bid");
             assert_eq!(u.orders[0].qty, 0.0);
             assert!((u.orders[0].price - 0.960).abs() < 1e-9);
+        } else {
+            panic!("Expected OrderbookUpdate");
+        }
+    }
+
+    /// NO-side delta: price in the book is the complement (`1 - p`) and
+    /// the side is Ask.
+    #[test]
+    fn parses_no_side_delta_as_complemented_ask() {
+        let raw = r#"{
+            "type": "orderbook_delta",
+            "sid": 2,
+            "seq": 4,
+            "msg": {
+                "market_ticker": "FED-23DEC-T3.00",
+                "market_id": "9b0f6b43-5b68-4f9f-9f02-9a2d1b8ac1a1",
+                "price_dollars": "0.56",
+                "delta_fp": "10.00",
+                "side": "no",
+                "ts": "2022-11-22T20:44:01Z"
+            }
+        }"#;
+
+        let msgs = parser().parse_message(raw).unwrap();
+        if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
+            assert_eq!(u.action, OrderbookAction::Update);
+            assert_eq!(u.orders[0].side, "Ask");
+            assert!((u.orders[0].price - 0.44).abs() < 1e-9); // 1 - 0.56
+            assert!((u.orders[0].qty - 10.0).abs() < 1e-9);
         } else {
             panic!("Expected OrderbookUpdate");
         }
