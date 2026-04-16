@@ -33,10 +33,9 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
-tmq = "0.5"
-toml = "0.8"
-libs      = { path = "../libs" }
-recorder  = { path = "../recorder" }
+rsa = { workspace = true }
+libs       = { path = "../libs" }
+recorder   = { path = "../recorder" }
 reqwest   = { workspace = true }
 rmp-serde = { workspace = true }
 zstd      = { workspace = true }

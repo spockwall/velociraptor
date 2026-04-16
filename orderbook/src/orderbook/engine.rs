@@ -79,6 +79,9 @@ impl OrderbookEngine {
                     Ok(OrderbookEvent::RawUpdate(_)) => {
                         let _ = tx.send(RecorderEvent::RawUpdate);
                     }
+                    Ok(OrderbookEvent::User(_)) => {
+                        todo!()
+                    }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
