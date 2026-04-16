@@ -28,7 +28,9 @@ use libs::credentials::KalshiCredentials;
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ConnectionConfig, SystemControl};
-use orderbook::exchanges::kalshi::{KalshiSubMsgBuilder, build_ticker, current_window_close};
+use orderbook::exchanges::kalshi::{
+    KalshiSubMsgBuilder, build_event_ticker, current_window_close, resolve_market_ticker,
+};
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -112,19 +114,27 @@ impl MarketTask {
                 let Ok(mut map) = store.lock() else { return };
                 let entry = map.entry(s).or_default();
                 entry.display_label = t;
+
+                // YES panel: book as-is.
                 entry.yes = MarketSide {
                     sequence: seq,
-                    bids,
-                    asks: vec![],
+                    bids: bids.clone(),
+                    asks: asks.clone(),
                     spread,
                     mid,
                 };
+                // NO panel: binary-market mirror — no_bid(p) = 1 - yes_ask(p),
+                // no_ask(p) = 1 - yes_bid(p). Reverse the level order too so the
+                // best NO bid (highest price) is on top after the complement.
+                let no_bids: Vec<(f64, f64)> = asks.iter().map(|(p, q)| (1.0 - p, *q)).collect();
+                let no_asks: Vec<(f64, f64)> = bids.iter().map(|(p, q)| (1.0 - p, *q)).collect();
+                let no_mid = mid.map(|m| 1.0 - m);
                 entry.no = MarketSide {
                     sequence: seq,
-                    bids: vec![],
-                    asks,
+                    bids: no_bids,
+                    asks: no_asks,
                     spread,
-                    mid,
+                    mid: no_mid,
                 };
             }
         });
@@ -178,12 +188,20 @@ fn spawn_scheduler(
         let mut current: Option<MarketTask> = None;
 
         loop {
-            let now = Utc::now();
-            let win_close = current_window_close(now);
-            let ticker = build_ticker(&s, win_close); // ticker encodes close time
+            let win_close = current_window_close(Utc::now());
+            let event = build_event_ticker(&s, win_close);
             let win_close_unix = win_close.timestamp() as u64;
 
-            // Connect to this window if we aren't already.
+            // Kalshi assigns the strike suffix per window — resolve via REST.
+            let ticker = match resolve_market_ticker(&event).await {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("[scheduler] resolve {event} failed: {e}; retrying in 5s");
+                    tokio::time::sleep(StdDuration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
             let needs_connect = current.as_ref().map(|t| t.ticker != ticker).unwrap_or(true);
             if needs_connect {
                 if let Some(old) = current.take() {
@@ -197,31 +215,37 @@ fn spawn_scheduler(
                     creds.clone(),
                 )
                 .await;
+
                 // Set display label immediately (before the first snapshot arrives).
                 if let Ok(mut map) = store.lock() {
                     map.entry(s.clone()).or_default().display_label = ticker.clone();
                 }
             }
 
-            // Sleep until `early_start_secs` before this window closes.
-            let now_unix = Utc::now().timestamp() as u64;
+            // Sample `now` fresh so the WS handshake inside `spawn()` is accounted for.
             let secs_until_early = win_close_unix
-                .saturating_sub(now_unix)
+                .saturating_sub(Utc::now().timestamp() as u64)
                 .saturating_sub(early_start_secs);
             if secs_until_early > 0 {
                 tokio::time::sleep(StdDuration::from_secs(secs_until_early)).await;
             }
 
-            // Pre-start the next window's connection in parallel.
+            // Pre-start next window (resolve its market ticker too).
             let next_close = win_close + Duration::minutes(15);
-            let next_ticker = build_ticker(&s, next_close);
-            let next_task =
-                MarketTask::spawn(s.clone(), next_ticker, store.clone(), depth, creds.clone())
-                    .await;
+            let next_event = build_event_ticker(&s, next_close);
+            let next_task = match resolve_market_ticker(&next_event).await {
+                Ok(next_ticker) => {
+                    MarketTask::spawn(s.clone(), next_ticker, store.clone(), depth, creds.clone())
+                        .await
+                }
+                Err(e) => {
+                    eprintln!("[scheduler] resolve next {next_event} failed: {e}");
+                    None
+                }
+            };
 
-            // Wait for the current window to fully expire.
-            let now_unix = Utc::now().timestamp() as u64;
-            let remaining = win_close_unix.saturating_sub(now_unix);
+            // waiting for current window fully closed
+            let remaining = win_close_unix.saturating_sub(Utc::now().timestamp() as u64);
             if remaining > 0 {
                 tokio::time::sleep(StdDuration::from_secs(remaining)).await;
             }
@@ -305,7 +329,11 @@ async fn main() -> Result<()> {
         win_close.format("%Y-%m-%d %H:%M")
     );
     for m in &markets {
-        eprintln!("  {} → {}", m.series, build_ticker(&m.series, win_close));
+        eprintln!(
+            "  {} → {} (strike resolved at window start)",
+            m.series,
+            build_event_ticker(&m.series, win_close)
+        );
     }
 
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
@@ -345,12 +373,12 @@ mod tests {
         let utc_start = Utc.with_ymd_and_hms(2026, 4, 15, 14, 45, 0).unwrap();
         assert_eq!(format_ticker_dt(utc_start), "26APR151045");
         assert_eq!(
-            build_ticker("KXBTC15M", utc_start),
-            "KXBTC15M-26APR151045-15"
+            build_event_ticker("KXBTC15M", utc_start),
+            "KXBTC15M-26APR151045"
         );
         assert_eq!(
-            build_ticker("KXETH15M", utc_start),
-            "KXETH15M-26APR151045-15"
+            build_event_ticker("KXETH15M", utc_start),
+            "KXETH15M-26APR151045"
         );
     }
 
