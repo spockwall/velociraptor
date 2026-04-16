@@ -32,8 +32,10 @@ pub mod ansi;
 pub mod layout;
 pub mod panel;
 pub mod polymarket;
+pub mod status;
 
 pub use polymarket::PolymarketUi;
+pub use status::{ConnState, NextState, SeriesStatus, StatusBar};
 
 use ansi::{up, ERASE_LINE, RESTORE, SAVE};
 use layout::{fit_depth, max_columns, term_size};
