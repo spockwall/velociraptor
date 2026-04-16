@@ -53,6 +53,8 @@ pub struct PolymarketUi {
     pairs: HashMap<String, MarketPair>,
     initialized: bool,
     block_height: usize,
+    /// Extra lines rendered above the orderbook panels (e.g. a status bar).
+    status_lines: Vec<String>,
 }
 
 impl PolymarketUi {
@@ -63,7 +65,15 @@ impl PolymarketUi {
             pairs: HashMap::new(),
             initialized: false,
             block_height: 0,
+            status_lines: Vec::new(),
         }
+    }
+
+    /// Set the lines rendered above the orderbook panels. Typically populated
+    /// with [`super::status::StatusBar::render`] output each tick. Pass an
+    /// empty vec to remove.
+    pub fn set_status_lines(&mut self, lines: Vec<String>) {
+        self.status_lines = lines;
     }
 
     /// Update one side of a market and redraw.
@@ -72,6 +82,24 @@ impl PolymarketUi {
     /// `is_up`        — true = Up/Yes side, false = Down/No side
     #[allow(clippy::too_many_arguments)]
     pub fn update(
+        &mut self,
+        slug: &str,
+        display_slug: &str,
+        is_up: bool,
+        sequence: u64,
+        bids: Vec<(f64, f64)>,
+        asks: Vec<(f64, f64)>,
+        spread: Option<f64>,
+        mid: Option<f64>,
+    ) {
+        self.set_side(slug, display_slug, is_up, sequence, bids, asks, spread, mid);
+        self.draw();
+    }
+
+    /// Update one side without redrawing. Batch multiple `set_side` calls and
+    /// finish with a single `render()` to avoid redrawing N× per tick.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_side(
         &mut self,
         slug: &str,
         display_slug: &str,
@@ -91,7 +119,10 @@ impl PolymarketUi {
         side.asks = asks;
         side.spread = spread;
         side.mid = mid;
+    }
 
+    /// Redraw the terminal from current state. Pair with `set_side` for batching.
+    pub fn render(&mut self) {
         self.draw();
     }
 
@@ -140,19 +171,20 @@ impl PolymarketUi {
 
     fn draw(&mut self) {
         let n = self.order.len();
-        if n == 0 {
+        if n == 0 && self.status_lines.is_empty() {
             return;
         }
 
         let (term_cols, term_rows) = term_size();
 
         // Panel width: each panel is split half/half. Min viable width = 60.
-        let panel_width = panel_width(term_cols, n);
-        let cols = n.min(max_columns(term_cols, panel_width, 2));
-        let grid_rows = n.div_ceil(cols);
-        let depth = self.depth.min(fit_depth(term_rows, grid_rows, 5, 2).max(1));
+        let panel_width = panel_width(term_cols, n.max(1));
+        let cols = n.max(1).min(max_columns(term_cols, panel_width, 2));
+        let grid_rows = if n == 0 { 0 } else { n.div_ceil(cols) };
+        let depth = self.depth.min(fit_depth(term_rows, grid_rows.max(1), 5, 2).max(1));
         let panel_height = depth * 2 + 5; // title + header + asks + spread + bids + bottom
-        let total_height = grid_rows * panel_height;
+        let status_height = self.status_lines.len();
+        let total_height = status_height + grid_rows * panel_height;
 
         let mut out = Vec::with_capacity(16384);
 
@@ -181,6 +213,13 @@ impl PolymarketUi {
             out.extend_from_slice(RESTORE.as_bytes());
             out.extend_from_slice(SAVE.as_bytes());
             self.block_height = total_height;
+        }
+
+        // ── Status lines (above the panels) ───────────────────────────────────
+        for line in &self.status_lines {
+            out.extend_from_slice(ERASE_LINE.as_bytes());
+            out.extend_from_slice(line.as_bytes());
+            out.extend_from_slice(b"\n");
         }
 
         let all_panels: Vec<Vec<String>> = self

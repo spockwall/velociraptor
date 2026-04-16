@@ -71,6 +71,7 @@ struct MarketTask {
     ticker: String,
     system_control: SystemControl,
     handle: tokio::task::JoinHandle<()>,
+    event_handle: tokio::task::JoinHandle<()>,
 }
 
 impl MarketTask {
@@ -99,7 +100,7 @@ impl MarketTask {
         let series_ev = series.clone();
         let ticker_ev = ticker.clone();
 
-        let _event_handle = system.on_update(move |event| {
+        let event_handle = system.on_update(move |event| {
             let store = store_w.clone();
             let s = series_ev.clone();
             let t = ticker_ev.clone();
@@ -113,6 +114,12 @@ impl MarketTask {
                 let seq = snap.sequence;
                 let Ok(mut map) = store.lock() else { return };
                 let entry = map.entry(s).or_default();
+                // Don't stomp newer-window data. Another MarketTask may have
+                // already pre-written the next ticker's label during rotation;
+                // in that case this callback is stale and should bail.
+                if !entry.display_label.is_empty() && entry.display_label != t {
+                    return;
+                }
                 entry.display_label = t;
 
                 // YES panel: book as-is.
@@ -149,12 +156,14 @@ impl MarketTask {
             ticker,
             system_control: control,
             handle,
+            event_handle,
         })
     }
 
     fn stop(self) {
         self.system_control.shutdown();
         self.handle.abort();
+        self.event_handle.abort();
     }
 }
 
@@ -215,11 +224,17 @@ fn spawn_scheduler(
                     creds.clone(),
                 )
                 .await;
+            }
 
-                // Set display label immediately (before the first snapshot arrives).
-                if let Ok(mut map) = store.lock() {
-                    map.entry(s.clone()).or_default().display_label = ticker.clone();
-                }
+            // Update display_label every iteration. After a rotation swap
+            // (`current = next_task`), `needs_connect` is false but the
+            // display_label still points at the *previous* window's ticker.
+            // The on_update staleness guard compares incoming ticker against
+            // display_label and drops mismatches — so without this update, the
+            // newly-promoted task's snapshots are silently discarded and the
+            // UI freezes on the old window.
+            if let Ok(mut map) = store.lock() {
+                map.entry(s.clone()).or_default().display_label = ticker.clone();
             }
 
             // Sample `now` fresh so the WS handshake inside `spawn()` is accounted for.
@@ -250,9 +265,16 @@ fn spawn_scheduler(
                 tokio::time::sleep(StdDuration::from_secs(remaining)).await;
             }
 
-            // Swap: drop current, promote next.
+            // Swap: drop current, promote next. Also flip display_label to the
+            // promoted ticker immediately so the staleness guard in on_update
+            // stops dropping its snapshots.
             if let Some(old) = current.take() {
                 old.stop();
+            }
+            if let Some(nt) = &next_task {
+                if let Ok(mut map) = store.lock() {
+                    map.entry(s.clone()).or_default().display_label = nt.ticker.clone();
+                }
             }
             current = next_task;
         }
@@ -277,7 +299,7 @@ fn spawn_render_loop(
             let Ok(mut ui) = ui.lock() else { continue };
             for (series, snap) in snaps {
                 let lbl = &snap.display_label;
-                ui.update(
+                ui.set_side(
                     &series,
                     lbl,
                     true,
@@ -287,7 +309,7 @@ fn spawn_render_loop(
                     snap.yes.spread,
                     snap.yes.mid,
                 );
-                ui.update(
+                ui.set_side(
                     &series,
                     lbl,
                     false,
@@ -298,6 +320,7 @@ fn spawn_render_loop(
                     snap.no.mid,
                 );
             }
+            ui.render();
         }
     })
 }
