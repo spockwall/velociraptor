@@ -1,17 +1,10 @@
 use crate::connection::{ConnectionConfig, SystemControl};
 use crate::exchanges::ConnectionFactory;
-use crate::exchanges::binance::BinanceSubMsgBuilder;
-use crate::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
-use crate::exchanges::kalshi::KalshiSubMsgBuilder;
-use crate::exchanges::okx::OkxSubMsgBuilder;
-use crate::exchanges::polymarket::PolymarketSubMsgBuilder;
 use crate::orderbook::{Orderbook, OrderbookEngine, OrderbookEngineHandle};
-use crate::publisher::types::ChannelRequest;
 use crate::types::errors::{ApiError, ApiResult};
 use crate::types::events::OrderbookEvent;
 use crate::types::orderbook::OrderbookMessage;
 use futures_util::StreamExt;
-use libs::protocol::ExchangeName;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,10 +26,6 @@ pub struct OrderbookSystem {
     engine: Option<OrderbookEngine>,
     handles: SystemHandles,
     system_control: SystemControl,
-    /// Sender passed to `ZmqPublisher` so it can request new channels at runtime.
-    channel_tx: mpsc::UnboundedSender<ChannelRequest>,
-    /// Receiver for dynamic channel requests forwarded from ZmqPublisher.
-    channel_rx: Option<mpsc::UnboundedReceiver<ChannelRequest>>,
 }
 
 struct SystemHandles {
@@ -48,7 +37,6 @@ struct SystemHandles {
 impl OrderbookSystem {
     pub fn new(config: OrderbookSystemConfig, system_control: SystemControl) -> ApiResult<Self> {
         let engine = OrderbookEngine::new(config.event_broadcast_capacity);
-        let (channel_tx, channel_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
             config,
@@ -59,15 +47,7 @@ impl OrderbookSystem {
                 extra_handles: Vec::new(),
             },
             system_control,
-            channel_tx,
-            channel_rx: Some(channel_rx),
         })
-    }
-
-    /// Returns a sender that, when passed to `ZmqPublisher::new`, allows clients
-    /// to request new orderbook channels at runtime via `add_channel` messages.
-    pub fn channel_request_sender(&self) -> mpsc::UnboundedSender<ChannelRequest> {
-        self.channel_tx.clone()
     }
 
     /// Register an async callback invoked for every `OrderbookEvent`.
@@ -95,18 +75,6 @@ impl OrderbookSystem {
                 }
             }
         })
-    }
-
-    /// Attach a `ZmqPublisher` to this system before calling `run()`.
-    /// The publisher subscribes to the engine internally and its task is managed
-    /// alongside the system's other handles.
-    pub fn attach_zmq_publisher(&mut self, publisher: crate::publisher::ZmqPublisher) {
-        let handle = publisher.start(
-            self.engine
-                .as_ref()
-                .expect("attach_zmq_publisher called after run()"),
-        );
-        self.handles.extra_handles.push(handle);
     }
 
     /// Return a reference to the underlying engine.
@@ -174,7 +142,6 @@ impl OrderbookSystem {
 
         let exchange_handles = std::mem::take(&mut self.handles.exchange_handles);
         let system_control = self.system_control.clone();
-        let mut channel_rx = self.channel_rx.take().expect("run() called twice");
 
         tokio::select! {
             _ = async {
@@ -198,26 +165,6 @@ impl OrderbookSystem {
             } => {
                 info!("All exchange connections completed");
             }
-            _ = async {
-                while let Some(req) = channel_rx.recv().await {
-                    info!(
-                        "Dynamic channel request: {}:{} (from client {:?})",
-                        req.exchange, req.symbol, req.client_id
-                    );
-                    match build_connection_config(&req) {
-                        Ok(cfg) => {
-                            match spawn_connection(cfg, tx.clone(), system_control.clone()).await {
-                                Ok(_handle) => {
-                                    info!("Started new channel {}:{}", req.exchange, req.symbol);
-                                    // Handle not tracked — it runs independently until shutdown.
-                                }
-                                Err(e) => error!("Failed to start channel {}:{}: {e}", req.exchange, req.symbol),
-                            }
-                        }
-                        Err(e) => error!("Cannot build config for {}:{}: {e}", req.exchange, req.symbol),
-                    }
-                }
-            } => {}
         }
 
         self.system_control.shutdown();
@@ -270,34 +217,6 @@ async fn spawn_connection(
     });
 
     Ok(handle)
-}
-
-/// Build a `ConnectionConfig` for a dynamic channel request.
-///
-/// Constructs an exchange-specific subscription message for a single symbol.
-fn build_connection_config(req: &ChannelRequest) -> Result<ConnectionConfig, String> {
-    let exchange = ExchangeName::from_str(&req.exchange)
-        .ok_or_else(|| format!("unknown exchange '{}'", req.exchange))?;
-
-    let sub_msg = match exchange {
-        ExchangeName::Binance => BinanceSubMsgBuilder::new()
-            .with_orderbook_channel(&[req.symbol.to_lowercase().as_str()])
-            .build(),
-        ExchangeName::Okx => OkxSubMsgBuilder::new()
-            .with_orderbook_channel(&req.symbol, "SPOT")
-            .build(),
-        ExchangeName::Polymarket => PolymarketSubMsgBuilder::new()
-            .with_asset(&req.symbol)
-            .build(),
-        ExchangeName::Hyperliquid => HyperliquidSubMsgBuilder::new()
-            .with_coin(&req.symbol)
-            .build(),
-        ExchangeName::Kalshi => KalshiSubMsgBuilder::new()
-            .with_ticker(&req.symbol)
-            .build(),
-    };
-
-    Ok(ConnectionConfig::new(exchange).set_subscription_message(sub_msg))
 }
 
 impl Default for OrderbookSystemConfig {
