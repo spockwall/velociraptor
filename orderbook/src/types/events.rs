@@ -1,7 +1,7 @@
 use crate::orderbook::Orderbook;
 use crate::types::orderbook::OrderbookUpdate;
 use chrono::{DateTime, Utc};
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, UserEvent};
 use std::sync::Arc;
 
 /// A (price, quantity) pair.
@@ -26,4 +26,6 @@ pub enum OrderbookEvent {
     RawUpdate(OrderbookUpdate),
     /// Full book state emitted AFTER the update is applied.
     Snapshot(OrderbookSnapshot),
+    /// User/private channel event (fills, order updates, positions, balances).
+    User(UserEvent),
 }

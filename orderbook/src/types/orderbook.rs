@@ -1,6 +1,6 @@
 use crate::connection::{BaseConnectionMessage, BasicConnectionMsgTrait};
 use chrono::{DateTime, Utc};
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, UserEvent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,6 +52,7 @@ pub struct OrderbookUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OrderbookMessage {
     OrderbookUpdate(OrderbookUpdate),
+    UserEvent(UserEvent),
     Base(BaseConnectionMessage),
 }
 
