@@ -22,9 +22,11 @@ This project targets Kalshi's **rolling 15-minute price direction markets** for 
 | `KXBTC15M` | Bitcoin price up or down in the next 15 minutes |
 | `KXETH15M` | Ethereum price up or down in the next 15 minutes |
 
-Each market asks: *is the asset price at window close higher than at window open?*
-- YES = price went up → bid side of the orderbook
-- NO  = price went down → ask side of the orderbook
+Each market asks: *is the asset price at window close higher than a target price set at window open?* Every market has two contracts that trade on the same book:
+- **YES** — buyers think the final price will be **at or above** the target
+- **NO**  — buyers think the final price will be **below** the target
+
+Both contracts are bid-only on the wire: Kalshi's book carries a list of YES bids and a separate list of NO bids (there are no ask ladders in the raw feed). This project converts the two into a single two-sided book from the YES contract's perspective — see [Orderbook mechanism](#orderbook-mechanism) below.
 
 Windows are 15 minutes long and aligned to UTC clock boundaries (:00, :15, :30, :45). A new market opens every 15 minutes with a fresh ticker.
 
@@ -32,38 +34,52 @@ Windows are 15 minutes long and aligned to UTC clock boundaries (:00, :15, :30, 
 
 ## Ticker Format
 
-Kalshi market tickers embed the window close time in **US Eastern Time** (EDT/EST, DST-aware):
+A Kalshi market ticker has three dash-separated segments:
 
 ```
-KXBTC15M - 26APR130415 - 15
+KXBTC15M - 26APR160700 - 00
 │          │              │
-│          │              └─ suffix (always 15 for 15-min series)
+│          │              └─ strike suffix (per-window, assigned by Kalshi)
 │          └─ close time in ET: YYMONDDHHММ
-│             26 Apr 13, 04:15 AM EDT = 08:15 UTC
+│             26 Apr 16, 07:00 AM EDT = 11:00 UTC
 └─ series ticker
 ```
 
-**Eastern Time is always used**, not UTC. The scheduler converts UTC → Eastern via `chrono-tz` to handle EDT/EST transitions correctly:
+The first two segments form the **event ticker** (`KXBTC15M-26APR160700`). The full **market ticker** (with the strike suffix) is what the WebSocket `subscribe` and REST order endpoints expect.
 
-| UTC close time | Eastern time | Ticker segment |
-|----------------|--------------|----------------|
-| 2026-04-13 08:15 UTC | 04:15 EDT (UTC-4) | `26APR130415` |
-| 2026-01-13 10:30 UTC | 05:30 EST (UTC-5) | `26JAN130530` |
+### Why the strike suffix isn't a constant
 
-The full ticker for the current window is computed deterministically from the wall clock — no API lookup is needed for rotation.
+Each 15-minute window has a single binary market whose target ("strike") price is set from the prevailing index price at window open and rounds to the nearest Kalshi-defined grid. The suffix encodes that strike for bookkeeping — it can be `00`, `15`, `30`, or whatever the round price maps to for this window. It is **not** derivable from the clock, so the client must resolve it from the REST API before subscribing.
 
-### Computing the current ticker
+### Two-step ticker construction
 
-```
-now = Utc::now()
-win_close = round_up_to_next_15min_boundary(now)   # UTC
-ticker = "{series}-{format_et(win_close)}-15"
-```
+1. **Event ticker** — computed deterministically from the wall clock. The clock-embedded segment is the window **close** time converted to US Eastern Time (EDT/EST, DST-aware via `chrono-tz`):
 
-For example at 08:07 UTC on 2026-04-13:
-- `win_close` = 08:15 UTC
-- Eastern = 04:15 EDT
-- `ticker` = `KXBTC15M-26APR130415-15`
+   ```
+   now = Utc::now()
+   win_close = round_up_to_next_15min_boundary(now)   # UTC
+   event = "{series}-{format_et(win_close)}"          # e.g. KXBTC15M-26APR160700
+   ```
+
+   | UTC close time       | Eastern time       | Segment          |
+   |----------------------|--------------------|------------------|
+   | 2026-04-16 11:00 UTC | 07:00 EDT (UTC-4)  | `26APR160700`    |
+   | 2026-01-13 10:30 UTC | 05:30 EST (UTC-5)  | `26JAN130530`    |
+
+2. **Market ticker** — resolved via the public REST endpoint before each subscription:
+
+   ```
+   GET https://api.elections.kalshi.com/trade-api/v2/markets?event_ticker={event}
+   ```
+
+   Response carries `markets[0].ticker` (e.g. `KXBTC15M-26APR160700-00`) — that's the string passed to `subscribe`.
+
+### Code entry points
+
+- `orderbook::exchanges::kalshi::build_event_ticker(series, close_utc) -> String`
+- `orderbook::exchanges::kalshi::resolve_market_ticker(event_ticker) -> Result<String, _>`
+
+The scheduler in `orderbook/examples/kalshi_orderbook.rs` calls these once per window rotation (current window on first tick, next window `EARLY_START_SECS` before close).
 
 ---
 
@@ -107,20 +123,23 @@ Copy `credentials/example.yaml` as a starting point. The file is separate from t
 
 ### Subscription message
 
+Channels and market tickers are passed as **separate** arrays. Do **not** concatenate them (`"orderbook_delta:TICKER"` is silently ignored by the server — you get a `subscribed` ack but no data).
+
 ```json
 {
   "id": 1,
   "cmd": "subscribe",
   "params": {
-    "channels": [
-      "orderbook_delta:KXBTC15M-26APR130415-15",
-      "orderbook_delta:KXETH15M-26APR130415-15"
+    "channels": ["orderbook_delta"],
+    "market_tickers": [
+      "KXBTC15M-26APR160700-00",
+      "KXETH15M-26APR160700-00"
     ]
   }
 }
 ```
 
-Multiple tickers can be included in one subscribe command. Each channel is prefixed with `orderbook_delta:`.
+Multiple tickers can be included in one subscribe command.
 
 ### Subscription ack
 
@@ -157,12 +176,12 @@ Sent immediately after subscribing. Replaces the entire orderbook.
 | Field | Description |
 |-------|-------------|
 | `market_ticker` | Used as the orderbook `symbol` |
-| `yes_dollars_fp` | `[[price, size]]` — YES side, treated as **bids** |
-| `no_dollars_fp`  | `[[price, size]]` — NO side, treated as **asks** |
+| `yes_dollars_fp` | `[[price, size]]` — YES bids (people willing to pay `price` for YES) |
+| `no_dollars_fp`  | `[[price, size]]` — NO bids (people willing to pay `price` for NO) |
 
-Prices are in US dollars (0.00–1.00 for prediction markets). Sizes are dollar amounts.
+Prices are string decimals in USD (0.00–1.00). Sizes are string-decimal dollar amounts.
 
-**Action:** `OrderbookAction::Snapshot`
+**Action:** `OrderbookAction::Snapshot`. The parser converts the two bid-ladders into a single two-sided YES-perspective book — see [Orderbook mechanism](#orderbook-mechanism).
 
 ### `orderbook_delta` — incremental update
 
@@ -186,14 +205,14 @@ Sent on each order placement or cancellation. One message = one price level chan
 
 | Field | Description |
 |-------|-------------|
-| `price_dollars` | Price level being updated |
+| `price_dollars` | Price level being updated (string decimal in USD) |
 | `delta_fp` | **Signed change** in dollar size. Positive = level grew. Negative = level shrank or was removed. |
-| `side` | `"yes"` → bid side; `"no"` → ask side |
-| `ts` | RFC3339 timestamp (optional) |
+| `side` | `"yes"` → YES-bid change; `"no"` → NO-bid change (translated to a YES-ask at `1 - price`) |
+| `ts` | RFC3339 timestamp (optional; falls back to `Utc::now()`) |
 
 `delta_fp` is a **delta**, not an absolute size. The orderbook engine accumulates these on top of the snapshot.
 
-**Action:** `delta_fp > 0` → `OrderbookAction::Update`; `delta_fp ≤ 0` → `OrderbookAction::Delete` (size set to 0, engine removes the level)
+**Action:** `delta_fp > 0` → `OrderbookAction::Update`; `delta_fp ≤ 0` → `OrderbookAction::Delete` (size set to 0, engine removes the level).
 
 ### Server ping
 
@@ -210,6 +229,56 @@ The parser detects this via `is_ping()` and the connection infrastructure sends 
 ```
 
 Logged as an error. Most commonly caused by a missing or invalid API key.
+
+---
+
+## Orderbook mechanism
+
+Kalshi's binary contracts (YES + NO) sum to $1.00 at resolution. That identity lets us reconstruct a traditional two-sided orderbook from the exchange's two bid-only ladders.
+
+### The complement relation
+
+For any binary market priced in dollars:
+
+```
+price(YES) + price(NO) = 1.00   (at resolution — and by no-arbitrage, in the book)
+```
+
+So a NO-bid at `$0.56` is economically identical to someone offering to **sell** YES at `$1.00 - $0.56 = $0.44`. That's a YES-ask at `$0.44`.
+
+### From wire to book
+
+The parser (`orderbook/src/exchanges/kalshi/msg_parser.rs`) emits every update into a single symbol (the market ticker) from the YES contract's perspective:
+
+| Wire field / side | Book side | Book price |
+|-------------------|-----------|-----------|
+| `yes_dollars_fp[price, qty]`      | Bid | `price` (as-is)   |
+| `no_dollars_fp[price, qty]`       | Ask | `1 - price`       |
+| `orderbook_delta` with `side:yes` | Bid | `price_dollars`   |
+| `orderbook_delta` with `side:no`  | Ask | `1 - price_dollars` |
+
+Sizes are copied through unchanged (dollars, not contracts). Negative deltas become `OrderbookAction::Delete` with `qty=0` so the engine can drop or shrink the level regardless of its prior accumulated size.
+
+After parsing, the `Orderbook` contains both sides in YES-price space:
+- **Best bid** = highest YES buyer = `max(yes_dollars_fp.price)`
+- **Best ask** = lowest (complemented) NO buyer = `1 - max(no_dollars_fp.price)`
+- **Spread** = best_ask − best_bid (tight spread ⇒ the two contracts together cost close to $1.00)
+- **Mid** = (best_bid + best_ask) / 2 — the market-implied probability of YES
+
+### Displaying YES and NO panels
+
+The visualiser in `orderbook/examples/kalshi_orderbook.rs` keeps a single two-sided book internally but renders two panels side-by-side:
+
+- **UP (YES panel)** — book as-is (YES bids on the left, YES asks on the right).
+- **DOWN (NO panel)** — the mirror view:
+  ```
+  no_bid(p) = 1 - yes_ask(p)
+  no_ask(p) = 1 - yes_bid(p)
+  no_mid    = 1 - yes_mid
+  ```
+  Both panels always show the same spread, because the spread is a property of the combined market, not of either contract in isolation.
+
+This matches the dual orderbook UI on Kalshi's website.
 
 ---
 
@@ -303,13 +372,13 @@ Each series occupies one panel, split left (YES/bids) and right (NO/asks):
 
 Each series runs an independent scheduler loop:
 
-1. Compute the current window's close time from the wall clock
-2. Derive the ticker deterministically (no API call needed)
-3. Connect to the current window's orderbook
-4. Sleep until `early_start_secs` before close
-5. Pre-start the next window's connection (both run briefly in parallel)
-6. When the current window expires, drop the old connection
-7. Repeat
+1. Compute the current window's close time from the wall clock.
+2. Build the event ticker (`build_event_ticker`) and resolve the full market ticker via REST (`resolve_market_ticker`). On REST failure, wait 5s and retry.
+3. If it differs from the currently-connected ticker, spawn a new `MarketTask` and drop the old one.
+4. Sleep until `early_start_secs` before close (sampling `Utc::now()` fresh, so WebSocket handshake time during step 3 is accounted for).
+5. Resolve the next window's market ticker and pre-start its connection (both run briefly in parallel).
+6. Sleep the remainder until the current window expires (again with a fresh `Utc::now()` sample).
+7. Drop the old connection; promote the pre-started task to current; repeat.
 
 The panel label updates automatically to show the current ticker. The panel itself stays stable across rotations (same series key throughout).
 
@@ -321,9 +390,10 @@ Added to `docs/exchange-wire-formats.md` for completeness. Key differences from 
 
 | Property | Kalshi | Polymarket | Hyperliquid |
 |----------|--------|------------|-------------|
-| Auth | API key (query param) | None | None |
-| Ping | Server-initiated | None | Client-initiated |
-| Book update | Signed delta | Absolute size | Full snapshot |
-| Sides | YES=bid, NO=ask | token-per-side | bids/asks |
-| Price unit | USD (0.0–1.0) | USDC (0.0–1.0) | USD |
-| Ticker | Rolling (date-stamped) | Token ID (256-bit) | Coin name |
+| Auth | RSA-PSS signed upgrade headers | None | None |
+| Ping | Server-initiated (client pongs) | None | Client-initiated |
+| Book update | Signed dollar delta | Absolute size | Full snapshot |
+| Sides on wire | Two bid-ladders (YES, NO) | token-per-side | bids/asks |
+| Book as rendered | Combined into YES-perspective two-sided book (NO complemented) | per-token | bids/asks |
+| Price unit | USD (0.00–1.00) | USDC (0.00–1.00) | USD |
+| Ticker | Event from clock + strike suffix resolved via REST | Token ID (256-bit) | Coin name |
