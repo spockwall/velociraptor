@@ -2,6 +2,23 @@
 edition = "2024"
 name = "orderbook"
 version = "0.1.0"
+autoexamples = false
+
+[[example]]
+name = "orderbook"
+path = "examples/orderbook.rs"
+
+[[example]]
+name = "polymarket_orderbook"
+path = "examples/polymarket_orderbook.rs"
+
+[[example]]
+name = "polymarket_user_channel"
+path = "examples/polymarket_user_channel.rs"
+
+[[example]]
+name = "kalshi_orderbook"
+path = "examples/kalshi_orderbook.rs"
 
 [dependencies]
 anyhow = { workspace = true }
