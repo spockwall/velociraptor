@@ -29,7 +29,7 @@ use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ConnectionConfig, SystemControl};
 use orderbook::exchanges::kalshi::{
-    KalshiSubMsgBuilder, build_event_ticker, current_window_close, resolve_market_ticker,
+    KalshiSubMsgBuilder, build_event_ticker, build_market_ticker, current_window_close,
 };
 use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
 use std::collections::HashMap;
@@ -198,18 +198,10 @@ fn spawn_scheduler(
 
         loop {
             let win_close = current_window_close(Utc::now());
-            let event = build_event_ticker(&s, win_close);
             let win_close_unix = win_close.timestamp() as u64;
 
-            // Kalshi assigns the strike suffix per window — resolve via REST.
-            let ticker = match resolve_market_ticker(&event).await {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("[scheduler] resolve {event} failed: {e}; retrying in 5s");
-                    tokio::time::sleep(StdDuration::from_secs(5)).await;
-                    continue;
-                }
-            };
+            // Strike suffix = close-time minute in ET; compute locally.
+            let ticker = build_market_ticker(&s, win_close);
 
             let needs_connect = current.as_ref().map(|t| t.ticker != ticker).unwrap_or(true);
             if needs_connect {
@@ -245,19 +237,12 @@ fn spawn_scheduler(
                 tokio::time::sleep(StdDuration::from_secs(secs_until_early)).await;
             }
 
-            // Pre-start next window (resolve its market ticker too).
+            // Pre-start next window — strike suffix computed locally.
             let next_close = win_close + Duration::minutes(15);
-            let next_event = build_event_ticker(&s, next_close);
-            let next_task = match resolve_market_ticker(&next_event).await {
-                Ok(next_ticker) => {
-                    MarketTask::spawn(s.clone(), next_ticker, store.clone(), depth, creds.clone())
-                        .await
-                }
-                Err(e) => {
-                    eprintln!("[scheduler] resolve next {next_event} failed: {e}");
-                    None
-                }
-            };
+            let next_ticker = build_market_ticker(&s, next_close);
+            let next_task =
+                MarketTask::spawn(s.clone(), next_ticker, store.clone(), depth, creds.clone())
+                    .await;
 
             // waiting for current window fully closed
             let remaining = win_close_unix.saturating_sub(Utc::now().timestamp() as u64);
