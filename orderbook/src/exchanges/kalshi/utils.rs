@@ -1,4 +1,3 @@
-use crate::types::endpoints::kalshi;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 use chrono_tz::US::Eastern;
 
@@ -45,34 +44,23 @@ pub fn current_window_close(now: DateTime<Utc>) -> DateTime<Utc> {
 ///
 /// Kalshi's 15-min crypto markets have three dash-separated segments:
 /// `<series>-<YYMONDDHHMM in ET>-<strike>`. The first two segments form the
-/// *event* ticker; the third strike suffix is assigned per-window by Kalshi
-/// (it's not a fixed constant — the "target price" rounds differently each
-/// window) and must be resolved via REST. See [`resolve_market_ticker`].
+/// *event* ticker.
 pub fn build_event_ticker(series: &str, close_utc: DateTime<Utc>) -> String {
     format!("{}-{}", series, format_ticker_dt(close_utc))
 }
 
-/// Resolve the full market ticker (e.g. `"KXBTC15M-26APR160700-00"`) from an
-/// event ticker by querying Kalshi's public `/markets` endpoint.
+/// Build the full Kalshi market ticker: `"KXBTC15M-26APR160700-00"`.
 ///
-/// Kalshi assigns the strike suffix dynamically per window based on the
-/// prevailing index price, so it can't be computed locally. This hits the
-/// unauthenticated REST endpoint and returns the first (and only) market for
-/// the event.
-pub async fn resolve_market_ticker(
-    event_ticker: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!(
-        "{}/markets?event_ticker={}",
-        kalshi::REST_BASE,
-        event_ticker
-    );
-    let resp: serde_json::Value = reqwest::get(&url).await?.error_for_status()?.json().await?;
-    resp.get("markets")
-        .and_then(|m| m.as_array())
-        .and_then(|a| a.first())
-        .and_then(|m| m.get("ticker"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("no market for event {event_ticker}").into())
+/// The strike suffix equals the minute component of the close time in ET —
+/// i.e. for a window closing at `05:00 ET` → `-00`, `05:15 ET` → `-15`,
+/// `05:30 ET` → `-30`, `05:45 ET` → `-45`. This is deterministic and can be
+/// computed locally without hitting Kalshi's REST API.
+pub fn build_market_ticker(series: &str, close_utc: DateTime<Utc>) -> String {
+    let minute = close_utc.with_timezone(&Eastern).minute();
+    format!(
+        "{}-{}-{:02}",
+        series,
+        format_ticker_dt(close_utc),
+        minute
+    )
 }
