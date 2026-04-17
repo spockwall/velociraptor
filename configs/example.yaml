@@ -54,3 +54,8 @@ polymarket:
     - enabled: true
       slug: "eth-updown-5m"
       interval_secs: 300
+
+    # example of static market
+    - enabled: false 
+      slug: "will-btc-reach-100k-in-2025"
+      interval_secs: 0
