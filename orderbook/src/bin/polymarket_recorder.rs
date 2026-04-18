@@ -26,7 +26,7 @@ use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
-use libs::protocol::{ExchangeName, StreamSnapshot};
+use libs::protocol::{ExchangeName, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
 use orderbook::connection::{ClientConfig, SystemControl};
@@ -297,7 +297,7 @@ impl MarketTask {
         let lm = label_map.clone();
         let base = base_slug.clone();
         let writers_for_hook = writers.clone();
-        engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
+        engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
             let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
                 Some(v) => v,
                 None => return,

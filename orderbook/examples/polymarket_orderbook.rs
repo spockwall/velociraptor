@@ -16,7 +16,7 @@
 
 use anyhow::Result;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
-use libs::protocol::{ExchangeName, StreamSnapshot};
+use libs::protocol::{ExchangeName, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
@@ -102,7 +102,7 @@ async fn spawn_market_task(
     let store_writer = store.clone();
     let lm = label_map.clone();
     let base = base_slug.clone();
-    engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
+    engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
         let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
             Some(v) => v,
             None => return,

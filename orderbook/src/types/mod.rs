@@ -1,17 +1,17 @@
 pub mod endpoints;
 pub mod errors;
-pub mod events;
 pub mod orderbook;
+pub mod stream;
 
-pub use events::{PriceLevelTuple, StreamEvent, StreamEventSource};
-pub use libs::protocol::StreamSnapshot;
+pub use libs::protocol::OrderbookSnapshot;
+pub use stream::{PriceLevelTuple, StreamEvent, StreamEventSource};
 
 use crate::orderbook::Orderbook;
 
-/// Build a `StreamSnapshot` from an `Orderbook` at the given depth.
-pub fn snapshot_from_book(book: &Orderbook, depth: usize) -> StreamSnapshot {
+/// Build a `OrderbookSnapshot` from an `Orderbook` at the given depth.
+pub fn snapshot_from(book: &Orderbook, depth: usize) -> OrderbookSnapshot {
     let (bids, asks) = book.depth(depth);
-    StreamSnapshot {
+    OrderbookSnapshot {
         exchange: book.exchange.clone(),
         symbol: book.symbol.clone(),
         sequence: book.sequence,

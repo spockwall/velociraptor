@@ -1,16 +1,17 @@
 use crate::types::orderbook::OrderbookUpdate;
-use libs::protocol::{StreamSnapshot, UserEvent};
+use libs::protocol::OrderbookSnapshot;
+use libs::protocol::UserEvent;
 use tokio::sync::broadcast;
 
-pub use libs::protocol::PriceLevelTuple;
-
+/// A (price, quantity) pair.
+pub type PriceLevelTuple = (f64, f64);
 /// Events emitted on the broadcast channel after each processed message.
 #[derive(Clone, Debug)]
 pub enum StreamEvent {
     /// Raw wire update emitted BEFORE it is applied to the book.
     OrderbookRaw(OrderbookUpdate),
     /// Full materialized snapshot emitted AFTER the update is applied.
-    OrderbookSnapshot(StreamSnapshot),
+    OrderbookSnapshot(OrderbookSnapshot),
     /// User/private channel event (fills, order updates, positions, balances).
     User(UserEvent),
 }

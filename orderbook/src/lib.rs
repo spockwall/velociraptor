@@ -18,4 +18,4 @@ pub use exchanges::{
 pub use orderbook::{
     Orderbook, StreamEngine, StreamEngineBus, StreamEngineHandle, StreamSystem, StreamSystemConfig,
 };
-pub use types::{StreamEvent, StreamEventSource, StreamSnapshot};
+pub use types::{OrderbookSnapshot, StreamEvent, StreamEventSource};
