@@ -1,4 +1,4 @@
-use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
+use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
 use crate::exchanges::binance::BinanceMessageParser;
 use crate::types::orderbook::StreamMessage;
@@ -34,12 +34,8 @@ impl BinanceClient {
 }
 
 #[async_trait]
-impl ConnectionTrait for BinanceClient {
+impl ClientTrait for BinanceClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
-    }
-
-    fn get_exchange_config(&self) -> &ClientConfig {
-        self.inner.get_exchange_config()
     }
 }

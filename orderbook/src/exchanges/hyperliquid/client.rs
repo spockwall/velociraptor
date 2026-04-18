@@ -1,4 +1,4 @@
-use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
+use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::hyperliquid::HyperliquidMessageParser;
 use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
@@ -38,13 +38,9 @@ impl HyperliquidClient {
 }
 
 #[async_trait]
-impl ConnectionTrait for HyperliquidClient {
+impl ClientTrait for HyperliquidClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
-    }
-
-    fn get_exchange_config(&self) -> &ClientConfig {
-        self.inner.get_exchange_config()
     }
 }
 

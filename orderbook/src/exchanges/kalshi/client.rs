@@ -1,4 +1,4 @@
-use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
+use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
 use crate::exchanges::kalshi::KalshiMessageParser;
 use crate::exchanges::kalshi::auth::KalshiAuth;
@@ -66,12 +66,8 @@ impl KalshiClient {
 }
 
 #[async_trait]
-impl ConnectionTrait for KalshiClient {
+impl ClientTrait for KalshiClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
-    }
-
-    fn get_exchange_config(&self) -> &ClientConfig {
-        self.inner.get_exchange_config()
     }
 }
