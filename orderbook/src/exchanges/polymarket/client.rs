@@ -24,8 +24,6 @@ impl PolymarketClient {
             system_control,
             message_parser,
             ExchangeName::Polymarket,
-            vec![],
-            vec![],
             None,
         );
 

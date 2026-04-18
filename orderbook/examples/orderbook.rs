@@ -82,7 +82,7 @@ fn build_system_config(args: &Args) -> Result<StreamSystemConfig> {
 
     if args.hyperliquid {
         config.with_exchange(
-            ClientConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
+            ClientConfig::new(ExchangeName::Hyperliquid).set_subscription_messages(
                 HyperliquidSubMsgBuilder::new()
                     .with_coins(&["BTC", "ETH"])
                     .build(),

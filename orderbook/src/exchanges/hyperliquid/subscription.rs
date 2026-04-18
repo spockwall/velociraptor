@@ -1,15 +1,14 @@
 /// Builder for Hyperliquid l2Book subscription messages.
 ///
-/// Hyperliquid requires one subscription message per coin symbol.
-/// `build()` returns newline-delimited JSON — one object per line.
-/// `HyperliquidConnection` splits on `'\n'` and routes the first line to
-/// `subscription_message` and the rest to `post_subscription_messages`.
+/// Hyperliquid requires one subscription frame per coin symbol.
+/// `build()` returns one JSON string per coin; the generic client sends each
+/// as its own WebSocket frame on connect.
 ///
 /// # Example
 /// ```
 /// use orderbook::HyperliquidSubMsgBuilder;
-/// let msg = HyperliquidSubMsgBuilder::new().with_coin("BTC").build();
-/// // {"method":"subscribe","subscription":{"type":"l2Book","coin":"BTC"}}
+/// let msgs = HyperliquidSubMsgBuilder::new().with_coin("BTC").build();
+/// // ["{\"method\":\"subscribe\",\"subscription\":{\"type\":\"l2Book\",\"coin\":\"BTC\"}}"]
 /// ```
 pub struct HyperliquidSubMsgBuilder {
     coins: Vec<String>,
@@ -34,8 +33,8 @@ impl HyperliquidSubMsgBuilder {
         self
     }
 
-    /// Produce one subscription JSON per coin, joined by newlines.
-    pub fn build(self) -> String {
+    /// Produce one subscription JSON per coin.
+    pub fn build(self) -> Vec<String> {
         self.coins
             .iter()
             .map(|coin| {
@@ -45,8 +44,7 @@ impl HyperliquidSubMsgBuilder {
                 })
                 .to_string()
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect()
     }
 }
 

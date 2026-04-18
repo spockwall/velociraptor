@@ -20,8 +20,6 @@ pub struct ClientBase<P: MsgParserTrait<M>, M: BasicClientMsgTrait> {
     hearthbeat_manager: HearthbeatManager<M>,
     system_control: SystemControl,
     exchange_name: ExchangeName,
-    pre_subscription_messages: Vec<String>,
-    post_subscription_messages: Vec<String>,
     /// Optional HTTP header injector for exchanges with signed upgrade requests.
     /// `None` → plain `connect_async`; `Some(b)` → b.build_headers() is called
     /// on the tungstenite `Request` before every connect attempt.
@@ -36,8 +34,6 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
         system_control: SystemControl,
         message_parser: P,
         exchange_name: ExchangeName,
-        pre_subscription_messages: Vec<String>,
-        post_subscription_messages: Vec<String>,
         auth_header: Option<AuthHeader>,
     ) -> Self {
         let hearthbeat_config = HearthbeatConfig {
@@ -62,8 +58,6 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
             hearthbeat_manager,
             system_control,
             exchange_name,
-            pre_subscription_messages,
-            post_subscription_messages,
             auth_header,
         }
     }
@@ -123,38 +117,12 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
         self.reconnect_attempts = 0;
         self.hearthbeat_manager.record_connection();
 
-        // Send pre-subscription messages
-        if !self.pre_subscription_messages.is_empty() {
-            for msg in &self.pre_subscription_messages {
+        // Subscribe to topics — one frame per entry.
+        for msg in &self.config.subscription_messages {
+            if !msg.is_empty() {
                 ws_sink.send(Message::Text(msg.clone().into())).await?;
-                debug!(
-                    "Sent {} pre-subscription message: {msg}",
-                    self.exchange_name
-                );
+                debug!("Sent {} subscription: {msg}", self.exchange_name);
             }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-
-        // Subscribe to topics
-        if !self.config.subscription_message.is_empty() {
-            ws_sink
-                .send(Message::Text(
-                    self.config.subscription_message.clone().into(),
-                ))
-                .await?;
-            debug!(
-                "Sent {} subscription for {:?}",
-                self.exchange_name, self.config.subscription_message
-            );
-        }
-
-        // Send post-subscription messages
-        for msg in &self.post_subscription_messages {
-            ws_sink.send(Message::Text(msg.clone().into())).await?;
-            debug!(
-                "Sent {} post-subscription message: {msg}",
-                self.exchange_name
-            );
         }
 
         let mut ping_interval = interval(self.hearthbeat_manager.get_ping_interval());

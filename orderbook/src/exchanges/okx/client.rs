@@ -25,8 +25,6 @@ impl OkxClient {
             system_control,
             message_parser,
             ExchangeName::Okx,
-            vec![], // No pre-subscription messages
-            vec![], // No post-subscription messages
             None,
         );
 

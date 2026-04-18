@@ -56,8 +56,6 @@ impl KalshiClient {
             system_control,
             KalshiMessageParser::new(),
             ExchangeName::Kalshi,
-            vec![],
-            vec![],
             auth_header,
         );
 
