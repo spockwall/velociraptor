@@ -26,7 +26,7 @@ use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, StreamSnapshot};
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
 use orderbook::connection::{ClientConfig, SystemControl};
@@ -277,7 +277,7 @@ impl MarketTask {
         }
 
         let control = SystemControl::new();
-        let mut engine = StreamEngine::new(cfg.event_broadcast_capacity);
+        let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, 20);
 
         // Flush ticker for writers.
         let writers_flush = writers.clone();
@@ -296,61 +296,53 @@ impl MarketTask {
         let store_writer = store.clone();
         let lm = label_map.clone();
         let base = base_slug.clone();
-        let _event_handle = system.on_update(move |event| {
-            let store = store_writer.clone();
-            let lm = lm.clone();
-            let base = base.clone();
-            let writers = writers.clone();
-            async move {
-                if let OrderbookEvent::Snapshot(snap) = event {
-                    let (full, is_up) =
-                        match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
-                            Some(v) => v,
-                            None => return,
-                        };
+        let writers_for_hook = writers.clone();
+        engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
+            let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
+                Some(v) => v,
+                None => return,
+            };
 
-                    let sk = side_key(&full, is_up);
-                    let book = &snap.book;
-                    let (bids, asks) = book.depth(depth);
+            let sk = side_key(&full, is_up);
+            let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
+            let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
 
-                    // Write to disk on every update.
-                    if let Ok(mut map) = writers.lock() {
-                        if let Some(w) = map.get_mut(&sk) {
-                            let rec = StorageRecord {
-                                sequence: snap.sequence,
-                                ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
-                                bids: bids.iter().map(|&(p, q)| [p, q]).collect(),
-                                asks: asks.iter().map(|&(p, q)| [p, q]).collect(),
-                            };
-                            if let Err(e) = w.write(&rec) {
-                                error!("Write failed for {sk}: {e}");
-                            }
-                        }
-                    }
-
-                    // Update snap store for UI.
-                    let store_key = if is_up {
-                        format!("{base}-Up")
-                    } else {
-                        format!("{base}-Down")
+            if let Ok(mut map) = writers_for_hook.lock() {
+                if let Some(w) = map.get_mut(&sk) {
+                    let rec = StorageRecord {
+                        sequence: snap.sequence,
+                        ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
+                        bids: bids.iter().map(|&(p, q)| [p, q]).collect(),
+                        asks: asks.iter().map(|&(p, q)| [p, q]).collect(),
                     };
-                    if let Ok(mut map) = store.lock() {
-                        map.insert(
-                            store_key,
-                            SideSnap {
-                                full_slug: full,
-                                is_up,
-                                sequence: snap.sequence,
-                                bids,
-                                asks,
-                                spread: book.spread(),
-                                mid: book.mid_price(),
-                            },
-                        );
+                    if let Err(e) = w.write(&rec) {
+                        error!("Write failed for {sk}: {e}");
                     }
                 }
             }
+
+            let store_key = if is_up {
+                format!("{base}-Up")
+            } else {
+                format!("{base}-Down")
+            };
+            if let Ok(mut map) = store_writer.lock() {
+                map.insert(
+                    store_key,
+                    SideSnap {
+                        full_slug: full.clone(),
+                        is_up,
+                        sequence: snap.sequence,
+                        bids,
+                        asks,
+                        spread: snap.spread,
+                        mid: snap.mid,
+                    },
+                );
+            }
         });
+
+        let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
 
         let ctrl = control.clone();
         let handle = tokio::spawn(async move {

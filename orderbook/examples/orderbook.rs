@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, StreamSnapshot};
 use libs::terminal::OrderbookUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
@@ -108,9 +108,9 @@ async fn main() -> Result<()> {
     // Shared store: snapshot hook writes here at full exchange rate.
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
 
-    let mut engine = StreamEngine::new(config.event_broadcast_capacity);
+    let mut engine = StreamEngine::new(config.event_broadcast_capacity, 20);
     let store_writer = store.clone();
-    engine.on_snapshot(move |snap| {
+    engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
         let key = format!("{}:{}", snap.exchange, snap.symbol);
         if let Ok(mut map) = store_writer.lock() {
             map.insert(

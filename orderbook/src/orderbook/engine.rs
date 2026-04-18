@@ -1,172 +1,154 @@
 use crate::connection::SystemControl;
 use crate::orderbook::Orderbook;
-use crate::types::events::{OrderbookEvent, OrderbookSnapshot};
-use crate::types::orderbook::OrderbookMessage;
-use recorder::{RecorderEvent, RecorderSnapshot};
+use crate::orderbook::hooks::HookRegistry;
+use crate::orderbook::utils::log_orderbook_bba;
+use crate::types::events::{StreamEvent, StreamEventSource};
+use crate::types::orderbook::StreamMessage;
+use crate::types::snapshot_from_book;
+use libs::protocol::StreamSnapshot;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-/// Self-contained orderbook processing engine.
+/// Default depth used when materializing `StreamSnapshot`s from the engine.
+
+/// Self-contained event-processing engine.
 ///
-/// Creates its own ingest channel and event broadcast internally.
-/// Callers obtain a `sender()` to push `OrderbookMessage`s in,
-/// and `subscribe()` to receive `OrderbookEvent`s out.
-pub struct OrderbookEngine {
+/// Demuxes `StreamMessage`s pushed on its mpsc into event kinds and
+/// broadcasts them on a single `StreamEvent` channel. Callers can also
+/// register typed hooks via `hooks_mut().on::<T>(...)` — these fire
+/// synchronously after broadcast, in registration order.
+pub struct StreamEngine {
     orderbooks: Arc<dashmap::DashMap<String, Arc<Orderbook>>>,
-    tx: mpsc::UnboundedSender<OrderbookMessage>,
-    rx: mpsc::UnboundedReceiver<OrderbookMessage>,
-    event_tx: broadcast::Sender<OrderbookEvent>,
+    /// Inbound `StreamMessage`s from clients (handed to clients via `message_sender()`).
+    message_tx: mpsc::UnboundedSender<StreamMessage>,
+    message_rx: mpsc::UnboundedReceiver<StreamMessage>,
+    /// Outbound `StreamEvent`s broadcast to all subscribers (transport, hooks runners, etc).
+    event_broadcast_tx: broadcast::Sender<StreamEvent>,
+    snapshot_depth: usize,
+    hooks: HookRegistry,
 }
 
-/// Handle to the running `OrderbookEngine` task.
-pub struct OrderbookEngineHandle {
+/// Handle to the running `StreamEngine` task.
+pub struct StreamEngineHandle {
     pub handle: tokio::task::JoinHandle<()>,
 }
 
-impl OrderbookEngine {
-    pub fn new(event_broadcast_capacity: usize) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let (event_tx, _) = broadcast::channel(event_broadcast_capacity);
+/// Cloneable `StreamEventSource` — hand this to transport layers so they can
+/// subscribe without holding a direct reference to the engine.
+#[derive(Clone)]
+pub struct StreamEngineBus {
+    event_broadcast_tx: broadcast::Sender<StreamEvent>,
+}
+
+impl StreamEventSource for StreamEngineBus {
+    fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
+        self.event_broadcast_tx.subscribe()
+    }
+}
+
+impl StreamEngine {
+    pub fn new(event_broadcast_capacity: usize, snapshot_depth: usize) -> Self {
+        let (message_tx, message_rx) = mpsc::unbounded_channel();
+        let (event_broadcast_tx, _) = broadcast::channel(event_broadcast_capacity);
         Self {
             orderbooks: Arc::new(dashmap::DashMap::new()),
-            tx,
-            rx,
-            event_tx,
+            message_tx,
+            message_rx,
+            event_broadcast_tx,
+            snapshot_depth,
+            hooks: HookRegistry::new(),
         }
     }
 
-    /// Returns a sender that connectors use to push `OrderbookMessage`s in.
-    pub fn sender(&self) -> mpsc::UnboundedSender<OrderbookMessage> {
-        self.tx.clone()
+    /// Returns a sender that clients use to push `StreamMessage`s in.
+    pub fn get_message_sender(&self) -> mpsc::UnboundedSender<StreamMessage> {
+        self.message_tx.clone()
     }
 
     /// Subscribe directly to the event broadcast stream.
-    pub fn subscribe(&self) -> broadcast::Receiver<OrderbookEvent> {
-        self.event_tx.subscribe()
+    pub fn subscribe_event(&self) -> broadcast::Receiver<StreamEvent> {
+        self.event_broadcast_tx.subscribe()
     }
 
-    /// Subscribe and map to `RecorderEvent`, which `recorder::StorageWriter` consumes.
-    /// Spawns a lightweight forwarding task; the returned receiver can be passed
-    /// directly to `StorageWriter::start()`.
-    pub fn subscribe_as_recorder(&self, depth: usize) -> broadcast::Receiver<RecorderEvent> {
-        let (tx, rx) = broadcast::channel(1024);
-        let mut src = self.event_tx.subscribe();
-
-        tokio::spawn(async move {
-            loop {
-                match src.recv().await {
-                    Ok(OrderbookEvent::Snapshot(snap)) => {
-                        let book = &snap.book;
-                        let (bids, asks) = book.depth(depth);
-                        let rec = RecorderSnapshot {
-                            exchange: snap.exchange.to_string(),
-                            symbol: snap.symbol.clone(),
-                            sequence: snap.sequence,
-                            timestamp: snap.timestamp,
-                            best_bid: book.best_bid(),
-                            best_ask: book.best_ask(),
-                            spread: book.spread(),
-                            mid: book.mid_price(),
-                            wmid: book.wmid(),
-                            bids,
-                            asks,
-                        };
-                        if tx.send(RecorderEvent::Snapshot(rec)).is_err() {
-                            break; // all receivers dropped
-                        }
-                    }
-                    Ok(OrderbookEvent::RawUpdate(_)) => {
-                        let _ = tx.send(RecorderEvent::RawUpdate);
-                    }
-                    Ok(OrderbookEvent::User(_)) => {
-                        todo!()
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-
-        rx
+    /// Cheap cloneable handle that implements `StreamEventSource`.
+    pub fn bus(&self) -> StreamEngineBus {
+        StreamEngineBus {
+            event_broadcast_tx: self.event_broadcast_tx.clone(),
+        }
     }
 
     /// Returns a shared handle to the live orderbook map.
-    pub fn orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
+    pub fn get_orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
         self.orderbooks.clone()
     }
 
+    /// Mutable access to the hook registry. Register hooks before `start()`:
+    /// `engine.hooks_mut().on::<StreamSnapshot>(|s| { ... });`
+    pub fn hooks_mut(&mut self) -> &mut HookRegistry {
+        &mut self.hooks
+    }
+
     /// Consume the engine, spawn the processing task, and return a handle.
-    pub fn start(self, system_control: SystemControl) -> OrderbookEngineHandle {
+    pub fn start(self, system_control: SystemControl) -> StreamEngineHandle {
         let orderbooks = self.orderbooks;
-        let mut rx = self.rx;
-        let event_tx = self.event_tx;
+        let mut message_rx = self.message_rx;
+        let event_broadcast_tx = self.event_broadcast_tx;
+        let snapshot_depth = self.snapshot_depth;
+        let hooks = self.hooks;
 
         let handle = tokio::spawn(async move {
-            info!("Orderbook engine started");
+            info!("Stream engine started");
 
             loop {
                 if system_control.is_shutdown() {
                     break;
                 }
 
-                match rx.recv().await {
-                    Some(msg) => {
-                        if let OrderbookMessage::OrderbookUpdate(update) = msg {
-                            let key = format!("{}:{}", update.exchange, update.symbol);
+                match message_rx.recv().await {
+                    Some(StreamMessage::OrderbookUpdate(update)) => {
+                        let key = format!("{}:{}", update.exchange, update.symbol);
 
-                            // Emit raw update BEFORE apply
-                            let _ = event_tx.send(OrderbookEvent::RawUpdate(update.clone()));
+                        // Raw update hooks + broadcast BEFORE apply.
+                        hooks.fire(&update);
+                        let _ = event_broadcast_tx.send(StreamEvent::OrderbookRaw(update.clone()));
 
-                            // Get or create the orderbook entry
-                            let mut entry = orderbooks.entry(key.clone()).or_insert_with(|| {
-                                info!("Creating new orderbook for {key}");
-                                Arc::new(Orderbook::new(
-                                    update.symbol.clone(),
-                                    update.exchange.clone(),
-                                ))
-                            });
+                        // Get or create the orderbook entry.
+                        let mut entry = orderbooks.entry(key.clone()).or_insert_with(|| {
+                            info!("Creating new orderbook for {key}");
+                            Arc::new(Orderbook::new(
+                                update.symbol.clone(),
+                                update.exchange.clone(),
+                            ))
+                        });
 
-                            // Apply update — get a mutable Orderbook via Arc::make_mut
-                            Arc::make_mut(&mut entry).apply_update(update);
+                        // Apply update — get a mutable Orderbook via Arc::make_mut.
+                        Arc::make_mut(&mut entry).apply_update(update);
 
-                            // Log periodically
-                            if entry.sequence % 100 == 0 {
-                                if let (Some(bid), Some(ask)) = (entry.best_bid(), entry.best_ask())
-                                {
-                                    info!(
-                                        "{} - Bid: {:.2} x {:.2}, Ask: {:.2} x {:.2}, Spread: {:.2}",
-                                        key,
-                                        bid.0,
-                                        bid.1,
-                                        ask.0,
-                                        ask.1,
-                                        ask.0 - bid.0
-                                    );
-                                }
-                            }
+                        log_orderbook_bba(&key, &entry);
 
-                            // Emit snapshot AFTER apply
-                            let snapshot = OrderbookSnapshot {
-                                exchange: entry.exchange.clone(),
-                                symbol: entry.symbol.clone(),
-                                sequence: entry.sequence,
-                                timestamp: entry.last_update,
-                                book: Arc::clone(&entry),
-                            };
-                            let _ = event_tx.send(OrderbookEvent::Snapshot(snapshot));
-                        }
+                        // Snapshot hooks + broadcast AFTER apply.
+                        let snapshot: StreamSnapshot = snapshot_from_book(&entry, snapshot_depth);
+                        hooks.fire(&snapshot);
+                        let _ = event_broadcast_tx.send(StreamEvent::OrderbookSnapshot(snapshot));
+                    }
+                    Some(StreamMessage::UserEvent(ev)) => {
+                        hooks.fire(&ev);
+                        let _ = event_broadcast_tx.send(StreamEvent::User(ev));
+                    }
+                    Some(StreamMessage::Base(b)) => {
+                        debug!(?b, "Base connection message");
                     }
                     None => {
-                        warn!("Channel closed, stopping orderbook engine");
+                        warn!("Channel closed, stopping stream engine");
                         break;
                     }
                 }
             }
 
-            info!("Orderbook engine stopped");
+            info!("Stream engine stopped");
         });
 
-        OrderbookEngineHandle { handle }
+        StreamEngineHandle { handle }
     }
 }

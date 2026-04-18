@@ -16,7 +16,7 @@
 
 use anyhow::Result;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, StreamSnapshot};
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
@@ -97,12 +97,12 @@ async fn spawn_market_task(
     }
 
     let control = SystemControl::new();
-    let mut engine = StreamEngine::new(cfg.event_broadcast_capacity);
+    let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, 20);
 
     let store_writer = store.clone();
     let lm = label_map.clone();
     let base = base_slug.clone();
-    engine.on_snapshot(move |snap| {
+    engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
         let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
             Some(v) => v,
             None => return,
