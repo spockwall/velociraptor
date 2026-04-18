@@ -1,4 +1,4 @@
-use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
+use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::okx::OkxMessageParser;
 use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
@@ -35,12 +35,8 @@ impl OkxClient {
 }
 
 #[async_trait]
-impl ConnectionTrait for OkxClient {
+impl ClientTrait for OkxClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
-    }
-
-    fn get_exchange_config(&self) -> &ClientConfig {
-        self.inner.get_exchange_config()
     }
 }

@@ -25,7 +25,7 @@ use anyhow::Result;
 use libs::configs::PolymarketFileConfig;
 use libs::credentials::PolymarketCredentials;
 use libs::protocol::{ExchangeName, UserEvent};
-use orderbook::connection::{ClientConfig, ConnectionTrait, SystemControl};
+use orderbook::connection::{ClientConfig, ClientTrait, SystemControl};
 use orderbook::exchanges::polymarket::{
     WindowTask, build_client, fetch_condition_id, run_rolling_scheduler,
 };

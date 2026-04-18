@@ -68,10 +68,6 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
         }
     }
 
-    pub fn get_exchange_config(&self) -> &ClientConfig {
-        &self.config
-    }
-
     async fn handle_message(&self, msg: Message) -> Result<()> {
         match msg {
             Message::Text(text) => match self.message_parser.parse_message(&text) {

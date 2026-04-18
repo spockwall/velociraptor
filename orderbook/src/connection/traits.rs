@@ -1,4 +1,3 @@
-use crate::connection::ClientConfig;
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -9,12 +8,9 @@ pub type AuthHeader = Vec<(String, String)>;
 
 /// Trait for exchange-specific connections
 #[async_trait]
-pub trait ConnectionTrait: Send + Sync {
+pub trait ClientTrait: Send + Sync {
     /// Start the connection and run until stopped
     async fn run(&mut self) -> Result<()>;
-
-    /// Get the exchange configuration
-    fn get_exchange_config(&self) -> &ClientConfig;
 }
 
 pub trait BasicClientMsgTrait {
