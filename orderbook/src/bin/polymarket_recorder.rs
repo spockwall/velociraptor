@@ -29,9 +29,9 @@ use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
 use libs::time::now_secs;
-use orderbook::connection::{ConnectionConfig, SystemControl};
+use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
-use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
+use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use recorder::format::StorageRecord;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -268,17 +268,16 @@ impl MarketTask {
             builder = builder.with_asset(id);
         }
 
-        let mut cfg = OrderbookSystemConfig::new();
+        let mut cfg = StreamSystemConfig::new();
         cfg.with_exchange(
-            ConnectionConfig::new(ExchangeName::Polymarket)
-                .set_subscription_message(builder.build()),
+            ClientConfig::new(ExchangeName::Polymarket).set_subscription_message(builder.build()),
         );
         if cfg.validate().is_err() {
             return None;
         }
 
         let control = SystemControl::new();
-        let system = OrderbookSystem::new(cfg, control.clone()).ok()?;
+        let mut engine = StreamEngine::new(cfg.event_broadcast_capacity);
 
         // Flush ticker for writers.
         let writers_flush = writers.clone();

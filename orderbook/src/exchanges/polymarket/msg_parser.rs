@@ -1,8 +1,8 @@
-use crate::connection::MessageParserTrait;
+use crate::connection::MsgParserTrait;
 use crate::exchanges::polymarket::types::{
     PolyOrderEvent, PolyTradeEvent, PolymarketBookEvent, PolymarketPriceChangeEvent,
 };
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
 use libs::protocol::{ExchangeName, OrderStatus, Side, UserEvent};
 use libs::time::now_ns;
@@ -11,15 +11,15 @@ use std::collections::HashMap;
 use tracing::{error, info, warn};
 
 /// Parses all Polymarket WebSocket messages — both public market-channel events
-/// and private user-channel events — into [`OrderbookMessage`].
+/// and private user-channel events — into [`StreamMessage`].
 ///
 /// ## Market channel events (`type: "market"` subscription)
-/// - `"book"` → `OrderbookMessage::OrderbookUpdate` with `action: Snapshot`
-/// - `"price_change"` → `OrderbookMessage::OrderbookUpdate` with `action: Update|Delete`
+/// - `"book"` → `StreamMessage::OrderbookUpdate` with `action: Snapshot`
+/// - `"price_change"` → `StreamMessage::OrderbookUpdate` with `action: Update|Delete`
 ///
 /// ## User channel events (`type: "user"` subscription)
-/// - `"order"` → `OrderbookMessage::UserEvent(UserEvent::OrderUpdate)`
-/// - `"trade"` → `OrderbookMessage::UserEvent(UserEvent::Fill)`
+/// - `"order"` → `StreamMessage::UserEvent(UserEvent::OrderUpdate)`
+/// - `"trade"` → `StreamMessage::UserEvent(UserEvent::Fill)`
 pub struct PolymarketMessageParser {
     exchange_name: ExchangeName,
 }
@@ -38,8 +38,8 @@ impl Default for PolymarketMessageParser {
     }
 }
 
-impl MessageParserTrait<OrderbookMessage> for PolymarketMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
+impl MsgParserTrait<StreamMessage> for PolymarketMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         let value: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {
@@ -105,7 +105,7 @@ impl MessageParserTrait<OrderbookMessage> for PolymarketMessageParser {
 impl PolymarketMessageParser {
     // ── Market channel ────────────────────────────────────────────────────────
 
-    fn parse_book(&self, value: &serde_json::Value) -> Result<Vec<OrderbookMessage>> {
+    fn parse_book(&self, value: &serde_json::Value) -> Result<Vec<StreamMessage>> {
         let event: PolymarketBookEvent = match serde_json::from_value(value.clone()) {
             Ok(e) => e,
             Err(e) => {
@@ -155,7 +155,7 @@ impl PolymarketMessageParser {
             return Ok(vec![]);
         }
 
-        Ok(vec![OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
+        Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
@@ -164,7 +164,7 @@ impl PolymarketMessageParser {
         })])
     }
 
-    fn parse_price_change(&self, value: &serde_json::Value) -> Result<Vec<OrderbookMessage>> {
+    fn parse_price_change(&self, value: &serde_json::Value) -> Result<Vec<StreamMessage>> {
         let event: PolymarketPriceChangeEvent = match serde_json::from_value(value.clone()) {
             Ok(e) => e,
             Err(e) => {
@@ -225,7 +225,7 @@ impl PolymarketMessageParser {
             .into_iter()
             .filter(|(_, (_, orders))| !orders.is_empty())
             .map(|(symbol, (action, orders))| {
-                OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
+                StreamMessage::OrderbookUpdate(OrderbookUpdate {
                     action,
                     orders,
                     symbol,
@@ -240,7 +240,7 @@ impl PolymarketMessageParser {
 
     // ── User channel ──────────────────────────────────────────────────────────
 
-    fn parse_order(&self, value: &serde_json::Value) -> Option<OrderbookMessage> {
+    fn parse_order(&self, value: &serde_json::Value) -> Option<StreamMessage> {
         let o: PolyOrderEvent = match serde_json::from_value(value.clone()) {
             Ok(v) => v,
             Err(e) => {
@@ -254,7 +254,7 @@ impl PolymarketMessageParser {
         let qty: f64 = o.original_size.parse().unwrap_or(0.0);
         let matched: f64 = o.size_matched.parse().unwrap_or(0.0);
 
-        Some(OrderbookMessage::UserEvent(UserEvent::OrderUpdate {
+        Some(StreamMessage::UserEvent(UserEvent::OrderUpdate {
             exchange: "polymarket".into(),
             client_oid: o.owner, // Polymarket uses owner UUID, no client OID
             exchange_oid: o.id,
@@ -268,7 +268,7 @@ impl PolymarketMessageParser {
         }))
     }
 
-    fn parse_trade(&self, value: &serde_json::Value) -> Option<OrderbookMessage> {
+    fn parse_trade(&self, value: &serde_json::Value) -> Option<StreamMessage> {
         let t: PolyTradeEvent = match serde_json::from_value(value.clone()) {
             Ok(v) => v,
             Err(e) => {
@@ -281,7 +281,7 @@ impl PolymarketMessageParser {
         let px: f64 = t.price.parse().unwrap_or(0.0);
         let qty: f64 = t.size.parse().unwrap_or(0.0);
 
-        Some(OrderbookMessage::UserEvent(UserEvent::Fill {
+        Some(StreamMessage::UserEvent(UserEvent::Fill {
             exchange: "polymarket".into(),
             client_oid: t.taker_order_id,
             exchange_oid: t.id,
@@ -373,7 +373,7 @@ mod tests {
 
         let msgs = parser().parse_message(raw).unwrap();
         assert_eq!(msgs.len(), 1);
-        let OrderbookMessage::UserEvent(UserEvent::OrderUpdate {
+        let StreamMessage::UserEvent(UserEvent::OrderUpdate {
             exchange_oid,
             symbol,
             side,
@@ -433,7 +433,7 @@ mod tests {
 
         let msgs = parser().parse_message(raw).unwrap();
         assert_eq!(msgs.len(), 1);
-        let OrderbookMessage::UserEvent(UserEvent::Fill {
+        let StreamMessage::UserEvent(UserEvent::Fill {
             exchange_oid,
             client_oid,
             symbol,

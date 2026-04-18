@@ -4,7 +4,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 #[derive(Debug, Clone)]
-pub struct ConnectionConfig {
+pub struct ClientConfig {
     pub exchange: ExchangeName,
     pub ws_url: String,
     pub subscription_message: String,
@@ -16,7 +16,7 @@ pub struct ConnectionConfig {
     pub passphrase: Option<String>,
 }
 
-impl ConnectionConfig {
+impl ClientConfig {
     pub fn new(name: ExchangeName) -> Self {
         let (ws_url, ping_interval) = match name {
             ExchangeName::Okx => (okx::ws::PUBLIC_STREAM, 15u64),
@@ -79,12 +79,12 @@ impl ConnectionConfig {
         self
     }
 
-    pub fn build(self) -> Result<ConnectionConfig, String> {
+    pub fn build(self) -> Result<ClientConfig, String> {
         if self.subscription_message.is_empty() {
             panic!("No subscription messages configured");
         }
 
-        Ok(ConnectionConfig {
+        Ok(ClientConfig {
             exchange: self.exchange,
             ws_url: self.ws_url,
             subscription_message: self.subscription_message,

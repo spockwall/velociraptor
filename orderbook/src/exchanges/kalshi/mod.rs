@@ -1,11 +1,11 @@
 pub mod auth;
-pub mod connection;
+pub mod client;
 pub mod msg_parser;
 pub mod subscription;
 pub mod types;
 pub mod utils;
 
-pub use connection::KalshiConnection;
+pub use client::KalshiClient;
 pub(crate) use msg_parser::KalshiMessageParser;
 pub use subscription::KalshiSubMsgBuilder;
 pub use utils::{

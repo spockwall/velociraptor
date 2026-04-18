@@ -1,4 +1,4 @@
-use crate::connection::ConnectionConfig;
+use crate::connection::ClientConfig;
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -14,10 +14,10 @@ pub trait ConnectionTrait: Send + Sync {
     async fn run(&mut self) -> Result<()>;
 
     /// Get the exchange configuration
-    fn get_exchange_config(&self) -> &ConnectionConfig;
+    fn get_exchange_config(&self) -> &ClientConfig;
 }
 
-pub trait BasicConnectionMsgTrait {
+pub trait BasicClientMsgTrait {
     fn connected() -> Self;
     fn disconnected() -> Self;
     fn ping() -> Self;
@@ -26,7 +26,7 @@ pub trait BasicConnectionMsgTrait {
 }
 
 /// Trait for exchange-specific message parsers
-pub trait MessageParserTrait<M: BasicConnectionMsgTrait>: Send + Sync {
+pub trait MsgParserTrait<M: BasicClientMsgTrait>: Send + Sync {
     /// Parse a raw message from the exchange into our standard format
     fn parse_message(&self, text: &str) -> Result<Vec<M>>;
 

@@ -11,7 +11,7 @@
 //! `polymarket_orderbook.rs`.
 //!
 //! Bypasses `OrderbookSystem` / `OrderbookEngine` — the engine's `start`
-//! loop only matches `OrderbookMessage::OrderbookUpdate`, so `UserEvent`
+//! loop only matches `StreamMessage::OrderbookUpdate`, so `UserEvent`
 //! variants would be silently dropped. This example spawns
 //! `PolymarketConnection` directly against a private mpsc receiver.
 //!
@@ -25,13 +25,13 @@ use anyhow::Result;
 use libs::configs::PolymarketFileConfig;
 use libs::credentials::PolymarketCredentials;
 use libs::protocol::{ExchangeName, UserEvent};
-use orderbook::connection::{ConnectionConfig, ConnectionTrait, SystemControl};
+use orderbook::connection::{ClientConfig, ConnectionTrait, SystemControl};
 use orderbook::exchanges::polymarket::{
     WindowTask, build_client, fetch_condition_id, run_rolling_scheduler,
 };
 use orderbook::types::endpoints::polymarket;
-use orderbook::types::orderbook::OrderbookMessage;
-use orderbook::{PolymarketConnection, PolymarketSubMsgBuilder};
+use orderbook::types::orderbook::StreamMessage;
+use orderbook::{PolymarketClient, PolymarketSubMsgBuilder};
 use tokio::sync::mpsc;
 
 const CREDENTIALS_PATH: &str = "credentials/polymarket.yaml";
@@ -73,7 +73,7 @@ async fn spawn_user_channel_task(
         .with_condition(&condition_id)
         .build();
 
-    let cfg = ConnectionConfig::new(ExchangeName::Polymarket)
+    let cfg = ClientConfig::new(ExchangeName::Polymarket)
         .set_ws_url(polymarket::ws::USER_STREAM)
         .set_subscription_message(sub_json)
         .set_api_credentials(
@@ -82,10 +82,10 @@ async fn spawn_user_channel_task(
             creds.passphrase.clone(),
         );
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<OrderbookMessage>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<StreamMessage>();
     let control = SystemControl::new();
 
-    let mut conn = PolymarketConnection::new(cfg, tx, control.clone());
+    let mut conn = PolymarketClient::new(cfg, tx, control.clone());
     let conn_ctrl = control.clone();
     let conn_label = full_slug.clone();
     let conn_task = tokio::spawn(async move {
@@ -121,10 +121,10 @@ async fn spawn_user_channel_task(
 
 // ── Pretty printer ────────────────────────────────────────────────────────────
 
-fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
+fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
     let tag = format!("{base}@{full}");
     match msg {
-        OrderbookMessage::UserEvent(UserEvent::OrderUpdate {
+        StreamMessage::UserEvent(UserEvent::OrderUpdate {
             client_oid,
             exchange_oid,
             symbol,
@@ -139,7 +139,7 @@ fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
                 "[{tag}] ORDER {status:?} {side:?} px={px:.4} qty={qty:.4} filled={filled:.4} oid={exchange_oid} owner={client_oid} asset={symbol}"
             );
         }
-        OrderbookMessage::UserEvent(UserEvent::Fill {
+        StreamMessage::UserEvent(UserEvent::Fill {
             exchange_oid,
             client_oid,
             symbol,
@@ -152,7 +152,7 @@ fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
                 "[{tag}] FILL {side:?} px={px:.4} qty={qty:.4} trade={exchange_oid} taker={client_oid} asset={symbol}"
             );
         }
-        OrderbookMessage::UserEvent(UserEvent::Balance {
+        StreamMessage::UserEvent(UserEvent::Balance {
             asset,
             free,
             locked,
@@ -160,7 +160,7 @@ fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
         }) => {
             eprintln!("[{tag}] BALANCE {asset} free={free} locked={locked}");
         }
-        OrderbookMessage::UserEvent(UserEvent::Position {
+        StreamMessage::UserEvent(UserEvent::Position {
             symbol,
             size,
             avg_px,
@@ -168,7 +168,7 @@ fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
         }) => {
             eprintln!("[{tag}] POSITION {symbol} size={size} avg_px={avg_px}");
         }
-        OrderbookMessage::OrderbookUpdate(u) => {
+        StreamMessage::OrderbookUpdate(u) => {
             eprintln!(
                 "[{tag}] BOOK {} {:?} n={}",
                 u.symbol,
@@ -176,7 +176,7 @@ fn print_msg(base: &str, full: &str, msg: &OrderbookMessage) {
                 u.orders.len()
             );
         }
-        OrderbookMessage::Base(b) => {
+        StreamMessage::Base(b) => {
             eprintln!("[{tag}] base {b:?}");
         }
     }

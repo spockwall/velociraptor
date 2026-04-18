@@ -12,13 +12,13 @@ pub use exchanges::kalshi::KalshiSubMsgBuilder;
 pub use exchanges::okx::OkxSubMsgBuilder;
 pub use exchanges::polymarket::{PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder};
 pub use exchanges::{
-    binance::BinanceConnection,
-    hyperliquid::HyperliquidConnection,
-    kalshi::KalshiConnection,
-    okx::OkxConnection,
-    polymarket::PolymarketConnection,
+    binance::BinanceClient, hyperliquid::HyperliquidClient, kalshi::KalshiClient, okx::OkxClient,
+    polymarket::PolymarketClient,
 };
 pub use orderbook::{
-    Orderbook, OrderbookEngine, OrderbookEngineHandle, OrderbookSystem, OrderbookSystemConfig,
+    Orderbook, StreamEngine, StreamEngineBus, StreamEngineHandle, StreamSystem, StreamSystemConfig,
 };
-pub use types::{OrderbookEvent, OrderbookSnapshot};
+pub use types::{
+    ChannelRequest, ChannelSpawnError, ChannelSpawner, StreamEvent, StreamEventSource,
+    StreamSnapshot,
+};

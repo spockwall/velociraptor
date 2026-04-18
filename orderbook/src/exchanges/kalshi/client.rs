@@ -1,8 +1,8 @@
-use crate::connection::{ConnectionConfig, ConnectionTrait, SystemControl, v1::ConnectionBase};
+use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
 use crate::exchanges::kalshi::KalshiMessageParser;
 use crate::exchanges::kalshi::auth::KalshiAuth;
-use crate::types::orderbook::OrderbookMessage;
+use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,23 +12,23 @@ use tracing::warn;
 ///
 /// **Authentication**: Kalshi requires RSA-PSS signed HTTP headers on the WebSocket
 /// upgrade request. When `with_auth=true`, credentials must be supplied via
-/// `ConnectionConfig::set_api_credentials(key_id, pem, None)`:
+/// `ClientConfig::set_api_credentials(key_id, pem, None)`:
 /// - `api_key`    — API key UUID (sent as `KALSHI-ACCESS-KEY` header)
 /// - `api_secret` — RSA private key PEM (PKCS#8) used to sign each request
 ///
 /// Get a key pair at: https://kalshi.com/account/profile/api-keys
-pub struct KalshiConnection {
-    inner: ConnectionBase<KalshiMessageParser, OrderbookMessage>,
+pub struct KalshiClient {
+    inner: ClientBase<KalshiMessageParser, StreamMessage>,
 }
 
-impl KalshiConnection {
+impl KalshiClient {
     /// Build a Kalshi connection.
     ///
     /// `with_auth` controls whether to sign upgrade requests with the configured
     /// credentials. Set `false` only for public feeds that don't require auth.
     pub fn new(
-        config: ConnectionConfig,
-        message_tx: UnboundedSender<OrderbookMessage>,
+        config: ClientConfig,
+        message_tx: UnboundedSender<StreamMessage>,
         system_control: SystemControl,
         with_auth: bool,
     ) -> Self {
@@ -50,7 +50,7 @@ impl KalshiConnection {
             None
         };
 
-        let inner = ConnectionBase::new(
+        let inner = ClientBase::new(
             config,
             message_tx,
             system_control,
@@ -66,12 +66,12 @@ impl KalshiConnection {
 }
 
 #[async_trait]
-impl ConnectionTrait for KalshiConnection {
+impl ConnectionTrait for KalshiClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
     }
 
-    fn get_exchange_config(&self) -> &ConnectionConfig {
+    fn get_exchange_config(&self) -> &ClientConfig {
         self.inner.get_exchange_config()
     }
 }

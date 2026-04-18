@@ -1,4 +1,4 @@
-use crate::connection::{BaseConnectionMessage, BasicConnectionMsgTrait};
+use crate::connection::{BaseClientMessage, BasicClientMsgTrait};
 use chrono::{DateTime, Utc};
 use libs::protocol::{ExchangeName, UserEvent};
 use serde::{Deserialize, Serialize};
@@ -50,30 +50,30 @@ pub struct OrderbookUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OrderbookMessage {
+pub enum StreamMessage {
     OrderbookUpdate(OrderbookUpdate),
     UserEvent(UserEvent),
-    Base(BaseConnectionMessage),
+    Base(BaseClientMessage),
 }
 
-impl BasicConnectionMsgTrait for OrderbookMessage {
+impl BasicClientMsgTrait for StreamMessage {
     fn connected() -> Self {
-        Self::Base(BaseConnectionMessage::Connected)
+        Self::Base(BaseClientMessage::Connected)
     }
 
     fn disconnected() -> Self {
-        Self::Base(BaseConnectionMessage::Disconnected)
+        Self::Base(BaseClientMessage::Disconnected)
     }
 
     fn ping() -> Self {
-        Self::Base(BaseConnectionMessage::Ping)
+        Self::Base(BaseClientMessage::Ping)
     }
 
     fn pong() -> Self {
-        Self::Base(BaseConnectionMessage::Pong)
+        Self::Base(BaseClientMessage::Pong)
     }
 
     fn error(error: String) -> Self {
-        Self::Base(BaseConnectionMessage::Error(error))
+        Self::Base(BaseClientMessage::Error(error))
     }
 }

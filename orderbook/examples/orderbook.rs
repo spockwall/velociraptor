@@ -2,11 +2,11 @@ use anyhow::Result;
 use clap::Parser;
 use libs::protocol::ExchangeName;
 use libs::terminal::OrderbookUi;
-use orderbook::connection::{ConnectionConfig, SystemControl};
+use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
-use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
+use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,12 +56,12 @@ struct SnapState {
 
 type SnapStore = Arc<Mutex<HashMap<String, SnapState>>>;
 
-fn build_system_config(args: &Args) -> Result<OrderbookSystemConfig> {
-    let mut config = OrderbookSystemConfig::new();
+fn build_system_config(args: &Args) -> Result<StreamSystemConfig> {
+    let mut config = StreamSystemConfig::new();
 
     if args.okx {
         config.with_exchange(
-            ConnectionConfig::new(ExchangeName::Okx).set_subscription_message(
+            ClientConfig::new(ExchangeName::Okx).set_subscription_message(
                 OkxSubMsgBuilder::new()
                     .with_orderbook_channel("BTC-USDT-SWAP", "SWAP")
                     .with_orderbook_channel("ETH-USDT-SWAP", "SWAP")
@@ -72,7 +72,7 @@ fn build_system_config(args: &Args) -> Result<OrderbookSystemConfig> {
 
     if args.binance {
         config.with_exchange(
-            ConnectionConfig::new(ExchangeName::Binance).set_subscription_message(
+            ClientConfig::new(ExchangeName::Binance).set_subscription_message(
                 BinanceSubMsgBuilder::new()
                     .with_orderbook_channel(&["btcusdt", "ethusdt"])
                     .build(),
@@ -82,7 +82,7 @@ fn build_system_config(args: &Args) -> Result<OrderbookSystemConfig> {
 
     if args.hyperliquid {
         config.with_exchange(
-            ConnectionConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
+            ClientConfig::new(ExchangeName::Hyperliquid).set_subscription_message(
                 HyperliquidSubMsgBuilder::new()
                     .with_coins(&["BTC", "ETH"])
                     .build(),
@@ -104,39 +104,34 @@ async fn main() -> Result<()> {
 
     let config = build_system_config(&args)?;
     let system_control = SystemControl::new();
-    let system = OrderbookSystem::new(config, system_control.clone())?;
 
-    // Shared store: on_update writes here at full exchange rate.
+    // Shared store: snapshot hook writes here at full exchange rate.
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
 
-    // on_update — just update the store, no rendering.
+    let mut engine = StreamEngine::new(config.event_broadcast_capacity);
     let store_writer = store.clone();
-    let _event_handle = system.on_update(move |event| {
-        let store = store_writer.clone();
-        async move {
-            if let OrderbookEvent::Snapshot(snap) = event {
-                let (bids, asks) = snap.book.depth(depth);
-                let key = format!("{}:{}", snap.exchange, snap.symbol);
-                if let Ok(mut map) = store.lock() {
-                    map.insert(
-                        key,
-                        SnapState {
-                            exchange: snap.exchange.to_string(),
-                            symbol: snap.symbol.clone(),
-                            sequence: snap.sequence,
-                            best_bid: snap.book.best_bid(),
-                            best_ask: snap.book.best_ask(),
-                            spread: snap.book.spread(),
-                            mid: snap.book.mid_price(),
-                            wmid: snap.book.wmid(),
-                            bids,
-                            asks,
-                        },
-                    );
-                }
-            }
+    engine.on_snapshot(move |snap| {
+        let key = format!("{}:{}", snap.exchange, snap.symbol);
+        if let Ok(mut map) = store_writer.lock() {
+            map.insert(
+                key,
+                SnapState {
+                    exchange: snap.exchange.to_string(),
+                    symbol: snap.symbol.clone(),
+                    sequence: snap.sequence,
+                    best_bid: snap.best_bid,
+                    best_ask: snap.best_ask,
+                    spread: snap.spread,
+                    mid: snap.mid,
+                    wmid: snap.wmid,
+                    bids: snap.bids.iter().take(depth).copied().collect(),
+                    asks: snap.asks.iter().take(depth).copied().collect(),
+                },
+            );
         }
     });
+
+    let system = StreamSystem::new(engine, config, system_control.clone())?;
 
     // Render timer — reads the store and redraws at the configured interval.
     let store_reader = store.clone();
