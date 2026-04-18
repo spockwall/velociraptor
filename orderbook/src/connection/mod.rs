@@ -1,18 +1,18 @@
+pub mod client;
 pub mod configs;
 pub mod constants;
 pub mod traits;
-pub mod v1;
 
-pub use configs::ConnectionConfig;
+pub use configs::ClientConfig;
 pub use constants::PAUSE_DELAY;
-pub use traits::{AuthHeader, BasicConnectionMsgTrait, ConnectionTrait, MessageParserTrait};
+pub use traits::{AuthHeader, BasicClientMsgTrait, ConnectionTrait, MsgParserTrait};
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BaseConnectionMessage {
+pub enum BaseClientMessage {
     Ping,
     Pong,
     Error(String),

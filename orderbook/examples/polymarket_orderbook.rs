@@ -18,11 +18,11 @@ use anyhow::Result;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
-use orderbook::connection::{ConnectionConfig, SystemControl};
+use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
     PolymarketSubMsgBuilder, WindowTask, resolve_assets_with_labels, run_rolling_scheduler,
 };
-use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
+use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -88,56 +88,47 @@ async fn spawn_market_task(
         builder = builder.with_asset(id);
     }
 
-    let mut cfg = OrderbookSystemConfig::new();
+    let mut cfg = StreamSystemConfig::new();
     cfg.with_exchange(
-        ConnectionConfig::new(ExchangeName::Polymarket).set_subscription_message(builder.build()),
+        ClientConfig::new(ExchangeName::Polymarket).set_subscription_message(builder.build()),
     );
     if cfg.validate().is_err() {
         return None;
     }
 
     let control = SystemControl::new();
-    let system = OrderbookSystem::new(cfg, control.clone()).ok()?;
+    let mut engine = StreamEngine::new(cfg.event_broadcast_capacity);
 
-    // Write snapshots into the store keyed by base_slug so the panel persists
-    // across window rotations. full_slug is only stored for the display title.
     let store_writer = store.clone();
     let lm = label_map.clone();
     let base = base_slug.clone();
-    let _event_handle = system.on_update(move |event| {
-        let store = store_writer.clone();
-        let lm = lm.clone();
-        let base = base.clone();
-        async move {
-            if let OrderbookEvent::Snapshot(snap) = event {
-                let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned())
-                {
-                    Some(v) => v,
-                    None => return,
-                };
-                let key = if is_up {
-                    format!("{base}-Up")
-                } else {
-                    format!("{base}-Down")
-                };
-                let (bids, asks) = snap.book.depth(depth);
-                if let Ok(mut map) = store.lock() {
-                    map.insert(
-                        key,
-                        SideSnap {
-                            full_slug: full,
-                            is_up,
-                            sequence: snap.sequence,
-                            bids,
-                            asks,
-                            spread: snap.book.spread(),
-                            mid: snap.book.mid_price(),
-                        },
-                    );
-                }
-            }
+    engine.on_snapshot(move |snap| {
+        let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
+            Some(v) => v,
+            None => return,
+        };
+        let key = if is_up {
+            format!("{base}-Up")
+        } else {
+            format!("{base}-Down")
+        };
+        if let Ok(mut map) = store_writer.lock() {
+            map.insert(
+                key,
+                SideSnap {
+                    full_slug: full,
+                    is_up,
+                    sequence: snap.sequence,
+                    bids: snap.bids.iter().take(depth).copied().collect(),
+                    asks: snap.asks.iter().take(depth).copied().collect(),
+                    spread: snap.spread,
+                    mid: snap.mid,
+                },
+            );
         }
     });
+
+    let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
 
     let ctrl = control.clone();
     let handle = tokio::spawn(async move {

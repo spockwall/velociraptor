@@ -1,6 +1,6 @@
-use crate::connection::MessageParserTrait;
+use crate::connection::MsgParserTrait;
 use crate::exchanges::kalshi::types::{KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg};
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
 use chrono::Utc;
 use libs::protocol::ExchangeName;
@@ -24,8 +24,8 @@ impl Default for KalshiMessageParser {
     }
 }
 
-impl MessageParserTrait<OrderbookMessage> for KalshiMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
+impl MsgParserTrait<StreamMessage> for KalshiMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         let envelope: KalshiEnvelope = match serde_json::from_str(text) {
             Ok(e) => e,
             Err(err) => {
@@ -76,7 +76,7 @@ impl MessageParserTrait<OrderbookMessage> for KalshiMessageParser {
 }
 
 impl KalshiMessageParser {
-    fn parse_snapshot(&self, msg: serde_json::Value) -> Result<Vec<OrderbookMessage>> {
+    fn parse_snapshot(&self, msg: serde_json::Value) -> Result<Vec<StreamMessage>> {
         let snap: KalshiSnapshotMsg = match serde_json::from_value(msg) {
             Ok(s) => s,
             Err(e) => {
@@ -126,7 +126,7 @@ impl KalshiMessageParser {
         // subscribe, and freshly-opened 15-min windows may have zero levels
         // until the first quote arrives. Emit it anyway so the engine
         // registers the book.
-        Ok(vec![OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
+        Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
@@ -135,7 +135,7 @@ impl KalshiMessageParser {
         })])
     }
 
-    fn parse_delta(&self, msg: serde_json::Value) -> Result<Vec<OrderbookMessage>> {
+    fn parse_delta(&self, msg: serde_json::Value) -> Result<Vec<StreamMessage>> {
         let delta: KalshiDeltaMsg = match serde_json::from_value(msg) {
             Ok(d) => d,
             Err(e) => {
@@ -206,7 +206,7 @@ impl KalshiMessageParser {
             timestamp: ts_str,
         };
 
-        Ok(vec![OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
+        Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action,
             orders: vec![order],
             symbol,
@@ -219,8 +219,8 @@ impl KalshiMessageParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::MessageParserTrait;
-    use crate::types::orderbook::{OrderbookAction, OrderbookMessage};
+    use crate::connection::MsgParserTrait;
+    use crate::types::orderbook::{OrderbookAction, StreamMessage};
 
     fn parser() -> KalshiMessageParser {
         KalshiMessageParser::new()
@@ -251,7 +251,7 @@ mod tests {
         let msgs = parser().parse_message(raw).unwrap();
         assert_eq!(msgs.len(), 1);
 
-        if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
+        if let StreamMessage::OrderbookUpdate(u) = &msgs[0] {
             assert_eq!(u.action, OrderbookAction::Snapshot);
             assert_eq!(u.symbol, "FED-23DEC-T3.00");
             assert_eq!(u.orders.len(), 4);
@@ -292,7 +292,7 @@ mod tests {
         let msgs = parser().parse_message(raw).unwrap();
         assert_eq!(msgs.len(), 1);
 
-        if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
+        if let StreamMessage::OrderbookUpdate(u) = &msgs[0] {
             assert_eq!(u.action, OrderbookAction::Update);
             assert_eq!(u.orders[0].side, "Bid");
             assert!((u.orders[0].price - 0.960).abs() < 1e-9);
@@ -322,7 +322,7 @@ mod tests {
         let msgs = parser().parse_message(raw).unwrap();
         assert_eq!(msgs.len(), 1);
 
-        if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
+        if let StreamMessage::OrderbookUpdate(u) = &msgs[0] {
             assert_eq!(u.action, OrderbookAction::Delete);
             // side: "yes" → bid
             assert_eq!(u.orders[0].side, "Bid");
@@ -352,7 +352,7 @@ mod tests {
         }"#;
 
         let msgs = parser().parse_message(raw).unwrap();
-        if let OrderbookMessage::OrderbookUpdate(u) = &msgs[0] {
+        if let StreamMessage::OrderbookUpdate(u) = &msgs[0] {
             assert_eq!(u.action, OrderbookAction::Update);
             assert_eq!(u.orders[0].side, "Ask");
             assert!((u.orders[0].price - 0.44).abs() < 1e-9); // 1 - 0.56

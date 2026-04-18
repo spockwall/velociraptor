@@ -1,24 +1,24 @@
-use crate::connection::{ConnectionConfig, ConnectionTrait, SystemControl, v1::ConnectionBase};
+use crate::connection::{ClientConfig, ConnectionTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
 use crate::exchanges::polymarket::PolymarketMessageParser;
-use crate::types::orderbook::OrderbookMessage;
+use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 
-pub struct PolymarketConnection {
-    inner: ConnectionBase<PolymarketMessageParser, OrderbookMessage>,
+pub struct PolymarketClient {
+    inner: ClientBase<PolymarketMessageParser, StreamMessage>,
 }
 
-impl PolymarketConnection {
+impl PolymarketClient {
     pub fn new(
-        config: ConnectionConfig,
-        message_tx: UnboundedSender<OrderbookMessage>,
+        config: ClientConfig,
+        message_tx: UnboundedSender<StreamMessage>,
         system_control: SystemControl,
     ) -> Self {
         let message_parser = PolymarketMessageParser::new();
 
-        let inner = ConnectionBase::new(
+        let inner = ClientBase::new(
             config,
             message_tx,
             system_control,
@@ -34,12 +34,12 @@ impl PolymarketConnection {
 }
 
 #[async_trait]
-impl ConnectionTrait for PolymarketConnection {
+impl ConnectionTrait for PolymarketClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
     }
 
-    fn get_exchange_config(&self) -> &ConnectionConfig {
+    fn get_exchange_config(&self) -> &ClientConfig {
         self.inner.get_exchange_config()
     }
 }

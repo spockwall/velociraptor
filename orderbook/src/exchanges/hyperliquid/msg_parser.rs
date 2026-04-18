@@ -1,6 +1,6 @@
-use crate::connection::MessageParserTrait;
+use crate::connection::MsgParserTrait;
 use crate::exchanges::hyperliquid::types::{HlBookData, HlWsMessage};
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use libs::protocol::ExchangeName;
@@ -24,8 +24,8 @@ impl Default for HyperliquidMessageParser {
     }
 }
 
-impl MessageParserTrait<OrderbookMessage> for HyperliquidMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
+impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         let envelope: HlWsMessage = match serde_json::from_str(text) {
             Ok(m) => m,
             Err(e) => {
@@ -114,7 +114,7 @@ impl MessageParserTrait<OrderbookMessage> for HyperliquidMessageParser {
             return Ok(vec![]);
         }
 
-        Ok(vec![OrderbookMessage::OrderbookUpdate(OrderbookUpdate {
+        Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,

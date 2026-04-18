@@ -1,5 +1,5 @@
-use crate::connection::{BasicConnectionMsgTrait, MessageParserTrait};
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::connection::{BasicClientMsgTrait, MsgParserTrait};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 use libs::protocol::ExchangeName;
@@ -60,8 +60,8 @@ impl Default for OkxMessageParser {
     }
 }
 
-impl MessageParserTrait<OrderbookMessage> for OkxMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
+impl MsgParserTrait<StreamMessage> for OkxMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         let mut messages = Vec::new();
 
         // Parse JSON message
@@ -83,7 +83,7 @@ impl MessageParserTrait<OrderbookMessage> for OkxMessageParser {
                 "error" => {
                     let error_msg = msg.msg.unwrap_or_else(|| "Unknown OKX error".to_string());
                     error!("OKX error: {error_msg}");
-                    messages.push(OrderbookMessage::error(error_msg));
+                    messages.push(StreamMessage::error(error_msg));
                     return Ok(messages);
                 }
                 "login" => {
@@ -102,7 +102,7 @@ impl MessageParserTrait<OrderbookMessage> for OkxMessageParser {
         if let Some(arg) = &msg.arg {
             if arg.channel == "books" {
                 if let Ok(update) = self.parse_orderbook_message(&msg) {
-                    messages.push(OrderbookMessage::OrderbookUpdate(update));
+                    messages.push(StreamMessage::OrderbookUpdate(update));
                 }
             }
         }

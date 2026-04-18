@@ -1,6 +1,6 @@
-use crate::connection::MessageParserTrait;
+use crate::connection::MsgParserTrait;
 use crate::exchanges::binance::types::{BinanceDepthData, BinanceSubscribeResponse};
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
 use chrono::Utc;
 use libs::protocol::ExchangeName;
@@ -24,8 +24,8 @@ impl Default for BinanceMessageParser {
     }
 }
 
-impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
+impl MsgParserTrait<StreamMessage> for BinanceMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         // Handle subscription confirmation: {"result":null,"id":1}
         if let Ok(resp) = serde_json::from_str::<BinanceSubscribeResponse>(text) {
             if resp.id.is_some() {
@@ -86,7 +86,7 @@ impl MessageParserTrait<OrderbookMessage> for BinanceMessageParser {
             exchange: self.exchange_name.clone(),
         };
 
-        Ok(vec![OrderbookMessage::OrderbookUpdate(update)])
+        Ok(vec![StreamMessage::OrderbookUpdate(update)])
     }
 
     // Binance uses protocol-level WebSocket ping frames — no application-level ping needed

@@ -1,15 +1,15 @@
-use crate::connection::{BasicConnectionMsgTrait, MessageParserTrait};
+use crate::connection::{BasicClientMsgTrait, MsgParserTrait};
 use libs::protocol::ExchangeName;
 use tokio_tungstenite::tungstenite::Message;
 
-pub struct HearthbeatProtocol<'a, M: BasicConnectionMsgTrait> {
-    parser: &'a dyn MessageParserTrait<M>,
+pub struct HearthbeatProtocol<'a, M: BasicClientMsgTrait> {
+    parser: &'a dyn MsgParserTrait<M>,
     exchange_name: &'a ExchangeName,
 }
 
 /// Protocol handler for ping/pong messages
-impl<'a, M: BasicConnectionMsgTrait> HearthbeatProtocol<'a, M> {
-    pub fn new(parser: &'a dyn MessageParserTrait<M>, exchange_name: &'a ExchangeName) -> Self {
+impl<'a, M: BasicClientMsgTrait> HearthbeatProtocol<'a, M> {
+    pub fn new(parser: &'a dyn MsgParserTrait<M>, exchange_name: &'a ExchangeName) -> Self {
         Self {
             parser,
             exchange_name,

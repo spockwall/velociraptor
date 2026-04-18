@@ -1,4 +1,4 @@
-use crate::connection::BasicConnectionMsgTrait;
+use crate::connection::BasicClientMsgTrait;
 use crate::heartbeat::HearthbeatConfig;
 use crate::heartbeat::metrics::ConnectionMetrics;
 use crate::heartbeat::state::{ConnectionStats, HealthStatus, HearthbeatState};
@@ -8,7 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
 
 /// Enhanced manager with metrics
-pub struct HearthbeatManager<M: BasicConnectionMsgTrait> {
+pub struct HearthbeatManager<M: BasicClientMsgTrait> {
     state: HearthbeatState,
     config: HearthbeatConfig,
     message_tx: UnboundedSender<M>,
@@ -16,7 +16,7 @@ pub struct HearthbeatManager<M: BasicConnectionMsgTrait> {
     pub health_status: HealthStatus,
 }
 
-impl<M: BasicConnectionMsgTrait> HearthbeatManager<M> {
+impl<M: BasicClientMsgTrait> HearthbeatManager<M> {
     pub fn new(
         config: HearthbeatConfig,
         message_tx: UnboundedSender<M>,

@@ -27,11 +27,11 @@ use libs::configs::{Config, KalshiMarketConfig};
 use libs::credentials::KalshiCredentials;
 use libs::protocol::ExchangeName;
 use libs::terminal::PolymarketUi;
-use orderbook::connection::{ConnectionConfig, SystemControl};
+use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::kalshi::{
     KalshiSubMsgBuilder, build_event_ticker, build_market_ticker, current_window_close,
 };
-use orderbook::{OrderbookEvent, OrderbookSystem, OrderbookSystemConfig};
+use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
@@ -71,7 +71,6 @@ struct MarketTask {
     ticker: String,
     system_control: SystemControl,
     handle: tokio::task::JoinHandle<()>,
-    event_handle: tokio::task::JoinHandle<()>,
 }
 
 impl MarketTask {
@@ -82,69 +81,64 @@ impl MarketTask {
         depth: usize,
         creds: KalshiCredentials,
     ) -> Option<Self> {
-        let conn_cfg = ConnectionConfig::new(ExchangeName::Kalshi)
+        let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
             .set_ws_url(creds.ws_url())
             .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
             .set_api_credentials(creds.api_key, creds.secret, None);
 
-        let mut cfg = OrderbookSystemConfig::new();
+        let mut cfg = StreamSystemConfig::new();
         cfg.with_exchange(conn_cfg);
         if cfg.validate().is_err() {
             return None;
         }
 
         let control = SystemControl::new();
-        let system = OrderbookSystem::new(cfg, control.clone()).ok()?;
+        let mut engine = StreamEngine::new(cfg.event_broadcast_capacity);
 
         let store_w = store.clone();
         let series_ev = series.clone();
         let ticker_ev = ticker.clone();
 
-        let event_handle = system.on_update(move |event| {
-            let store = store_w.clone();
-            let s = series_ev.clone();
-            let t = ticker_ev.clone();
-            async move {
-                let OrderbookEvent::Snapshot(snap) = event else {
-                    return;
-                };
-                let (bids, asks) = snap.book.depth(depth);
-                let spread = snap.book.spread();
-                let mid = snap.book.mid_price();
-                let seq = snap.sequence;
-                let Ok(mut map) = store.lock() else { return };
-                let entry = map.entry(s).or_default();
-                // Don't stomp newer-window data. Another MarketTask may have
-                // already pre-written the next ticker's label during rotation;
-                // in that case this callback is stale and should bail.
-                if !entry.display_label.is_empty() && entry.display_label != t {
-                    return;
-                }
-                entry.display_label = t;
-
-                // YES panel: book as-is.
-                entry.yes = MarketSide {
-                    sequence: seq,
-                    bids: bids.clone(),
-                    asks: asks.clone(),
-                    spread,
-                    mid,
-                };
-                // NO panel: binary-market mirror — no_bid(p) = 1 - yes_ask(p),
-                // no_ask(p) = 1 - yes_bid(p). Reverse the level order too so the
-                // best NO bid (highest price) is on top after the complement.
-                let no_bids: Vec<(f64, f64)> = asks.iter().map(|(p, q)| (1.0 - p, *q)).collect();
-                let no_asks: Vec<(f64, f64)> = bids.iter().map(|(p, q)| (1.0 - p, *q)).collect();
-                let no_mid = mid.map(|m| 1.0 - m);
-                entry.no = MarketSide {
-                    sequence: seq,
-                    bids: no_bids,
-                    asks: no_asks,
-                    spread,
-                    mid: no_mid,
-                };
+        engine.on_snapshot(move |snap| {
+            let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
+            let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
+            let spread = snap.spread;
+            let mid = snap.mid;
+            let seq = snap.sequence;
+            let Ok(mut map) = store_w.lock() else { return };
+            let entry = map.entry(series_ev.clone()).or_default();
+            // Don't stomp newer-window data. Another MarketTask may have
+            // already pre-written the next ticker's label during rotation;
+            // in that case this callback is stale and should bail.
+            if !entry.display_label.is_empty() && entry.display_label != ticker_ev {
+                return;
             }
+            entry.display_label = ticker_ev.clone();
+
+            // YES panel: book as-is.
+            entry.yes = MarketSide {
+                sequence: seq,
+                bids: bids.clone(),
+                asks: asks.clone(),
+                spread,
+                mid,
+            };
+            // NO panel: binary-market mirror — no_bid(p) = 1 - yes_ask(p),
+            // no_ask(p) = 1 - yes_bid(p). Reverse the level order too so the
+            // best NO bid (highest price) is on top after the complement.
+            let no_bids: Vec<(f64, f64)> = asks.iter().map(|(p, q)| (1.0 - p, *q)).collect();
+            let no_asks: Vec<(f64, f64)> = bids.iter().map(|(p, q)| (1.0 - p, *q)).collect();
+            let no_mid = mid.map(|m| 1.0 - m);
+            entry.no = MarketSide {
+                sequence: seq,
+                bids: no_bids,
+                asks: no_asks,
+                spread,
+                mid: no_mid,
+            };
         });
+
+        let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
 
         let ctrl = control.clone();
         let handle = tokio::spawn(async move {
@@ -156,14 +150,12 @@ impl MarketTask {
             ticker,
             system_control: control,
             handle,
-            event_handle,
         })
     }
 
     fn stop(self) {
         self.system_control.shutdown();
         self.handle.abort();
-        self.event_handle.abort();
     }
 }
 

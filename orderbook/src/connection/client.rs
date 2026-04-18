@@ -1,7 +1,5 @@
 use super::{PAUSE_DELAY, SystemControl};
-use crate::connection::{
-    AuthHeader, BasicConnectionMsgTrait, ConnectionConfig, MessageParserTrait,
-};
+use crate::connection::{AuthHeader, BasicClientMsgTrait, ClientConfig, MsgParserTrait};
 use crate::heartbeat::{HealthStatus, HearthbeatConfig, HearthbeatManager, HearthbeatProtocol};
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
@@ -14,8 +12,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-pub struct ConnectionBase<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> {
-    config: ConnectionConfig,
+pub struct ClientBase<P: MsgParserTrait<M>, M: BasicClientMsgTrait> {
+    config: ClientConfig,
     message_tx: UnboundedSender<M>,
     message_parser: P,
     reconnect_attempts: u32,
@@ -30,10 +28,10 @@ pub struct ConnectionBase<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> 
     auth_header: Option<AuthHeader>,
 }
 
-impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> {
+impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
     /// Create a `ConnectionBase` without custom HTTP headers (most exchanges).
     pub fn new(
-        config: ConnectionConfig,
+        config: ClientConfig,
         message_tx: UnboundedSender<M>,
         system_control: SystemControl,
         message_parser: P,
@@ -70,7 +68,7 @@ impl<P: MessageParserTrait<M>, M: BasicConnectionMsgTrait> ConnectionBase<P, M> 
         }
     }
 
-    pub fn get_exchange_config(&self) -> &ConnectionConfig {
+    pub fn get_exchange_config(&self) -> &ClientConfig {
         &self.config
     }
 
