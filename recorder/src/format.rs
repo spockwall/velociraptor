@@ -1,4 +1,4 @@
-use crate::event::RecorderSnapshot;
+use crate::event::StreamSnapshot;
 use serde::Serialize;
 
 /// One persisted snapshot record.
@@ -18,7 +18,7 @@ pub struct StorageRecord {
 }
 
 impl StorageRecord {
-    pub fn from_snapshot(snap: &RecorderSnapshot, depth: usize) -> Self {
+    pub fn from_snapshot(snap: &StreamSnapshot, depth: usize) -> Self {
         Self {
             sequence: snap.sequence,
             ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
