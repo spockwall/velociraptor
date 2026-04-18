@@ -25,7 +25,7 @@ use anyhow::Result;
 use chrono::{Duration, Utc};
 use libs::configs::{Config, KalshiMarketConfig};
 use libs::credentials::KalshiCredentials;
-use libs::protocol::{ExchangeName, StreamSnapshot};
+use libs::protocol::{ExchangeName, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::kalshi::{
@@ -99,7 +99,7 @@ impl MarketTask {
         let series_ev = series.clone();
         let ticker_ev = ticker.clone();
 
-        engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
+        engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
             let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
             let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
             let spread = snap.spread;

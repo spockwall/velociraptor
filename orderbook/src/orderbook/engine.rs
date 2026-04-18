@@ -2,15 +2,15 @@ use crate::connection::SystemControl;
 use crate::orderbook::Orderbook;
 use crate::orderbook::hooks::HookRegistry;
 use crate::orderbook::utils::log_orderbook_bba;
-use crate::types::events::{StreamEvent, StreamEventSource};
 use crate::types::orderbook::StreamMessage;
-use crate::types::snapshot_from_book;
-use libs::protocol::StreamSnapshot;
+use crate::types::snapshot_from;
+use crate::types::stream::{StreamEvent, StreamEventSource};
+use libs::protocol::OrderbookSnapshot;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
-/// Default depth used when materializing `StreamSnapshot`s from the engine.
+/// Default depth used when materializing `OrderbookSnapshot`s from the engine.
 
 /// Self-contained event-processing engine.
 ///
@@ -84,7 +84,7 @@ impl StreamEngine {
     }
 
     /// Mutable access to the hook registry. Register hooks before `start()`:
-    /// `engine.hooks_mut().on::<StreamSnapshot>(|s| { ... });`
+    /// `engine.hooks_mut().on::<OrderbookSnapshot>(|s| { ... });`
     pub fn hooks_mut(&mut self) -> &mut HookRegistry {
         &mut self.hooks
     }
@@ -128,7 +128,7 @@ impl StreamEngine {
                         log_orderbook_bba(&key, &entry);
 
                         // Snapshot hooks + broadcast AFTER apply.
-                        let snapshot: StreamSnapshot = snapshot_from_book(&entry, snapshot_depth);
+                        let snapshot: OrderbookSnapshot = snapshot_from(&entry, snapshot_depth);
                         hooks.fire(&snapshot);
                         let _ = event_broadcast_tx.send(StreamEvent::OrderbookSnapshot(snapshot));
                     }

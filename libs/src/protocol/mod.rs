@@ -12,14 +12,14 @@ pub mod control;
 pub mod events;
 pub mod orders;
 
+use chrono::{DateTime, Utc};
 pub use control::ControlMessage;
+use core::fmt;
 pub use events::{EventKind, UserEvent};
 pub use orders::{
     HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest, OrderResponse,
     OrderResult, OrderStatus, PlaceOne, Side, Tif,
 };
-
-use core::fmt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,4 +63,23 @@ impl fmt::Display for ExchangeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_str())
     }
+}
+
+/// A (price, quantity) pair.
+pub type PriceLevelTuple = (f64, f64);
+
+/// Materialized orderbook snapshot broadcast to subscribers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrderbookSnapshot {
+    pub exchange: ExchangeName,
+    pub symbol: String,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub best_bid: Option<PriceLevelTuple>,
+    pub best_ask: Option<(f64, f64)>,
+    pub spread: Option<f64>,
+    pub mid: Option<f64>,
+    pub wmid: f64,
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
 }
