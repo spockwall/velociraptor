@@ -7,7 +7,9 @@ use rand::{RngExt, SeedableRng};
 pub struct ClientConfig {
     pub exchange: ExchangeName,
     pub ws_url: String,
-    pub subscription_message: String,
+    /// One or more subscription frames sent sequentially on connect.
+    /// Single-frame exchanges push one string; Hyperliquid pushes one per coin.
+    pub subscription_messages: Vec<String>,
     pub ping_interval: u64,   // seconds
     pub reconnect_delay: u64, // seconds
     pub max_reconnect_attempts: u32,
@@ -32,7 +34,7 @@ impl ClientConfig {
         Self {
             exchange: name,
             ws_url: ws_url.to_string(),
-            subscription_message: String::new(),
+            subscription_messages: Vec::new(),
             ping_interval,
             reconnect_delay: 5,
             max_reconnect_attempts: 10,
@@ -47,8 +49,15 @@ impl ClientConfig {
         self
     }
 
+    /// Set a single subscription frame. Replaces any previously configured frames.
     pub fn set_subscription_message(mut self, message: String) -> Self {
-        self.subscription_message = message;
+        self.subscription_messages = vec![message];
+        self
+    }
+
+    /// Set multiple subscription frames, sent sequentially on connect.
+    pub fn set_subscription_messages(mut self, messages: Vec<String>) -> Self {
+        self.subscription_messages = messages;
         self
     }
 
@@ -80,14 +89,14 @@ impl ClientConfig {
     }
 
     pub fn build(self) -> Result<ClientConfig, String> {
-        if self.subscription_message.is_empty() {
+        if self.subscription_messages.is_empty() {
             panic!("No subscription messages configured");
         }
 
         Ok(ClientConfig {
             exchange: self.exchange,
             ws_url: self.ws_url,
-            subscription_message: self.subscription_message,
+            subscription_messages: self.subscription_messages,
             ping_interval: self.ping_interval,
             reconnect_delay: self.reconnect_delay,
             max_reconnect_attempts: self.max_reconnect_attempts,

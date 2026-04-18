@@ -24,8 +24,6 @@ impl BinanceClient {
             system_control,
             message_parser,
             ExchangeName::Binance,
-            vec![], // No pre-subscription messages
-            vec![], // No post-subscription messages
             None,
         );
 
