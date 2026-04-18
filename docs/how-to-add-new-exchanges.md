@@ -1,6 +1,6 @@
 # Adding a New Exchange
 
-This guide walks through every file you need to touch to add a new exchange connector. Follow the steps in order — the compiler will guide you if you miss anything because `ExchangeName` uses exhaustive match arms.
+This guide walks through every file you need to touch to add a new exchange connector. Follow the steps in order — the compiler will guide you on any missed exhaustive match arms.
 
 ---
 
@@ -21,14 +21,13 @@ pub enum ExchangeName {
 impl ExchangeName {
     pub fn to_str(&self) -> &'static str {
         match self {
-            // ...
             ExchangeName::MyExchange => "myexchange",
+            // ...
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            // ...
             "myexchange" => Some(ExchangeName::MyExchange),
             _ => None,
         }
@@ -52,42 +51,31 @@ pub mod myexchange {
 
 ---
 
-## 3. Wire up the URL in ConnectionConfig
+## 3. Wire up the URL in ClientConfig
 
 **`orderbook/src/connection/configs.rs`**
 
-Add to the import:
-```rust
-use crate::types::endpoints::{binance, myexchange, okx, polymarket};
-```
-
-Add the match arm in `ConnectionConfig::new()`. Also set the `ping_interval` here if your exchange needs something other than the default 15s:
+Add the match arm in `ClientConfig::new()`. Also set `ping_interval` here if your exchange needs something other than the default:
 
 ```rust
-// Simple: same ping_interval for all exchanges
-let ws_url = match name {
-    // ...
-    ExchangeName::MyExchange => myexchange::ws::PUBLIC_STREAM,
-};
+use crate::types::endpoints::myexchange;
 
-// Or: per-exchange ping_interval (e.g. Hyperliquid needs 45s)
 let (ws_url, ping_interval) = match name {
     ExchangeName::Binance    => (binance::ws::PUBLIC_STREAM,    15u64),
-    ExchangeName::MyExchange => (myexchange::ws::PUBLIC_STREAM, 45u64),
+    ExchangeName::MyExchange => (myexchange::ws::PUBLIC_STREAM, 30u64),
     // ...
 };
-Self { ws_url: ws_url.to_string(), ping_interval, .. }
 ```
 
 ---
 
 ## 4. Create the exchange module
 
-Create the directory `orderbook/src/exchanges/myexchange/` with five files:
+Create `orderbook/src/exchanges/myexchange/` with five files:
 
 ### 4a. `types.rs` — wire format structs
 
-Deserialisation-only structs that match the exchange's raw JSON. Keep these private to the module.
+Deserialisation-only structs matching the exchange's raw JSON. Keep these private to the module.
 
 ```rust
 use serde::Deserialize;
@@ -95,26 +83,26 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub struct MyLevel {
     pub price: String,
-    pub size: String,
+    pub size:  String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MyBookEvent {
-    pub symbol: String,
-    pub bids: Vec<MyLevel>,
-    pub asks: Vec<MyLevel>,
-    pub timestamp: u64,   // or String — depends on exchange
+    pub symbol:    String,
+    pub bids:      Vec<MyLevel>,
+    pub asks:      Vec<MyLevel>,
+    pub timestamp: u64,
 }
 ```
 
 ### 4b. `subscription.rs` — subscription message builder
 
-Build the JSON string(s) to send on connect. Follow the builder pattern:
+Build the JSON string(s) sent on connect.
+
+**Single message covering all symbols** (Binance/OKX style):
 
 ```rust
-pub struct MyExchangeSubMsgBuilder {
-    symbols: Vec<String>,
-}
+pub struct MyExchangeSubMsgBuilder { symbols: Vec<String> }
 
 impl MyExchangeSubMsgBuilder {
     pub fn new() -> Self { Self { symbols: vec![] } }
@@ -125,96 +113,61 @@ impl MyExchangeSubMsgBuilder {
     }
 
     pub fn build(self) -> String {
-        // Single subscription object covering all symbols:
         serde_json::json!({ "op": "subscribe", "args": self.symbols }).to_string()
-
-        // Or one message per symbol (newline-delimited) — see multi-symbol note below:
-        // self.symbols.iter().map(|s| json!(...).to_string()).collect::<Vec<_>>().join("\n")
     }
-}
-
-impl Default for MyExchangeSubMsgBuilder {
-    fn default() -> Self { Self::new() }
 }
 ```
 
-**Multi-symbol note:** If the exchange requires one subscription message per symbol (e.g. Hyperliquid), produce newline-delimited JSON in `build()` and split it in `connection.rs` — see the multi-symbol pattern below.
+**One message per symbol** (Hyperliquid style — `build()` returns `Vec<String>`):
+
+```rust
+pub fn build(self) -> Vec<String> {
+    self.symbols.iter()
+        .map(|s| serde_json::json!({ "method": "subscribe", "subscription": { "type": "l2Book", "coin": s } }).to_string())
+        .collect()
+}
+```
+
+Use `ClientConfig::set_subscription_messages(vec)` at the call site when `build()` returns a `Vec<String>`.
 
 ### 4c. `msg_parser.rs` — message parser
 
-Implements `MessageParserTrait`. Convert raw JSON text into `Vec<OrderbookMessage>`.
+Implements `MsgParserTrait`. Convert raw JSON text into `Vec<StreamMessage>`.
 
 ```rust
-use crate::connection::MessageParserTrait;
-use crate::exchanges::myexchange::types::MyBookEvent;
+use crate::connection::MsgParserTrait;
 use crate::types::ExchangeName;
-use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookMessage, OrderbookUpdate};
+use crate::types::orderbook::{GenericOrder, OrderbookAction, StreamMessage, OrderbookUpdate};
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
-use tracing::error;
 
-pub struct MyExchangeMessageParser {
-    exchange_name: ExchangeName,
-}
+pub struct MyExchangeMessageParser;
 
-impl MyExchangeMessageParser {
-    pub fn new() -> Self {
-        Self { exchange_name: ExchangeName::MyExchange }
-    }
-}
-
-impl Default for MyExchangeMessageParser {
-    fn default() -> Self { Self::new() }
-}
-
-impl MessageParserTrait<OrderbookMessage> for MyExchangeMessageParser {
-    fn parse_message(&self, text: &str) -> Result<Vec<OrderbookMessage>> {
-        // 1. Deserialise the outer envelope
-        // 2. Match on event type / channel
-        // 3. Build Vec<GenericOrder> from bids and asks
-        // 4. Return OrderbookMessage::OrderbookUpdate(...)
+impl MsgParserTrait<StreamMessage> for MyExchangeMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
+        // 1. Deserialise outer envelope
+        // 2. Match on event type
+        // 3. Build Vec<GenericOrder> from bids/asks
+        // 4. Return StreamMessage::OrderbookUpdate(...)
         todo!()
     }
 
-    // Optional overrides — all have sensible defaults in the trait:
-
-    /// Return Some("...") if the exchange needs a custom text ping.
-    /// The infrastructure wraps this in a WebSocket binary ping control frame.
-    /// Return None to send a bare empty WebSocket ping.
+    /// Return Some("...") for a custom text ping. Return None for a bare WS ping.
     fn build_ping(&self) -> Option<String> {
         Some(r#"{"op":"ping"}"#.to_string())
     }
 
-    /// Return true if the text message is an application-level pong.
-    fn is_pong(&self, text: &str) -> bool {
-        text.contains("\"pong\"")
-    }
-
-    /// Return true if the server sends application-level pings you must respond to.
-    fn is_ping(&self, text: &str) -> bool {
-        text.contains("\"ping\"")
-    }
+    fn is_pong(&self, text: &str) -> bool { text.contains("\"pong\"") }
+    fn is_ping(&self, text: &str) -> bool { text.contains("\"ping\"") }
 }
 ```
 
 **`OrderbookAction` values:**
 
 | Action | When to use |
-|--------|------------|
-| `Snapshot` | Message replaces the entire book (most common) |
-| `Update`   | Message updates individual price levels |
-| `Delete`   | Price level should be removed (size == 0) |
-
-**Timestamp helpers:**
-
-```rust
-// From Unix milliseconds as u64:
-let ts = Utc.timestamp_millis_opt(ms as i64).single().unwrap_or_else(Utc::now);
-
-// From Unix milliseconds as a string (Polymarket style):
-use libs::time::parse_timestamp_ms;
-let ts = parse_timestamp_ms(&event.timestamp_str);
-```
+|---|---|
+| `Snapshot` | Message replaces the entire book |
+| `Update` | Message updates individual price levels |
+| `Delete` | Price level should be removed (size == 0) |
 
 **`GenericOrder` fields:**
 
@@ -223,90 +176,70 @@ GenericOrder {
     price:     f64,
     qty:       f64,
     side:      String,   // "Bid" or "Ask"
-    symbol:    String,   // exchange-native symbol key
+    symbol:    String,
     timestamp: String,   // ts.to_rfc3339()
 }
 ```
 
-### 4d. `connection.rs` — connection wrapper
-
-Thin wrapper around `ConnectionBase`. Most exchanges need nothing beyond forwarding:
+**Timestamp helpers:**
 
 ```rust
-use crate::connection::{ConnectionConfig, ConnectionTrait, SystemControl, v1::ConnectionBase};
-use crate::exchanges::myexchange::MyExchangeMessageParser;
+// From Unix milliseconds as u64:
+let ts = Utc.timestamp_millis_opt(ms as i64).single().unwrap_or_else(Utc::now);
+
+// From Unix milliseconds as a string:
+use libs::time::parse_timestamp_ms;
+let ts = parse_timestamp_ms(&event.timestamp_str);
+```
+
+### 4d. `client.rs` — connection wrapper
+
+Thin wrapper around `ClientBase`. Most exchanges need nothing beyond forwarding:
+
+```rust
+use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::types::ExchangeName;
-use crate::types::orderbook::OrderbookMessage;
-use anyhow::Result;
-use async_trait::async_trait;
+use crate::types::orderbook::StreamMessage;
 use tokio::sync::mpsc::UnboundedSender;
 
-pub struct MyExchangeConnection {
-    inner: ConnectionBase<MyExchangeMessageParser, OrderbookMessage>,
+pub struct MyExchangeClient {
+    inner: ClientBase<MyExchangeMessageParser, StreamMessage>,
 }
 
-impl MyExchangeConnection {
+impl MyExchangeClient {
     pub fn new(
-        config: ConnectionConfig,
-        message_tx: UnboundedSender<OrderbookMessage>,
+        config: ClientConfig,
+        message_tx: UnboundedSender<StreamMessage>,
         system_control: SystemControl,
     ) -> Self {
-        let inner = ConnectionBase::new(
+        let inner = ClientBase::new(
             config,
             message_tx,
             system_control,
-            MyExchangeMessageParser::new(),
+            MyExchangeMessageParser,
             ExchangeName::MyExchange,
-            vec![],   // pre_subscription_messages  (sent before subscribe, e.g. auth)
-            vec![],   // post_subscription_messages (sent after subscribe)
+            None,  // optional header builder
         );
         Self { inner }
     }
 }
 
-#[async_trait]
-impl ConnectionTrait for MyExchangeConnection {
-    async fn run(&mut self) -> Result<()> { self.inner.run().await }
-    fn get_exchange_config(&self) -> &ConnectionConfig { self.inner.get_exchange_config() }
+impl ClientTrait for MyExchangeClient {
+    async fn run(&mut self) -> anyhow::Result<()> { self.inner.run().await }
 }
 ```
 
-**Multi-symbol pattern** (one WS message per symbol):
-
-```rust
-impl MyExchangeConnection {
-    pub fn new(config: ConnectionConfig, ...) -> Self {
-        // Builder produced newline-delimited JSON — split here
-        let mut lines: Vec<String> = config.subscription_message
-            .split('\n')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        let first = if lines.is_empty() { String::new() } else { lines.remove(0) };
-        let rest  = lines;
-
-        let config = config.set_subscription_message(first);
-
-        let inner = ConnectionBase::new(config, message_tx, system_control,
-            MyExchangeMessageParser::new(), ExchangeName::MyExchange,
-            vec![],   // pre
-            rest,     // post — ConnectionBase sends these as text frames after subscribe
-        );
-        Self { inner }
-    }
-}
-```
+`ClientBase` sends each string in `config.subscription_messages` as a separate WebSocket text frame on connect, so **multi-symbol** exchanges just need `set_subscription_messages(builder.build())` at the call site — no special splitting logic needed in the client.
 
 ### 4e. `mod.rs` — re-exports
 
 ```rust
-pub mod connection;
+pub mod client;
 pub mod msg_parser;
 pub mod subscription;
 pub mod types;
 
-pub use connection::MyExchangeConnection;
+pub use client::MyExchangeClient;
 pub(crate) use msg_parser::MyExchangeMessageParser;
 pub use subscription::MyExchangeSubMsgBuilder;
 ```
@@ -319,55 +252,30 @@ pub use subscription::MyExchangeSubMsgBuilder;
 
 ```rust
 pub mod myexchange;
+use crate::exchanges::myexchange::MyExchangeClient;
 
-use crate::exchanges::myexchange::MyExchangeConnection;
-
-// Inside ConnectionFactory::create_connection():
-ExchangeName::MyExchange => Box::new(MyExchangeConnection::new(
-    self.config.clone(),
-    self.message_tx.clone(),
-    system_control,
-)),
+// Inside spawn_connection():
+ExchangeName::MyExchange => {
+    let mut c = MyExchangeClient::new(config, message_tx, system_control);
+    tokio::spawn(async move { let _ = c.run().await })
+}
 ```
 
 ---
 
-## 6. Add dynamic channel support
-
-**`orderbook/src/orderbook/system.rs`**
-
-Add import at the top:
-```rust
-use crate::exchanges::myexchange::MyExchangeSubMsgBuilder;
-```
-
-Add arm in `build_connection_config()`:
-```rust
-ExchangeName::MyExchange => MyExchangeSubMsgBuilder::new()
-    .with_symbol(&req.symbol)
-    .build(),
-```
-
-This lets clients add symbols at runtime via the ZMQ ROUTER socket `add_channel` action.
-
----
-
-## 7. Expose the public API
+## 6. Expose the public API
 
 **`orderbook/src/lib.rs`**
 
 ```rust
-pub use exchanges::myexchange::MyExchangeConnection;
-pub use exchanges::myexchange::MyExchangeSubMsgBuilder;
+pub use exchanges::myexchange::{MyExchangeClient, MyExchangeSubMsgBuilder};
 ```
 
 ---
 
-## 8. Add server CLI + config support
+## 7. Add server CLI + config support
 
 **`libs/src/configs/`**
-
-Add a config struct for the new exchange (or add fields to the top-level `Config` in `libs/src/configs/mod.rs`):
 
 ```rust
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -379,31 +287,24 @@ pub struct MyExchangeConfig {
 ```
 
 Add to the top-level `Config`:
+
 ```rust
 pub myexchange: MyExchangeConfig,
 ```
 
-**`orderbook/src/bin/orderbook_server.rs`**
+**`zmq_server/src/bin/orderbook_server.rs`**
 
-Add a CLI flag in `Args`:
 ```rust
 /// Comma-separated MyExchange symbols (overrides config file)
 #[arg(long, env = "MYEXCHANGE_SYMBOLS", value_delimiter = ',')]
 myexchange: Option<Vec<String>>,
 ```
 
-Add to `run()`:
 ```rust
-let myexchange_symbols: Vec<String> = cli_myexchange.unwrap_or_else(|| {
-    if cfg.myexchange.enabled { cfg.myexchange.symbols.clone() } else { vec![] }
-});
-
-// ...include in empty-check...
-
 if !myexchange_symbols.is_empty() {
     let refs: Vec<&str> = myexchange_symbols.iter().map(String::as_str).collect();
-    config.with_exchange(
-        ConnectionConfig::new(ExchangeName::MyExchange)
+    system_config.with_exchange(
+        ClientConfig::new(ExchangeName::MyExchange)
             .set_subscription_message(MyExchangeSubMsgBuilder::new().with_symbols(&refs).build()),
     );
 }
@@ -426,24 +327,24 @@ myexchange:
 - [ ] `connection/configs.rs` — URL match arm (+ ping_interval if non-default)
 - [ ] `exchanges/myexchange/types.rs` — wire format structs
 - [ ] `exchanges/myexchange/subscription.rs` — subscription builder
-- [ ] `exchanges/myexchange/msg_parser.rs` — `MessageParserTrait` impl
-- [ ] `exchanges/myexchange/connection.rs` — `ConnectionTrait` impl
+- [ ] `exchanges/myexchange/msg_parser.rs` — `MsgParserTrait` impl
+- [ ] `exchanges/myexchange/client.rs` — `ClientTrait` impl
 - [ ] `exchanges/myexchange/mod.rs` — re-exports
 - [ ] `exchanges/mod.rs` — factory arm
-- [ ] `orderbook/system.rs` — `build_connection_config()` arm
-- [ ] `lib.rs` — public re-exports
-- [ ] `libs/src/configs/` — config struct for new exchange
-- [ ] `bin/orderbook_server.rs` — CLI flag + exchange block
+- [ ] `orderbook/src/lib.rs` — public re-exports
+- [ ] `libs/src/configs/` — config struct
+- [ ] `zmq_server/src/bin/orderbook_server.rs` — CLI flag + exchange block
 - [ ] `configs/server.yaml` — config section
-- [ ] `cargo build` — fix any exhaustive match errors
+- [ ] `cargo check --workspace` — fix any exhaustive match errors
 
 ---
 
 ## Reference: existing connectors
 
-| Exchange | Snapshot type | Multi-symbol | Custom ping | Timestamp type |
-|----------|--------------|--------------|-------------|----------------|
-| Binance | Partial depth (incremental) | Yes — one WS msg with array | None (WS ping) | String ms |
-| OKX | Snapshot + incremental | Yes — one WS msg with array | `{"op":"ping"}` | String ms |
-| Polymarket | Snapshot + incremental diff | No — one connection per asset set | None | String ms |
-| Hyperliquid | Full snapshot every update | Yes — one msg per coin (newline-split) | `{"method":"ping"}` | u64 ms number |
+| Exchange | Snapshot type | Multi-symbol | Custom ping | Notes |
+|---|---|---|---|---|
+| Binance | Partial depth (incremental) | Single JSON array | None (WS ping) | `@depth20@100ms` stream |
+| OKX | Snapshot + incremental | Single JSON array | `{"op":"ping"}` | |
+| Polymarket | Snapshot + incremental diff | Per-asset set in one message | None | Token IDs, not symbols |
+| Hyperliquid | Full snapshot every update | `Vec<String>` — one frame per coin | `{"method":"ping"}` | Use `set_subscription_messages` |
+| Kalshi | Snapshot + signed delta | Single message | Server-side ping, client responds | RSA auth required |
