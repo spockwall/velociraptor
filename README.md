@@ -20,8 +20,8 @@ A high-performance Rust workspace for real-time market data streaming and order 
 | `orderbook` | Multi-exchange market data engine — `StreamEngine`, `StreamSystem`, connectors |
 | `zmq_server` | ZMQ transport layer — PUB (market data), ROUTER (subscriptions), PUB (user events) |
 | `recorder` | Append-only MessagePack snapshot writer with daily rotation and zstd compression |
-| `executor` | ZMQ REP gateway for REST order placement (Phase 3, stub) |
-| `backend` | Axum HTTP API for React frontend (Phase 6, stub) |
+| `executor` | ZMQ REP gateway for REST order placement (stub) |
+| `backend` | Axum HTTP API for React frontend (stub) |
 
 ---
 
@@ -29,71 +29,232 @@ A high-performance Rust workspace for real-time market data streaming and order 
 
 ### 1. Configure
 
-Edit `configs/server.yaml`:
+Copy and edit the example config:
+
+```bash
+cp configs/example.yaml configs/server.yaml
+```
+
+`configs/server.yaml` controls every exchange and storage option:
 
 ```yaml
+server:
+  pub_endpoint: "tcp://*:5555"
+  router_endpoint: "tcp://*:5556"
+
+storage:
+  enabled: false
+  base_path: "./data"
+  depth: 20
+  flush_interval: 1000   # ms
+  rotation: "daily"      # "daily" | "none"
+  zstd_level: 0          # 0 = off, 1–22 = zstd level
+
 binance:
   enabled: true
   symbols: ["btcusdt", "ethusdt"]
+
+okx:
+  enabled: true
+  symbols: ["BTC-USDT", "ETH-USDT-SWAP"]
 
 hyperliquid:
   enabled: true
   coins: ["BTC", "ETH"]
 
 kalshi:
-  enabled: true
-  tickers: ["KXBTC15M-26APR130415-15"]
+  market:
+    - enable: true
+      series: "KXBTC15M"   # 15-min BTC markets, auto-rotates
+    - enable: true
+      series: "KXETH15M"
 
 polymarket:
   markets:
     - enabled: true
-      slug: "btc-updown-5m"
-      interval_secs: 300
-
-storage:
-  enabled: true
-  base_path: "./data"
-  depth: 20
-  flush_interval: 1000
-  rotation: "daily"
-  zstd_level: 3
+      slug: "btc-updown-15m"
+      interval_secs: 900   # rolling-window length
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
 ```
 
-For Kalshi, set your RSA key pair in `credentials/kalshi.yaml`:
+For Kalshi, place your RSA credentials in `credentials/kalshi.yaml`:
 
 ```yaml
-kalshi:
-  key_id: "<your-key-id-uuid>"
-  private_key: |
-    -----BEGIN PRIVATE KEY-----
-    <your-rsa-private-key-pem>
-    -----END PRIVATE KEY-----
+key_id: "<your-key-id-uuid>"
+private_key: |
+  -----BEGIN PRIVATE KEY-----
+  <your-rsa-private-key-pem>
+  -----END PRIVATE KEY-----
+ws_url: "wss://api.elections.kalshi.com/trade-api/ws/v2"
 ```
 
-### 2. Start the server
+### 2. Start the zmq-server
 
 ```bash
 cargo run --bin orderbook_server --release -- --config configs/server.yaml
 ```
 
+The server logs its socket addresses on startup:
+
+```
+ZMQ PUB    tcp://*:5555
+ZMQ ROUTER tcp://*:5556
+ZMQ user PUB  ipc:///tmp/trading/ws_status.sock
+```
+
 ### 3. Subscribe from Python
 
 ```bash
-python3 zmq_server/examples/zmq_subscriber.py \
-    --exchange binance --symbol BTCUSDT --type snapshot --interval 500
+pip install pyzmq msgpack
 
-python3 zmq_server/examples/zmq_subscriber.py \
+# Binance BTC snapshot (default)
+python3 zmq_server/examples/orderbook_subscriber.py
+
+# OKX ETH, BBA type
+python3 zmq_server/examples/orderbook_subscriber.py \
+    --exchange okx --symbol ETH-USDT-SWAP --type bba
+
+# Hyperliquid
+python3 zmq_server/examples/orderbook_subscriber.py \
+    --exchange hyperliquid --symbol BTC
+
+# Polymarket (token ID as symbol)
+python3 zmq_server/examples/orderbook_subscriber.py \
     --exchange polymarket \
-    --symbol 75467129615908319583031474642658885479135630431889036121812713428992454630178 \
-    --type bba --interval 100
+    --symbol 71321045679252212594626385532706912750332728571942532289631379312455583992563
 ```
 
 ### 4. Read stored snapshots
 
 ```bash
 python3 scripts/read_mpack.py data/binance/BTCUSDT/
-python3 scripts/read_mpack.py data/polymarket/btc-updown-5m/2026-04-05/
+python3 scripts/read_mpack.py data/polymarket/btc-updown-15m/2026-04-05/
 ```
+
+---
+
+## ZMQ Quick Start
+
+This section shows the minimal code to connect to a running `orderbook_server`
+and receive live data, subscribe to user events, and send an order.
+
+### Receive market snapshots (Python)
+
+Two sockets are needed: a **DEALER** for the subscribe handshake and a **SUB**
+for the data stream.
+
+```python
+import zmq, msgpack
+
+ctx = zmq.Context()
+
+# 1. Send subscribe request over DEALER → ROUTER
+dealer = ctx.socket(zmq.DEALER)
+dealer.connect("tcp://localhost:5556")          # router_endpoint
+dealer.send_json({
+    "action":   "subscribe",
+    "exchange": "binance",
+    "symbol":   "BTCUSDT",
+    "type":     "snapshot",                     # or "bba"
+})
+ack = dealer.recv_json()
+assert ack["status"] == "ok", ack
+
+# 2. Receive snapshots on SUB socket
+sub = ctx.socket(zmq.SUB)
+sub.connect("tcp://localhost:5555")             # pub_endpoint (MARKET_DATA_SOCKET)
+sub.setsockopt(zmq.SUBSCRIBE, b"binance:BTCUSDT")
+
+while True:
+    _topic, payload = sub.recv_multipart()
+    snap = msgpack.unpackb(payload, raw=False)
+    exchange = next(iter(snap["exchange"]))      # {"binance": 0} → "binance"
+    print(f"[{exchange}:{snap['symbol']}]  bid={snap['best_bid']}  ask={snap['best_ask']}  wmid={snap['wmid']:.4f}")
+```
+
+**Use the full subscriber script** for all exchanges and BBA mode:
+
+```bash
+pip install pyzmq msgpack
+
+python3 zmq_server/examples/orderbook_subscriber.py                         # Binance BTC snapshot
+python3 zmq_server/examples/orderbook_subscriber.py --exchange okx --symbol BTC-USDT --type bba
+python3 zmq_server/examples/orderbook_subscriber.py --exchange hyperliquid --symbol BTC
+python3 zmq_server/examples/orderbook_subscriber.py --exchange kalshi --symbol KXBTC15M-26APR130415-15
+python3 zmq_server/examples/orderbook_subscriber.py \
+    --exchange polymarket \
+    --symbol 71321045679252212594626385532706912750332728571942532289631379312455583992563
+```
+
+> **`exchange` encoding:** `rmp-serde` encodes Rust enum variants as a
+> single-key msgpack map — `{"Binance": 0}`. Extract the name with
+> `next(iter(snap["exchange"]))`.
+
+### Receive user events (Python)
+
+No handshake needed — connect directly to the user PUB socket and set a topic
+filter.
+
+```python
+import zmq, msgpack
+
+ctx = zmq.Context()
+sub = ctx.socket(zmq.SUB)
+sub.connect("ipc:///tmp/trading/ws_status.sock")   # WS_STATUS_SOCKET
+
+# Filter to one exchange, or b"user." for all
+sub.setsockopt(zmq.SUBSCRIBE, b"user.polymarket.")
+
+while True:
+    topic, payload = sub.recv_multipart()
+    ev = msgpack.unpackb(payload, raw=False)
+    kind = ev.get("type")
+    if kind == "fill":
+        print(f"FILL  {ev['side']} {ev['qty']} @ {ev['px']}  fee={ev['fee']}")
+    elif kind == "order_update":
+        print(f"ORDER {ev['status']}  oid={ev['exchange_oid']}")
+```
+
+### Send an order (Python)
+
+Connect a REQ socket to the executor. All frames are msgpack.
+
+```python
+import zmq, msgpack
+
+ctx = zmq.Context()
+req = ctx.socket(zmq.REQ)
+req.connect("ipc:///tmp/trading/executor_orders.sock")   # EXECUTOR_ORDER_SOCKET
+
+order = {
+    "req_id":   1,
+    "exchange": "polymarket",
+    "action":   "place",
+    "client_oid": "my-order-001",
+    "symbol":   "<token_id>",
+    "side":     "buy",
+    "kind":     "limit",
+    "px":       0.55,
+    "qty":      10.0,
+    "tif":      "GTC",
+}
+req.send(msgpack.packb(order, use_bin_type=True))
+response = msgpack.unpackb(req.recv(), raw=False)
+print(response)   # {"req_id": 1, "result": {"result": "ack", ...}}
+```
+
+### Unsubscribe
+
+Send an unsubscribe request on the same DEALER socket before closing:
+
+```python
+dealer.send_json({"action": "unsubscribe", "exchange": "binance", "symbol": "BTCUSDT"})
+```
+
+See [`docs/protocol.md`](docs/protocol.md) for all socket addresses, topic
+formats, payload schemas, and `OrderAction` variants.
 
 ---
 
@@ -124,13 +285,15 @@ See [`docs/systemd.md`](docs/systemd.md) for restart policy details and update p
 cargo run --example polymarket_orderbook --release
 ```
 
+Config: `configs/polymarket.yaml`
+
 ### Disk recorder
 
 Writes every orderbook snapshot per window per side:
 
 ```
-data/polymarket/btc-updown-5m/2026-04-05/09:55-10:00-up.mpack
-                                         09:55-10:00-down.mpack
+data/polymarket/btc-updown-15m/2026-04-05/09:45-10:00-up.mpack
+                                           09:45-10:00-down.mpack
 ```
 
 ```bash
@@ -143,16 +306,16 @@ See [`docs/polymarket.md`](docs/polymarket.md) for file format and Python reader
 
 ## Kalshi Tools
 
-Kalshi is a CFTC-regulated prediction market. This project streams rolling 15-minute BTC and ETH price direction markets. Authentication is required even for market data.
+Kalshi is a CFTC-regulated prediction market. Authentication is required even for market data.
 
 ```bash
 cp credentials/example.yaml credentials/kalshi.yaml
-# fill in api_key / private_key
+# fill in key_id / private_key / ws_url
 
-cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.yaml \
-    --credentials credentials/kalshi.yaml
+cargo run --example kalshi_orderbook --release
 ```
+
+Config: `configs/kalshi.yaml`. The scheduler auto-rotates to the next 15-minute window.
 
 See [`docs/kalshi.md`](docs/kalshi.md) for ticker format and scheduler details.
 
@@ -177,17 +340,17 @@ Three layers: **exchange connectors** push raw wire data into the **stream engin
 │  └──────────────┘  │  DashMap<"exchange:symbol", Arc<Orderbook>> │  │
 │                    │                                             │  │
 │  ┌──────────────┐  │  HookRegistry  (sync, in-task)             │  │
-│  │ Hyperliquid  │ ─►    .on::<StreamSnapshot, _>(|s| ...)        │  │
+│  │ Hyperliquid  │ ─►    .on::<OrderbookSnapshot, _>(|s| ...)     │  │
 │  │   Client     │  │    .on::<OrderbookUpdate, _>(|u| ...)       │  │
 │  └──────────────┘  │    .on::<UserEvent, _>(|e| ...)             │  │
 │                    │                                             │  │
 │  ┌──────────────┐  │  broadcast::Sender<StreamEvent>             │  │
 │  │   Kalshi     │ ─►    OrderbookRaw(OrderbookUpdate)            │  │
-│  │   Client     │  │    OrderbookSnapshot(StreamSnapshot)        │  │
+│  │   Client     │  │    OrderbookSnapshot(OrderbookSnapshot)     │  │
 │  └──────────────┘  │    User(UserEvent)                          │  │
 │                    └────────────────┬────────────────────────────┘  │
 └─────────────────────────────────────│────────────────────────────────┘
-                                      │ StreamEngineBus (broadcast subscribe)
+                                      │ StreamEngineBus
                          ┌────────────┴──────────────┐
                          ▼                            ▼
                ┌──────────────────┐        ┌──────────────────┐
@@ -202,15 +365,15 @@ Three layers: **exchange connectors** push raw wire data into the **stream engin
 
 ```
 Exchange WebSocket
-  → ClientBase.handle_message()        parse raw text
-  → MsgParserTrait.parse_message()     returns Vec<StreamMessage>
+  → ClientBase.handle_message()
+  → MsgParserTrait.parse_message()     → Vec<StreamMessage>
   → mpsc channel
   → StreamEngine loop
       ├─► HookRegistry.fire(&update)        (sync, before apply)
       ├─► broadcast OrderbookRaw(update)
       ├─► Orderbook.apply_update(update)    (Arc::make_mut copy-on-write)
       ├─► HookRegistry.fire(&snapshot)      (sync, after apply)
-      └─► broadcast OrderbookSnapshot(snap)
+      └─► broadcast OrderbookSnapshot(snap) → ZmqServer PUB (every update)
 ```
 
 ---
@@ -224,30 +387,30 @@ Register hooks on the engine **before** handing it to `StreamSystem`:
 ```rust
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use orderbook::connection::{ClientConfig, SystemControl};
-use libs::protocol::{ExchangeName, StreamSnapshot};
+use libs::protocol::{ExchangeName, OrderbookSnapshot};
 
 let mut engine = StreamEngine::new(1024, 20);  // (broadcast_capacity, snapshot_depth)
 
-// Register typed hooks — fire synchronously in the engine task after broadcast.
-engine.hooks_mut().on::<StreamSnapshot, _>(move |snap| {
+engine.hooks_mut().on::<OrderbookSnapshot, _>(|snap: &OrderbookSnapshot| {
     println!("[{}:{}] bid={:?} ask={:?}", snap.exchange, snap.symbol, snap.best_bid, snap.best_ask);
 });
 
 let mut cfg = StreamSystemConfig::new();
 cfg.with_exchange(
     ClientConfig::new(ExchangeName::Binance)
-        .set_subscription_message(BinanceSubMsgBuilder::new().with_orderbook_channel(&["btcusdt"]).build()),
+        .set_subscription_message(
+            BinanceSubMsgBuilder::new().with_orderbook_channel(&["btcusdt"]).build()
+        ),
 );
 
-let system_control = SystemControl::new();
-let system = StreamSystem::new(engine, cfg, system_control.clone())?;
+let system = StreamSystem::new(engine, cfg, SystemControl::new())?;
 system.run().await?;
 ```
 
 ### Broadcast subscribers (async, out-of-task)
 
 ```rust
-let mut rx = engine.subscribe_event();   // before engine.start() / StreamSystem::new()
+let mut rx = engine.subscribe_event();   // before StreamSystem::new()
 
 tokio::spawn(async move {
     while let Ok(ev) = rx.recv().await {
@@ -287,13 +450,13 @@ engine.start(ctrl)           -> StreamEngineHandle
 ### HookRegistry
 
 ```rust
-// Register — call before engine.start() / StreamSystem::new()
-engine.hooks_mut().on::<StreamSnapshot, _>(|s: &StreamSnapshot| { ... });
+// Register before engine.start() / StreamSystem::new()
+engine.hooks_mut().on::<OrderbookSnapshot, _>(|s: &OrderbookSnapshot| { ... });
 engine.hooks_mut().on::<OrderbookUpdate, _>(|u: &OrderbookUpdate| { ... });
 engine.hooks_mut().on::<UserEvent, _>(|e: &UserEvent| { ... });
 
 // Hooks fire synchronously inside the engine task, after broadcast, in registration order.
-// Keep handlers cheap and non-blocking.
+// Keep handlers cheap and non-blocking — a slow hook slows the engine loop.
 ```
 
 ### StreamEvent variants
@@ -301,15 +464,15 @@ engine.hooks_mut().on::<UserEvent, _>(|e: &UserEvent| { ... });
 | Variant | When | Payload |
 |---|---|---|
 | `OrderbookRaw(OrderbookUpdate)` | Before update is applied | Raw wire data |
-| `OrderbookSnapshot(StreamSnapshot)` | After update is applied | Full materialized book |
+| `OrderbookSnapshot(OrderbookSnapshot)` | After update is applied | Full materialized book |
 | `User(UserEvent)` | On private channel event | Fill, OrderUpdate, Balance, Position |
 
-### StreamSnapshot fields
+### OrderbookSnapshot fields
 
 ```rust
-pub exchange: ExchangeName
-pub symbol:   String
-pub sequence: u64
+pub exchange:  ExchangeName
+pub symbol:    String
+pub sequence:  u64
 pub timestamp: DateTime<Utc>
 pub best_bid:  Option<(f64, f64)>   // (price, qty)
 pub best_ask:  Option<(f64, f64)>
@@ -366,8 +529,7 @@ BinanceSubMsgBuilder::new()
 
 ```rust
 OkxSubMsgBuilder::new()
-    .with_orderbook_channel("BTC-USDT-SWAP", "SWAP")
-    .with_orderbook_channel_multi(vec!["ETH-USDT", "SOL-USDT"], "SPOT")
+    .with_orderbook_channel_multi(vec!["BTC-USDT", "ETH-USDT-SWAP"], "SPOT")
     .build()   // -> String
 ```
 
@@ -376,12 +538,6 @@ OkxSubMsgBuilder::new()
 ```rust
 PolymarketSubMsgBuilder::new()
     .with_asset("71321045679252212594626385532706912750332728571942532289631379312455583992563")
-    .build()   // -> String
-
-// User (private) channel
-PolymarketUserSubMsgBuilder::new()
-    .with_auth(&api_key, &secret, &passphrase)
-    .with_condition(&condition_id)
     .build()   // -> String
 ```
 
@@ -409,56 +565,168 @@ KalshiSubMsgBuilder::new()
 
 ## ZMQ Interface
 
-The server exposes three ZMQ sockets.
+All payloads are **msgpack** (`rmp-serde`). All sockets are IPC under `/tmp/trading/` (constants in `libs::constants`).
 
-### Market PUB socket — `pub_endpoint` (default `tcp://*:5555`)
-
-Publishes throttled orderbook data as two-part frames `[topic, msgpack_payload]`.
-
-Topic format: `"{exchange}:{symbol}"` — e.g. `"binance:BTCUSDT"`, `"polymarket:<token_id>"`
-
-### ROUTER socket — `router_endpoint` (default `tcp://*:5556`)
-
-Clients connect a DEALER socket to send subscription requests and receive acks.
-
-```json
-{ "action": "subscribe", "exchange": "binance", "symbol": "BTCUSDT", "type": "snapshot", "interval": 500 }
-{ "action": "unsubscribe", "exchange": "binance", "symbol": "BTCUSDT" }
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Socket                   Pattern    Direction   Payload encoding        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  MARKET_DATA_SOCKET       PUB/SUB    server→sub  msgpack                 │
+│  ipc:///tmp/trading/market_data.sock                                    │
+│                                                                         │
+│  router_endpoint          ROUTER     client→srv  JSON (control only)    │
+│  (config: tcp://*:5556)   /DEALER    server→cli  JSON (ack)             │
+│                                                                         │
+│  WS_STATUS_SOCKET         PUB/SUB    server→sub  msgpack                │
+│  ipc:///tmp/trading/ws_status.sock                                      │
+│                                                                         │
+│  EXECUTOR_ORDER_SOCKET    REQ/REP    engine→exe  msgpack                │
+│  ipc:///tmp/trading/executor_orders.sock                                │
+│                                                                         │
+│  CONTROL_SOCKET           PUB/SUB    backend→all msgpack                │
+│  ipc:///tmp/trading/control.sock                                        │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Field | Values | Notes |
-|---|---|---|
-| `action` | `subscribe` `unsubscribe` | |
-| `exchange` | `binance` `okx` `polymarket` `hyperliquid` `kalshi` | |
-| `symbol` | e.g. `BTCUSDT`, `BTC-USDT`, `<token_id>` | Exchange-native format |
-| `type` | `snapshot` `bba` | Required for subscribe |
-| `interval` | milliseconds | Required for subscribe |
+---
 
-Ack format: `{"status": "ok"|"error", "exchange"?: ..., "symbol"?: ..., "type"?: ..., "interval"?: ..., "message"?: ...}`
+### Market PUB — `MARKET_DATA_SOCKET`
 
-### User-event PUB socket — `user_pub_endpoint` (default `WS_STATUS_SOCKET`)
+Broadcasts orderbook frames on every engine update. Frame: `[topic_bytes, msgpack_payload]`.
 
-Publishes private account events as `[topic, msgpack_payload]`.
+**Topic:** `"{exchange}:{symbol}"` — e.g. `"binance:btcusdt"`, `"polymarket:<token_id>"`
 
-Topic format: `"user.{exchange}.{kind}"` — e.g. `"user.polymarket.fill"`, `"user.kalshi.order_update"`
+Clients filter by topic prefix using ZMQ's built-in `SUBSCRIBE` option. They must also send a subscribe request to the ROUTER first so the server tracks them in its registry (see below).
 
-### Data types
+**Payload types** — selected at subscribe time via `"type"` field:
 
-| `type` | Published fields |
+| Type | msgpack fields |
 |---|---|
 | `snapshot` | `exchange`, `symbol`, `sequence`, `timestamp`, `best_bid`, `best_ask`, `spread`, `mid`, `wmid`, `bids`, `asks` |
 | `bba` | `exchange`, `symbol`, `sequence`, `timestamp`, `best_bid`, `best_ask`, `spread` |
+
+`best_bid` / `best_ask` are `[price, qty]` tuples or `null`. `bids` / `asks` are arrays of `[price, qty]`, best-first.
+
+`exchange` is encoded as a single-key msgpack map, e.g. `{"binance": 0}` — the Python subscriber normalises this automatically (see example script).
+
+---
+
+### ROUTER — `router_endpoint`
+
+**Control plane only.** Clients connect a DEALER socket to subscribe or unsubscribe. All frames are JSON. The ROUTER never sends market data — it only sends acks.
+
+**Subscribe:**
+```json
+{"action": "subscribe", "exchange": "binance", "symbol": "btcusdt", "type": "snapshot"}
+```
+
+**Unsubscribe:**
+```json
+{"action": "unsubscribe", "exchange": "binance", "symbol": "btcusdt"}
+```
+
+| Field | Values |
+|---|---|
+| `action` | `subscribe` \| `unsubscribe` |
+| `exchange` | `binance` `okx` `polymarket` `hyperliquid` `kalshi` |
+| `symbol` | Exchange-native format — `btcusdt`, `BTC-USDT`, `<token_id>`, `KXBTC15M-…` |
+| `type` | `snapshot` \| `bba` — required on subscribe, ignored on unsubscribe |
+
+**Ack** (always sent back to the requesting client):
+```json
+{"status": "ok", "exchange": "binance", "symbol": "btcusdt", "type": "snapshot"}
+{"status": "error", "message": "parse error: ..."}
+```
+
+---
+
+### User-event PUB — `WS_STATUS_SOCKET`
+
+Broadcasts private account events. No subscription handshake — clients connect a SUB socket and set a topic filter. Frame: `[topic_bytes, msgpack_payload]`.
+
+**Topic:** `"user.{exchange}.{kind}"`
+
+| Kind | Topic example | When fired |
+|---|---|---|
+| `fill` | `user.polymarket.fill` | Trade executed |
+| `order_update` | `user.kalshi.order_update` | Order placed / partially filled / cancelled |
+| `balance` | `user.binance.balance` | Account balance changed |
+| `position` | `user.hyperliquid.position` | Position updated |
+
+**Payload** — msgpack of `UserEvent` (tagged union, `"type"` field discriminates):
+
+```
+Fill:        { type, exchange, client_oid, exchange_oid, symbol, side, px, qty, fee, ts_ns }
+OrderUpdate: { type, exchange, client_oid, exchange_oid, symbol, side, px, qty, filled, status, ts_ns }
+Balance:     { type, exchange, asset, free, locked, ts_ns }
+Position:    { type, exchange, symbol, size, avg_px, ts_ns }
+```
+
+`side` is `"buy"` or `"sell"`. `status` is one of `"new"`, `"partially_filled"`, `"filled"`, `"canceled"`, `"rejected"`, `"expired"`.
+
+---
+
+### Executor REQ/REP — `EXECUTOR_ORDER_SOCKET`
+
+**Order placement gateway.** The Python engine sends `OrderRequest` and receives `OrderResponse` synchronously. Frame: raw msgpack (no topic prefix — REQ/REP is point-to-point).
+
+**Request** (`OrderRequest`):
+```
+{ req_id: u64, exchange: ExchangeName, action: OrderAction }
+```
+
+**`OrderAction` variants:**
+
+| Action | Extra fields |
+|---|---|
+| `place` | `client_oid`, `symbol`, `side`, `kind` (`limit`\|`market`), `px`, `qty`, `tif` (`GTC`\|`IOC`\|`FOK`\|`GTD`) |
+| `place_batch` | `orders: [PlaceOne, ...]` |
+| `update` | `client_oid`, `exchange_oid`, `new_px?`, `new_qty?` |
+| `cancel` | `exchange_oid` |
+| `cancel_all` | — |
+| `cancel_market` | `symbol` |
+| `heartbeat` | — (dead-man-switch ping; executor cancels all orders if missed) |
+
+**Response** (`OrderResponse`):
+```
+{ req_id: u64, result: Ok(OrderResult) | Err(OrderError) }
+```
+
+`OrderResult` variants: `ack`, `batch_ack`, `cancel_count`, `heartbeat_ok`.
+`OrderError` variants: `risk_rejected`, `kill_switch`, `duplicate_client_oid`, `exchange_rejected`, `network`, `timeout`, `not_found`, `internal`.
+
+---
+
+### Control PUB — `CONTROL_SOCKET`
+
+**Broadcast control messages** from `backend` or CLI to all services. Clients subscribe with no topic filter (receive all). Frame: `[topic_bytes, msgpack_payload]` where topic is the message type.
+
+**`ControlMessage` variants** (msgpack tagged by `"type"` field):
+
+| Type | Fields | Effect |
+|---|---|---|
+| `shutdown` | — | All services stop cleanly |
+| `pause` | `service: String` | Named service pauses processing |
+| `resume` | `service: String` | Named service resumes |
+| `strategy_params` | `(JSON value)` | Engine reloads strategy parameters |
+| `terminate_strategy` | — | Engine stops current strategy |
 
 ---
 
 ## Python Client
 
-### Minimal snippet — Binance snapshot
+### Minimal — subscribe via DEALER then read PUB
 
 ```python
 import zmq, msgpack
 
 ctx = zmq.Context()
+
+dealer = ctx.socket(zmq.DEALER)
+dealer.connect("tcp://localhost:5556")
+dealer.send_json({"action": "subscribe", "exchange": "binance", "symbol": "BTCUSDT", "type": "snapshot"})
+print("ack:", dealer.recv_json())
+
 sub = ctx.socket(zmq.SUB)
 sub.connect("tcp://localhost:5555")
 sub.setsockopt(zmq.SUBSCRIBE, b"binance:BTCUSDT")
@@ -469,53 +737,32 @@ while True:
     print(f"bid={snap['best_bid']}  ask={snap['best_ask']}  wmid={snap['wmid']:.4f}")
 ```
 
-### Minimal snippet — subscribe via DEALER + read PUB
+### Full subscriber script
 
-```python
-import zmq, msgpack
-
-ctx = zmq.Context()
-
-dealer = ctx.socket(zmq.DEALER)
-dealer.connect("tcp://localhost:5556")
-dealer.send_json({"action": "subscribe", "exchange": "binance", "symbol": "BTCUSDT", "type": "snapshot", "interval": 500})
-print("ack:", dealer.recv_json())
-
-sub = ctx.socket(zmq.SUB)
-sub.connect("tcp://localhost:5555")
-sub.setsockopt(zmq.SUBSCRIBE, b"binance:BTCUSDT")
-
-while True:
-    topic, payload = sub.recv_multipart()
-    snap = msgpack.unpackb(payload, raw=False)
-    print(snap)
+```bash
+python3 zmq_server/examples/orderbook_subscriber.py --exchange binance --symbol BTCUSDT
+python3 zmq_server/examples/orderbook_subscriber.py --exchange okx --symbol ETH-USDT-SWAP --type bba
+python3 zmq_server/examples/orderbook_subscriber.py --exchange hyperliquid --symbol BTC
 ```
+
+> **Note:** `ExchangeName` is encoded as a single-key msgpack map, e.g. `{"Binance": 0}`.
+> The subscriber script normalises this automatically.
 
 ---
 
 ## Server Configuration
 
-All options can be set via a YAML config file, environment variables, or CLI flags (CLI takes precedence).
+All options are set via the YAML config file. Only `--config`, `--log-level`, and `--log-json` are accepted as CLI flags.
 
-| Env var | Flag | Default | Description |
+| CLI flag | Env var | Default | Description |
 |---|---|---|---|
-| `PUB_ENDPOINT` | `--pub-endpoint` | `tcp://*:5555` | ZMQ market PUB socket |
-| `ROUTER_ENDPOINT` | `--router-endpoint` | `tcp://*:5556` | ZMQ ROUTER socket |
-| `DEPTH_LEVELS` | `--depth` | `20` | Orderbook depth per snapshot |
-| `BINANCE_SYMBOLS` | `--binance` | *(none)* | Comma-separated Binance symbols |
-| `OKX_SYMBOLS` | `--okx` | *(none)* | Comma-separated OKX symbols |
-| `HYPERLIQUID_COINS` | `--hyperliquid` | *(none)* | Comma-separated Hyperliquid coins |
-| `LOG_LEVEL` | `--log-level` | `info` | Tracing filter |
-| `LOG_JSON` | `--log-json` | `false` | JSON log output |
+| `--config` | `CONFIG_FILE` | `configs/server.yaml` | Path to YAML config |
+| `--log-level` | `LOG_LEVEL` | `info` | Tracing filter string |
+| `--log-json` | `LOG_JSON` | `false` | Emit JSON-formatted logs |
 
 ```bash
-cargo run --bin orderbook_server --release -- \
-    --binance btcusdt,ethusdt \
-    --okx BTC-USDT,ETH-USDT \
-    --hyperliquid BTC,ETH \
-    --depth 10 \
-    --pub-endpoint tcp://*:5555 \
-    --router-endpoint tcp://*:5556
+cargo run --bin orderbook_server --release -- --config configs/server.yaml
+cargo run --bin orderbook_server --release -- --config configs/server.yaml --log-level debug
 ```
 
 ---
@@ -546,27 +793,26 @@ python3 scripts/read_mpack.py data/binance/BTCUSDT/   # all dates
 ```bash
 # Build
 cargo build --release
-cargo build --bin orderbook_server --release
 
 # Check / lint / format
-cargo check
+cargo check --workspace
 cargo fmt
 cargo clippy
 
 # Run server
 cargo run --bin orderbook_server --release -- --config configs/server.yaml
-cargo run --bin orderbook_server --release -- --binance btcusdt,ethusdt --depth 10
 
-# Polymarket tools
+# Terminal visualisers
 cargo run --example polymarket_orderbook --release
+cargo run --example kalshi_orderbook --release
+cargo run --example orderbook --release          # multi-exchange TUI
+
+# Disk recorder (Polymarket)
 cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
 
-# Kalshi tools
-cargo run --example kalshi_orderbook --release -- --config configs/kalshi.yaml
-
-# Multi-exchange TUI example
-cargo run --example orderbook
-
-# ZMQ publisher example
+# ZMQ publisher example (connects to a running server)
 cargo run --example zmq_publisher
+
+# Python subscriber
+python3 zmq_server/examples/orderbook_subscriber.py
 ```
