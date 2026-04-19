@@ -175,7 +175,7 @@ impl Orderbook {
             OrderSide::Ask => &mut self.ask_levels,
         };
         if levels.remove(&price_key).is_none() {
-            warn!("Delete for unknown price level: {}", order.price);
+            debug!("Delete for unknown price level {} (stale delta, safe to ignore)", order.price);
         }
     }
 

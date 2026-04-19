@@ -7,7 +7,6 @@ use anyhow::Result;
 use libs::protocol::{ExchangeName, OrderStatus, Side, UserEvent};
 use libs::time::now_ns;
 use libs::time::parse_timestamp_ms;
-use std::collections::HashMap;
 use tracing::{error, info, warn};
 
 /// Parses all Polymarket WebSocket messages — both public market-channel events
@@ -176,8 +175,9 @@ impl PolymarketMessageParser {
         let ts = parse_timestamp_ms(&event.timestamp);
         let ts_str = ts.to_rfc3339();
 
-        // Group changes by asset_id — each asset gets its own OrderbookUpdate.
-        let mut per_asset: HashMap<String, (OrderbookAction, Vec<GenericOrder>)> = HashMap::new();
+        // Each price change is independent: qty==0 → Delete, qty>0 → Update.
+        // Emit one StreamMessage per change so actions are never mixed across levels.
+        let mut messages_acc: Vec<StreamMessage> = Vec::new();
 
         for change in &event.price_changes {
             let Ok(price) = change.price.parse::<f64>() else {
@@ -204,38 +204,22 @@ impl PolymarketMessageParser {
                 }
             };
 
-            let entry = per_asset
-                .entry(change.asset_id.clone())
-                .or_insert_with(|| (action.clone(), Vec::new()));
-
-            if matches!(action, OrderbookAction::Delete) {
-                entry.0 = OrderbookAction::Delete;
-            }
-
-            entry.1.push(GenericOrder {
-                price,
-                side: side.to_string(),
-                qty,
+            messages_acc.push(StreamMessage::OrderbookUpdate(OrderbookUpdate {
+                action,
+                orders: vec![GenericOrder {
+                    price,
+                    side: side.to_string(),
+                    qty,
+                    symbol: change.asset_id.clone(),
+                    timestamp: ts_str.clone(),
+                }],
                 symbol: change.asset_id.clone(),
-                timestamp: ts_str.clone(),
-            });
+                timestamp: ts,
+                exchange: self.exchange_name.clone(),
+            }));
         }
 
-        let messages = per_asset
-            .into_iter()
-            .filter(|(_, (_, orders))| !orders.is_empty())
-            .map(|(symbol, (action, orders))| {
-                StreamMessage::OrderbookUpdate(OrderbookUpdate {
-                    action,
-                    orders,
-                    symbol,
-                    timestamp: ts,
-                    exchange: self.exchange_name.clone(),
-                })
-            })
-            .collect();
-
-        Ok(messages)
+        Ok(messages_acc)
     }
 
     // ── User channel ──────────────────────────────────────────────────────────
