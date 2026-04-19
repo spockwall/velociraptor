@@ -8,4 +8,4 @@ pub mod handler;
 pub mod registry;
 
 pub use handler::handle_control;
-pub use registry::{Registry, dispatch};
+pub use registry::{dispatch, Registry};

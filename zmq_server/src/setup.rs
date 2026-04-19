@@ -12,12 +12,12 @@ use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::kalshi::{
-    KalshiSubMsgBuilder, WindowTask as KalshiWindowTask, run_rolling_scheduler as kalshi_rolling,
+    run_rolling_scheduler as kalshi_rolling, KalshiSubMsgBuilder, WindowTask as KalshiWindowTask,
 };
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::exchanges::polymarket::{
-    PolymarketSubMsgBuilder, WindowTask as PolymarketWindowTask, resolve_assets_with_labels,
-    run_rolling_scheduler as polymarket_rolling,
+    resolve_assets_with_labels, run_rolling_scheduler as polymarket_rolling,
+    PolymarketSubMsgBuilder, WindowTask as PolymarketWindowTask,
 };
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use recorder::{RecorderEvent, RotationPolicy, StorageConfig, StorageWriter};
@@ -36,8 +36,11 @@ pub fn add_binance(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
     }
     let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
     cfg.with_exchange(
-        ClientConfig::new(ExchangeName::Binance)
-            .set_subscription_message(BinanceSubMsgBuilder::new().with_orderbook_channel(&refs).build()),
+        ClientConfig::new(ExchangeName::Binance).set_subscription_message(
+            BinanceSubMsgBuilder::new()
+                .with_orderbook_channel(&refs)
+                .build(),
+        ),
     );
     info!(symbols = ?symbols, "Binance enabled");
     true
@@ -50,8 +53,11 @@ pub fn add_okx(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
     }
     let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
     cfg.with_exchange(
-        ClientConfig::new(ExchangeName::Okx)
-            .set_subscription_message(OkxSubMsgBuilder::new().with_orderbook_channel_multi(refs, "SPOT").build()),
+        ClientConfig::new(ExchangeName::Okx).set_subscription_message(
+            OkxSubMsgBuilder::new()
+                .with_orderbook_channel_multi(refs, "SPOT")
+                .build(),
+        ),
     );
     info!(symbols = ?symbols, "OKX enabled");
     true
@@ -106,9 +112,11 @@ pub fn attach_storage(
     let (rec_tx, rec_rx) = broadcast::channel::<RecorderEvent>(1024);
     {
         let tx = rec_tx.clone();
-        engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-            let _ = tx.send(RecorderEvent::Snapshot(snap.clone()));
-        });
+        engine
+            .hooks_mut()
+            .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+                let _ = tx.send(RecorderEvent::Snapshot(snap.clone()));
+            });
     }
     {
         use orderbook::types::orderbook::OrderbookUpdate;
@@ -147,7 +155,7 @@ pub fn build_system(
 
 /// Start the ZMQ server and attach its handle to `system`.
 pub fn attach_zmq(system: &mut StreamSystem, server_pub: &str, server_router: &str) {
-    let handle = ZmqServer::new(server_pub, server_router, WS_STATUS_SOCKET)
+    let handle = ZmqServer::new(server_router, server_pub, WS_STATUS_SOCKET)
         .start(Arc::new(system.engine_bus()));
     system.attach_handle(handle);
     info!("ZMQ PUB    {}", server_pub);
@@ -186,7 +194,11 @@ async fn spawn_polymarket_window(
 ) -> Option<PolymarketWindowTask> {
     use libs::configs::PolymarketMarketConfig;
 
-    let single = vec![PolymarketMarketConfig { enabled: true, slug: full_slug.clone(), interval_secs: 0 }];
+    let single = vec![PolymarketMarketConfig {
+        enabled: true,
+        slug: full_slug.clone(),
+        interval_secs: 0,
+    }];
     let labeled = tokio::task::spawn_blocking({
         let single = single.clone();
         move || resolve_assets_with_labels(&single)
@@ -212,16 +224,18 @@ async fn spawn_polymarket_window(
 
     let control = SystemControl::new();
     let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, depth);
-    engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-        debug!(
-            exchange = %snap.exchange,
-            symbol = %snap.symbol,
-            seq = snap.sequence,
-            bid = ?snap.best_bid,
-            ask = ?snap.best_ask,
-            "polymarket snapshot"
-        );
-    });
+    engine
+        .hooks_mut()
+        .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+            debug!(
+                exchange = %snap.exchange,
+                symbol = %snap.symbol,
+                seq = snap.sequence,
+                bid = ?snap.best_bid,
+                ask = ?snap.best_ask,
+                "polymarket snapshot"
+            );
+        });
 
     let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
     let ctrl = control.clone();
@@ -253,7 +267,10 @@ pub fn spawn_kalshi_schedulers(
     let creds = match std::fs::metadata(credentials_path) {
         Ok(_) => KalshiCredentials::load(credentials_path),
         Err(_) => {
-            warn!(path = credentials_path, "Kalshi credentials file not found — skipping Kalshi");
+            warn!(
+                path = credentials_path,
+                "Kalshi credentials file not found — skipping Kalshi"
+            );
             return vec![];
         }
     };
@@ -293,16 +310,18 @@ async fn spawn_kalshi_window(
 
     let control = SystemControl::new();
     let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, depth);
-    engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-        debug!(
-            series = %series,
-            symbol = %snap.symbol,
-            seq = snap.sequence,
-            bid = ?snap.best_bid,
-            ask = ?snap.best_ask,
-            "kalshi snapshot"
-        );
-    });
+    engine
+        .hooks_mut()
+        .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+            debug!(
+                series = %series,
+                symbol = %snap.symbol,
+                seq = snap.sequence,
+                bid = ?snap.best_bid,
+                ask = ?snap.best_ask,
+                "kalshi snapshot"
+            );
+        });
 
     let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
     let ctrl = control.clone();

@@ -1,16 +1,16 @@
 //! Per-subscription state and the market-data dispatch fan-out.
 
-use crate::frame::market::{build_payload, topic_for};
-use crate::protocol::SubscriptionRequest;
-use crate::types::{Action, SubscriptionKey, SubscriptionState, SubscriptionType};
-use orderbook::OrderbookSnapshot;
+use crate::protocol::{Action, SubscriptionKey, SubscriptionRequest, SubscriptionType};
+use crate::topics::Topic;
+use crate::topics::{bba::BbaTopic, snapshot::SnapshotTopic};
+use libs::protocol::OrderbookSnapshot;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
 
-pub type Registry = HashMap<SubscriptionKey, SubscriptionState>;
+pub type Registry = HashMap<SubscriptionKey, SubscriptionType>;
 
 /// Apply a subscribe/unsubscribe request to the registry.
-pub(super) fn apply_request(
+pub(super) fn handle_request(
     req: &SubscriptionRequest,
     client_id: Vec<u8>,
     registry: &mut Registry,
@@ -30,14 +30,17 @@ pub(super) fn apply_request(
                 }
             };
             info!(
-                "Client {:?} subscribed {:?} {}:{}",
-                client_id, sub_type, req.exchange, req.symbol
+                "Client {client_id:?} subscribed {sub_type:?} {}:{}",
+                req.exchange, req.symbol
             );
-            registry.insert(key, SubscriptionState { subscription_type: sub_type });
+            registry.insert(key, sub_type);
         }
         Action::Unsubscribe => {
             registry.remove(&key);
-            info!("Client {:?} unsubscribed {}:{}", client_id, req.exchange, req.symbol);
+            info!(
+                "Client {:?} unsubscribed {}:{}",
+                client_id, req.exchange, req.symbol
+            );
         }
     }
 }
@@ -48,13 +51,17 @@ pub fn dispatch(snap: &OrderbookSnapshot, registry: &Registry) -> Vec<(String, V
     let sym = &snap.symbol;
     let mut out = Vec::new();
 
-    for (key, state) in registry.iter() {
+    for (key, sub_type) in registry.iter() {
         if key.exchange != ex || &key.symbol != sym {
             continue;
         }
-        match build_payload(snap, &state.subscription_type) {
-            Ok(bytes) => out.push((topic_for(ex, sym), bytes)),
-            Err(e) => error!("msgpack serialize error: {e}"),
+        let frame = match sub_type {
+            SubscriptionType::Snapshot => SnapshotTopic(snap).frame(),
+            SubscriptionType::Bba => BbaTopic(snap).frame(),
+        };
+        match frame {
+            Some(f) => out.push(f),
+            None => error!("msgpack encode error for {ex}:{sym}"),
         }
     }
     out
