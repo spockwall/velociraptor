@@ -8,4 +8,4 @@ pub mod publish;
 pub mod router;
 
 pub use publish::PubSocket;
-pub use router::RouterSocket;
+pub use router::{parse_router_frames, RouterSocket};

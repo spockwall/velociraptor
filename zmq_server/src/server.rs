@@ -12,9 +12,10 @@
 //! via the `StreamEventSource` trait, so it is decoupled from the `orderbook`
 //! crate.
 
-use crate::control::{Registry, dispatch, handle_control};
-use crate::frame::user as user_frame;
-use crate::socket::{PubSocket, RouterSocket};
+use crate::control::{dispatch, handle_control, Registry};
+use crate::socket::{parse_router_frames, PubSocket, RouterSocket};
+use crate::topics::user::UserEventTopic;
+use crate::topics::Topic;
 use orderbook::{StreamEvent, StreamEventSource};
 use std::sync::Arc;
 use tmq::Context;
@@ -22,21 +23,39 @@ use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 pub struct ZmqServer {
-    pub market_pub_endpoint: String,
     pub router_endpoint: String,
+    pub market_pub_endpoint: String,
     pub user_pub_endpoint: String,
 }
 
 impl ZmqServer {
     pub fn new(
-        market_pub_endpoint: impl Into<String>,
         router_endpoint: impl Into<String>,
+        market_pub_endpoint: impl Into<String>,
         user_pub_endpoint: impl Into<String>,
     ) -> Self {
-        Self {
-            market_pub_endpoint: market_pub_endpoint.into(),
+        let server = Self {
             router_endpoint: router_endpoint.into(),
+            market_pub_endpoint: market_pub_endpoint.into(),
             user_pub_endpoint: user_pub_endpoint.into(),
+        };
+        server.create_ipc_dirs();
+        server
+    }
+
+    fn create_ipc_dirs(&self) {
+        for endpoint in [
+            &self.router_endpoint,
+            &self.market_pub_endpoint,
+            &self.user_pub_endpoint,
+        ] {
+            if let Some(path) = endpoint.strip_prefix("ipc://") {
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        error!("Failed to create IPC socket dir {}: {e}", parent.display());
+                    }
+                }
+            }
         }
     }
 
@@ -45,36 +64,20 @@ impl ZmqServer {
         let mut event_rx = source.subscribe();
 
         tokio::spawn(async move {
-            // Create parent directories for any IPC socket endpoints.
-            for endpoint in [
-                &self.market_pub_endpoint,
-                &self.router_endpoint,
-                &self.user_pub_endpoint,
-            ] {
-                if let Some(path) = endpoint.strip_prefix("ipc://") {
-                    if let Some(parent) = std::path::Path::new(path).parent() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            error!("Failed to create IPC socket dir {}: {e}", parent.display());
-                            return;
-                        }
-                    }
-                }
-            }
-
             let ctx = Context::new();
-
-            let mut market_pub = match PubSocket::bind(&ctx, &self.market_pub_endpoint, "market") {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("ZMQ market PUB bind failed: {e}");
-                    return;
-                }
-            };
 
             let mut router_sock = match RouterSocket::bind(&ctx, &self.router_endpoint) {
                 Ok(s) => s,
                 Err(e) => {
                     error!("ZMQ ROUTER bind failed: {e}");
+                    return;
+                }
+            };
+
+            let mut market_pub = match PubSocket::bind(&ctx, &self.market_pub_endpoint, "market") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("ZMQ market PUB bind failed: {e}");
                     return;
                 }
             };
@@ -93,7 +96,7 @@ impl ZmqServer {
                 tokio::select! {
                     msg = router_sock.recv() => {
                         let Some(Ok(frames)) = msg else { break };
-                        if let Some(reply) = handle_control(frames, &mut registry) {
+                        if let Some(reply) = parse_router_frames(frames).and_then(|f| handle_control(f, &mut registry)) {
                             if let Err(e) = router_sock.send(reply).await {
                                 error!("ZMQ ROUTER send error: {e}");
                             }
@@ -109,7 +112,7 @@ impl ZmqServer {
                         }
                         Ok(StreamEvent::OrderbookRaw(_)) => {}
                         Ok(StreamEvent::User(ev)) => {
-                            if let Some((topic, bytes)) = user_frame::encode(&ev) {
+                            if let Some((topic, bytes)) = UserEventTopic(&ev).frame() {
                                 if let Err(e) = user_pub.send(topic, bytes).await {
                                     error!("ZMQ user PUB send error: {e}");
                                 }

@@ -1,7 +1,28 @@
-use crate::types::{Action, SubscriptionType};
-use chrono::{DateTime, Utc};
-use orderbook::OrderbookSnapshot;
 use serde::{Deserialize, Serialize};
+
+// ── Subscription / Unsubscription definition ─────────────────────────────────────────────────
+/// The data type a client subscribes to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubscriptionType {
+    Snapshot,
+    Bba,
+}
+
+/// Uniquely identifies one client's subscription to one symbol.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubscriptionKey {
+    pub client_id: Vec<u8>,
+    pub exchange: String,
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    Subscribe,
+    Unsubscribe,
+}
 
 // ── Inbound (client → server) ─────────────────────────────────────────────────
 
@@ -66,32 +87,6 @@ impl Ack {
             sub_type: None,
             interval: None,
             message: Some(msg.into()),
-        }
-    }
-}
-
-/// Best-bid-ask only — derived from `OrderbookSnapshot` for `type: "bba"`.
-#[derive(Serialize)]
-pub struct BbaPayload<'a> {
-    pub exchange: &'a str,
-    pub symbol: &'a str,
-    pub sequence: u64,
-    pub timestamp: DateTime<Utc>,
-    pub best_bid: Option<(f64, f64)>,
-    pub best_ask: Option<(f64, f64)>,
-    pub spread: Option<f64>,
-}
-
-impl<'a> BbaPayload<'a> {
-    pub fn from_snapshot(snap: &'a OrderbookSnapshot) -> Self {
-        Self {
-            exchange: snap.exchange.to_str(),
-            symbol: &snap.symbol,
-            sequence: snap.sequence,
-            timestamp: snap.timestamp,
-            best_bid: snap.best_bid,
-            best_ask: snap.best_ask,
-            spread: snap.spread,
         }
     }
 }
