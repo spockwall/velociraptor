@@ -1,12 +1,14 @@
 # Adding a New Exchange
 
-This guide walks through every file you need to touch to add a new exchange connector. Follow the steps in order — the compiler will guide you on any missed exhaustive match arms.
+This guide walks through every file you need to touch to add a new exchange
+connector. Follow the steps in order — the compiler will catch any missed
+exhaustive match arms.
 
 ---
 
 ## 1. Register the exchange name
 
-**`orderbook/src/types/mod.rs`**
+**`libs/src/protocol/mod.rs`**
 
 Add a variant to `ExchangeName` and update both conversion methods:
 
@@ -15,6 +17,8 @@ pub enum ExchangeName {
     Okx,
     Binance,
     Polymarket,
+    Hyperliquid,
+    Kalshi,
     MyExchange,   // ADD
 }
 
@@ -51,11 +55,12 @@ pub mod myexchange {
 
 ---
 
-## 3. Wire up the URL in ClientConfig
+## 3. Wire up the URL in `ClientConfig`
 
 **`orderbook/src/connection/configs.rs`**
 
-Add the match arm in `ClientConfig::new()`. Also set `ping_interval` here if your exchange needs something other than the default:
+Add the match arm in `ClientConfig::new()`. Also set `ping_interval` here if
+your exchange needs something other than the default:
 
 ```rust
 use crate::types::endpoints::myexchange;
@@ -75,7 +80,8 @@ Create `orderbook/src/exchanges/myexchange/` with five files:
 
 ### 4a. `types.rs` — wire format structs
 
-Deserialisation-only structs matching the exchange's raw JSON. Keep these private to the module.
+Deserialisation-only structs matching the exchange's raw JSON. Keep these
+private to the module.
 
 ```rust
 use serde::Deserialize;
@@ -123,12 +129,16 @@ impl MyExchangeSubMsgBuilder {
 ```rust
 pub fn build(self) -> Vec<String> {
     self.symbols.iter()
-        .map(|s| serde_json::json!({ "method": "subscribe", "subscription": { "type": "l2Book", "coin": s } }).to_string())
+        .map(|s| serde_json::json!({
+            "method": "subscribe",
+            "subscription": { "type": "l2Book", "coin": s }
+        }).to_string())
         .collect()
 }
 ```
 
-Use `ClientConfig::set_subscription_messages(vec)` at the call site when `build()` returns a `Vec<String>`.
+Use `ClientConfig::set_subscription_messages(vec)` at the call site when
+`build()` returns a `Vec<String>`.
 
 ### 4c. `msg_parser.rs` — message parser
 
@@ -136,9 +146,9 @@ Implements `MsgParserTrait`. Convert raw JSON text into `Vec<StreamMessage>`.
 
 ```rust
 use crate::connection::MsgParserTrait;
-use crate::types::ExchangeName;
 use crate::types::orderbook::{GenericOrder, OrderbookAction, StreamMessage, OrderbookUpdate};
 use anyhow::Result;
+use libs::protocol::ExchangeName;
 
 pub struct MyExchangeMessageParser;
 
@@ -151,7 +161,7 @@ impl MsgParserTrait<StreamMessage> for MyExchangeMessageParser {
         todo!()
     }
 
-    /// Return Some("...") for a custom text ping. Return None for a bare WS ping.
+    /// Return Some("...") for a custom text ping. Return None to use bare WS ping.
     fn build_ping(&self) -> Option<String> {
         Some(r#"{"op":"ping"}"#.to_string())
     }
@@ -166,8 +176,8 @@ impl MsgParserTrait<StreamMessage> for MyExchangeMessageParser {
 | Action | When to use |
 |---|---|
 | `Snapshot` | Message replaces the entire book |
-| `Update` | Message updates individual price levels |
-| `Delete` | Price level should be removed (size == 0) |
+| `Update` | Message updates individual price levels (qty = new total) |
+| `Delete` | Price level should be removed (qty = 0) |
 
 **`GenericOrder` fields:**
 
@@ -184,22 +194,26 @@ GenericOrder {
 **Timestamp helpers:**
 
 ```rust
-// From Unix milliseconds as u64:
+// From Unix milliseconds (u64):
 let ts = Utc.timestamp_millis_opt(ms as i64).single().unwrap_or_else(Utc::now);
 
-// From Unix milliseconds as a string:
+// From Unix milliseconds (string):
 use libs::time::parse_timestamp_ms;
 let ts = parse_timestamp_ms(&event.timestamp_str);
 ```
 
+**Emit one `StreamMessage` per price-level change.** Do not group multiple
+levels with different actions into one message — mixed Update/Delete batches
+cause silent data loss. See `polymarket/msg_parser.rs` for the correct pattern.
+
 ### 4d. `client.rs` — connection wrapper
 
-Thin wrapper around `ClientBase`. Most exchanges need nothing beyond forwarding:
+Thin wrapper around `ClientBase`:
 
 ```rust
 use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
-use crate::types::ExchangeName;
 use crate::types::orderbook::StreamMessage;
+use libs::protocol::ExchangeName;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub struct MyExchangeClient {
@@ -218,7 +232,7 @@ impl MyExchangeClient {
             system_control,
             MyExchangeMessageParser,
             ExchangeName::MyExchange,
-            None,  // optional header builder
+            None,  // optional header builder (used by Kalshi for RSA auth)
         );
         Self { inner }
     }
@@ -229,7 +243,9 @@ impl ClientTrait for MyExchangeClient {
 }
 ```
 
-`ClientBase` sends each string in `config.subscription_messages` as a separate WebSocket text frame on connect, so **multi-symbol** exchanges just need `set_subscription_messages(builder.build())` at the call site — no special splitting logic needed in the client.
+`ClientBase` sends each string in `config.subscription_messages` as a separate
+WebSocket text frame on connect, so multi-symbol exchanges using
+`set_subscription_messages(vec)` need no special splitting logic here.
 
 ### 4e. `mod.rs` — re-exports
 
@@ -273,9 +289,9 @@ pub use exchanges::myexchange::{MyExchangeClient, MyExchangeSubMsgBuilder};
 
 ---
 
-## 7. Add server CLI + config support
+## 7. Add config + server wiring
 
-**`libs/src/configs/`**
+**`libs/src/configs/`** — add a config struct:
 
 ```rust
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -292,25 +308,34 @@ Add to the top-level `Config`:
 pub myexchange: MyExchangeConfig,
 ```
 
-**`zmq_server/src/bin/orderbook_server.rs`**
+**`zmq_server/src/setup.rs`** — add a wiring helper (follow the pattern of
+`add_binance` / `add_okx`):
 
 ```rust
-/// Comma-separated MyExchange symbols (overrides config file)
-#[arg(long, env = "MYEXCHANGE_SYMBOLS", value_delimiter = ',')]
-myexchange: Option<Vec<String>>,
-```
-
-```rust
-if !myexchange_symbols.is_empty() {
-    let refs: Vec<&str> = myexchange_symbols.iter().map(String::as_str).collect();
-    system_config.with_exchange(
+pub fn add_myexchange(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
+    if symbols.is_empty() { return false; }
+    let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
+    cfg.with_exchange(
         ClientConfig::new(ExchangeName::MyExchange)
             .set_subscription_message(MyExchangeSubMsgBuilder::new().with_symbols(&refs).build()),
     );
+    info!(symbols = ?symbols, "MyExchange enabled");
+    true
 }
 ```
 
-**`configs/server.yaml`**
+**`zmq_server/src/bin/orderbook_server.rs`** — call the helper in `run()`:
+
+```rust
+let has_static = [
+    cfg.binance.enabled     && add_binance(&mut system_cfg, &cfg.binance.symbols),
+    cfg.okx.enabled         && add_okx(&mut system_cfg, &cfg.okx.symbols),
+    cfg.hyperliquid.enabled && add_hyperliquid(&mut system_cfg, &cfg.hyperliquid.coins),
+    cfg.myexchange.enabled  && add_myexchange(&mut system_cfg, &cfg.myexchange.symbols), // ADD
+].iter().any(|&v| v);
+```
+
+**`configs/server.yaml`** — add the config section:
 
 ```yaml
 myexchange:
@@ -322,18 +347,19 @@ myexchange:
 
 ## Checklist
 
-- [ ] `types/mod.rs` — `ExchangeName` variant + `to_str` + `from_str`
-- [ ] `types/endpoints.rs` — WebSocket URL constant
-- [ ] `connection/configs.rs` — URL match arm (+ ping_interval if non-default)
-- [ ] `exchanges/myexchange/types.rs` — wire format structs
-- [ ] `exchanges/myexchange/subscription.rs` — subscription builder
-- [ ] `exchanges/myexchange/msg_parser.rs` — `MsgParserTrait` impl
-- [ ] `exchanges/myexchange/client.rs` — `ClientTrait` impl
-- [ ] `exchanges/myexchange/mod.rs` — re-exports
-- [ ] `exchanges/mod.rs` — factory arm
+- [ ] `libs/src/protocol/mod.rs` — `ExchangeName` variant + `to_str` + `from_str`
+- [ ] `orderbook/src/types/endpoints.rs` — WebSocket URL constant
+- [ ] `orderbook/src/connection/configs.rs` — URL match arm (+ ping_interval if non-default)
+- [ ] `orderbook/src/exchanges/myexchange/types.rs` — wire format structs
+- [ ] `orderbook/src/exchanges/myexchange/subscription.rs` — subscription builder
+- [ ] `orderbook/src/exchanges/myexchange/msg_parser.rs` — `MsgParserTrait` impl
+- [ ] `orderbook/src/exchanges/myexchange/client.rs` — `ClientTrait` impl
+- [ ] `orderbook/src/exchanges/myexchange/mod.rs` — re-exports
+- [ ] `orderbook/src/exchanges/mod.rs` — factory match arm
 - [ ] `orderbook/src/lib.rs` — public re-exports
-- [ ] `libs/src/configs/` — config struct
-- [ ] `zmq_server/src/bin/orderbook_server.rs` — CLI flag + exchange block
+- [ ] `libs/src/configs/` — config struct + add to `Config`
+- [ ] `zmq_server/src/setup.rs` — `add_myexchange` helper
+- [ ] `zmq_server/src/bin/orderbook_server.rs` — call helper in `has_static` array
 - [ ] `configs/server.yaml` — config section
 - [ ] `cargo check --workspace` — fix any exhaustive match errors
 
@@ -345,6 +371,18 @@ myexchange:
 |---|---|---|---|---|
 | Binance | Partial depth (incremental) | Single JSON array | None (WS ping) | `@depth20@100ms` stream |
 | OKX | Snapshot + incremental | Single JSON array | `{"op":"ping"}` | |
-| Polymarket | Snapshot + incremental diff | Per-asset set in one message | None | Token IDs, not symbols |
-| Hyperliquid | Full snapshot every update | `Vec<String>` — one frame per coin | `{"method":"ping"}` | Use `set_subscription_messages` |
-| Kalshi | Snapshot + signed delta | Single message | Server-side ping, client responds | RSA auth required |
+| Polymarket | Full snapshot + per-level price-change diffs | Per-asset in one message | `"PING"` text frame | Token IDs as symbols; one `StreamMessage` per price change |
+| Hyperliquid | Full snapshot every update | `Vec<String>` (one frame per coin) | `{"method":"ping"}` | Use `set_subscription_messages` |
+| Kalshi | Snapshot + signed dollar delta | Single message | Server-initiated (client pongs) | RSA-PSS auth on WS upgrade; ticker resolved via REST |
+
+## Key design rules
+
+- **One `StreamMessage` per price-level change.** Never batch levels with
+  different actions — see `polymarket/msg_parser.rs`.
+- **`ExchangeName` lives in `libs::protocol`**, not in the `orderbook` crate.
+- **Wiring helpers live in `zmq_server/src/setup.rs`**, not in the binary.
+  The binary calls helpers; helpers call `cfg.with_exchange(...)`.
+- **Rolling-window schedulers** (Polymarket, Kalshi) live under
+  `orderbook/src/exchanges/{exchange}/scheduler.rs` and expose
+  `run_rolling_scheduler` + `WindowTask`. The binary calls
+  `spawn_{exchange}_schedulers` from `setup.rs`.

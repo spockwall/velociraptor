@@ -1,12 +1,19 @@
-//! Shared wire protocol between the Rust services (orderbook-server, executor)
-//! and the Python trading engine.
+//! Shared wire protocol between Rust services and the Python trading engine.
 //!
-//! Payloads are encoded with `rmp-serde` (msgpack). The Python side mirrors
-//! these structures via `msgpack` + `pydantic`. See `docs/protocol.md`.
+//! All payloads are msgpack (`rmp-serde`). The Python side mirrors these
+//! structs via `msgpack` + `pydantic`. See `docs/protocol.md` and the ZMQ
+//! Interface section in `README.md` for socket layout and topic formats.
 //!
-//! Market-data payloads (`SnapshotPayload`, `BbaPayload`) live in the
-//! `orderbook` crate and are serialized over ZMQ PUB by `ZmqPublisher` — they
-//! are not re-exported here to avoid a circular dep on `orderbook`.
+//! ## Module layout
+//!
+//! | Module | Contents |
+//! |---|---|
+//! | `events` | `UserEvent` (fill, order_update, balance, position) + `EventKind` |
+//! | `orders` | `OrderRequest`, `OrderResponse`, `OrderAction`, `OrderResult`, `OrderError` |
+//! | `control` | `ControlMessage` (shutdown, pause, resume, strategy_params) |
+//!
+//! `OrderbookSnapshot` lives here too — it is the market-data payload
+//! serialized on `MARKET_DATA_SOCKET` by `zmq_server::topic::market`.
 
 pub mod control;
 pub mod events;
