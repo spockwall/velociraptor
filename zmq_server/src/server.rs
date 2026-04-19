@@ -2,32 +2,29 @@
 //!
 //! Binds three sockets and runs a single dispatch loop:
 //! - **PUB** `market_pub_endpoint` — orderbook snapshots (topic `{ex}:{sym}`),
-//!   throttled per subscription.
-//! - **ROUTER** `router_endpoint` — `subscribe` / `unsubscribe` / `add_channel`
-//!   requests from DEALER clients.
+//!   published on every engine update.
+//! - **ROUTER** `router_endpoint` — `subscribe` / `unsubscribe` requests from
+//!   DEALER clients.
 //! - **PUB** `user_pub_endpoint` — private user events (topic
 //!   `user.{ex}.{kind}`), one publish per event.
 //!
-//! The server consumes a single `broadcast::Receiver<EngineEvent>` obtained
-//! via the `EngineEventSource` trait, so it is decoupled from the `orderbook`
+//! The server consumes a single `broadcast::Receiver<StreamEvent>` obtained
+//! via the `StreamEventSource` trait, so it is decoupled from the `orderbook`
 //! crate.
 
 use crate::control::{Registry, dispatch, handle_control};
 use crate::frame::user as user_frame;
 use crate::socket::{PubSocket, RouterSocket};
-use crate::trading::events::{EngineEvent, EngineEventSource};
-use crate::types::ChannelRequest;
+use orderbook::{StreamEvent, StreamEventSource};
 use std::sync::Arc;
-use std::time::Instant;
 use tmq::Context;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 pub struct ZmqServer {
     pub market_pub_endpoint: String,
     pub router_endpoint: String,
     pub user_pub_endpoint: String,
-    pub channel_tx: mpsc::UnboundedSender<ChannelRequest>,
 }
 
 impl ZmqServer {
@@ -35,21 +32,35 @@ impl ZmqServer {
         market_pub_endpoint: impl Into<String>,
         router_endpoint: impl Into<String>,
         user_pub_endpoint: impl Into<String>,
-        channel_tx: mpsc::UnboundedSender<ChannelRequest>,
     ) -> Self {
         Self {
             market_pub_endpoint: market_pub_endpoint.into(),
             router_endpoint: router_endpoint.into(),
             user_pub_endpoint: user_pub_endpoint.into(),
-            channel_tx,
         }
     }
 
     /// Spawn the server task. Keep the returned `JoinHandle` alive.
-    pub fn start(self, source: Arc<dyn EngineEventSource>) -> tokio::task::JoinHandle<()> {
+    pub fn start(self, source: Arc<dyn StreamEventSource>) -> tokio::task::JoinHandle<()> {
         let mut event_rx = source.subscribe();
 
         tokio::spawn(async move {
+            // Create parent directories for any IPC socket endpoints.
+            for endpoint in [
+                &self.market_pub_endpoint,
+                &self.router_endpoint,
+                &self.user_pub_endpoint,
+            ] {
+                if let Some(path) = endpoint.strip_prefix("ipc://") {
+                    if let Some(parent) = std::path::Path::new(path).parent() {
+                        if let Err(e) = std::fs::create_dir_all(parent) {
+                            error!("Failed to create IPC socket dir {}: {e}", parent.display());
+                            return;
+                        }
+                    }
+                }
+            }
+
             let ctx = Context::new();
 
             let mut market_pub = match PubSocket::bind(&ctx, &self.market_pub_endpoint, "market") {
@@ -77,28 +88,27 @@ impl ZmqServer {
             };
 
             let mut registry = Registry::new();
-            let channel_tx = self.channel_tx;
 
             loop {
                 tokio::select! {
                     msg = router_sock.recv() => {
                         let Some(Ok(frames)) = msg else { break };
-                        if let Some(reply) = handle_control(frames, &mut registry, &channel_tx) {
+                        if let Some(reply) = handle_control(frames, &mut registry) {
                             if let Err(e) = router_sock.send(reply).await {
                                 error!("ZMQ ROUTER send error: {e}");
                             }
                         }
                     }
                     event = event_rx.recv() => match event {
-                        Ok(EngineEvent::OrderbookSnapshot(snap)) => {
-                            for (topic, bytes) in dispatch(&snap, &mut registry, Instant::now()) {
+                        Ok(StreamEvent::OrderbookSnapshot(snap)) => {
+                            for (topic, bytes) in dispatch(&snap, &registry) {
                                 if let Err(e) = market_pub.send(topic, bytes).await {
                                     error!("ZMQ market PUB send error: {e}");
                                 }
                             }
                         }
-                        Ok(EngineEvent::OrderbookRaw(_)) => {}
-                        Ok(EngineEvent::User(ev)) => {
+                        Ok(StreamEvent::OrderbookRaw(_)) => {}
+                        Ok(StreamEvent::User(ev)) => {
                             if let Some((topic, bytes)) = user_frame::encode(&ev) {
                                 if let Err(e) = user_pub.send(topic, bytes).await {
                                     error!("ZMQ user PUB send error: {e}");

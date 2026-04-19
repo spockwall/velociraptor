@@ -1,17 +1,17 @@
 //! Market-data payload encoding.
 //!
-//! Turns an `OrderbookSnapshotPayload` into a msgpack frame shaped for the
-//! requested `SubscriptionType`. Topic construction lives next to the
-//! dispatcher in `control::handler` since it depends on subscription routing.
+//! Turns a `OrderbookSnapshot` into a msgpack frame shaped for the requested
+//! `SubscriptionType`. Topic construction lives next to the dispatcher in
+//! `control::handler` since it depends on subscription routing.
 
 use crate::protocol::BbaPayload;
-use crate::trading::events::OrderbookSnapshotPayload;
 use crate::types::SubscriptionType;
+use orderbook::OrderbookSnapshot;
 
 /// Build the msgpack payload for one subscription type from a pre-built
 /// snapshot payload. Payload encoding is msgpack (see `docs/protocol.md`).
 pub fn build_payload(
-    snap: &OrderbookSnapshotPayload,
+    snap: &OrderbookSnapshot,
     sub_type: &SubscriptionType,
 ) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     match sub_type {

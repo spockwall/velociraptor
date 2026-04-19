@@ -5,18 +5,12 @@
 
 use crate::control::registry::{Registry, apply_request};
 use crate::protocol::{Ack, SubscriptionRequest};
-use crate::trading::events::ChannelRequest;
 use crate::types::Action;
 use tmq::Multipart;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::warn;
 
 /// Parse router frames and return reply frames.
-pub fn handle_control(
-    frames: Multipart,
-    registry: &mut Registry,
-    channel_tx: &mpsc::UnboundedSender<ChannelRequest>,
-) -> Option<Vec<Vec<u8>>> {
+pub fn handle_control(frames: Multipart, registry: &mut Registry) -> Option<Vec<Vec<u8>>> {
     let frames: Vec<Vec<u8>> = frames.into_iter().map(|f| f.to_vec()).collect();
     let has_delimiter = frames.len() >= 3;
     let (client_id, payload) = if has_delimiter {
@@ -53,23 +47,6 @@ pub fn handle_control(
         Action::Unsubscribe => {
             apply_request(&req, client_id.clone(), registry);
             Ack::ok_unsub(&req)
-        }
-        Action::AddChannel => {
-            info!(
-                "Client {:?} requesting new channel {}:{}",
-                client_id, req.exchange, req.symbol
-            );
-            let cr = ChannelRequest {
-                client_id: client_id.clone(),
-                exchange: req.exchange.clone(),
-                symbol: req.symbol.clone(),
-            };
-            if let Err(e) = channel_tx.send(cr) {
-                error!("Failed to forward add_channel request: {e}");
-                Ack::error("internal error: channel request dropped")
-            } else {
-                Ack::ok_add_channel(&req.exchange, &req.symbol)
-            }
         }
     };
 

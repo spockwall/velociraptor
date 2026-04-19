@@ -1,7 +1,4 @@
 use serde::Deserialize;
-use std::time::{Duration, Instant};
-
-pub use crate::trading::events::ChannelRequest;
 
 /// The data type a client subscribes to.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -19,11 +16,9 @@ pub struct SubscriptionKey {
     pub symbol: String,
 }
 
-/// Per-subscription throttle state.
+/// Per-subscription state (what type of data this client wants).
 pub struct SubscriptionState {
     pub subscription_type: SubscriptionType,
-    pub interval: Duration,
-    pub last_sent: Instant,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +26,4 @@ pub struct SubscriptionState {
 pub enum Action {
     Subscribe,
     Unsubscribe,
-    /// Request the server to start streaming a new exchange/symbol channel.
-    AddChannel,
 }

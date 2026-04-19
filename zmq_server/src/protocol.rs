@@ -1,6 +1,6 @@
-use crate::trading::events::OrderbookSnapshotPayload;
 use crate::types::{Action, SubscriptionType};
 use chrono::{DateTime, Utc};
+use orderbook::OrderbookSnapshot;
 use serde::{Deserialize, Serialize};
 
 // ── Inbound (client → server) ─────────────────────────────────────────────────
@@ -58,17 +58,6 @@ impl Ack {
         }
     }
 
-    pub fn ok_add_channel(exchange: &str, symbol: &str) -> Self {
-        Self {
-            status: "ok",
-            exchange: Some(exchange.to_string()),
-            symbol: Some(symbol.to_string()),
-            sub_type: None,
-            interval: None,
-            message: Some("channel added".into()),
-        }
-    }
-
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
             status: "error",
@@ -81,7 +70,7 @@ impl Ack {
     }
 }
 
-/// Best-bid-ask only — derived from `OrderbookSnapshotPayload` for `type: "bba"`.
+/// Best-bid-ask only — derived from `OrderbookSnapshot` for `type: "bba"`.
 #[derive(Serialize)]
 pub struct BbaPayload<'a> {
     pub exchange: &'a str,
@@ -94,7 +83,7 @@ pub struct BbaPayload<'a> {
 }
 
 impl<'a> BbaPayload<'a> {
-    pub fn from_snapshot(snap: &'a OrderbookSnapshotPayload) -> Self {
+    pub fn from_snapshot(snap: &'a OrderbookSnapshot) -> Self {
         Self {
             exchange: snap.exchange.to_str(),
             symbol: &snap.symbol,
