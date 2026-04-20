@@ -85,7 +85,7 @@ async fn run(config_path: &str) -> Result<()> {
 
     if cfg.redis.enabled {
         match libs::redis_client::RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await {
-            Ok(handle) => attach_redis(&mut engine, handle),
+            Ok(handle) => attach_redis(&mut engine, handle, cfg.redis.snapshot_cap, cfg.redis.trade_cap),
             Err(e) => error!("Redis connection failed: {e} — continuing without Redis"),
         }
     }

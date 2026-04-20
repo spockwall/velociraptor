@@ -74,9 +74,9 @@ impl RedisHandle {
     // ── Capped event lists ────────────────────────────────────────────────────
 
     /// Prepend `payload` to the capped list at `list_key`, trimming it to
-    /// `self.event_list_cap` entries. Uses a pipeline for atomicity.
-    pub async fn lpush_capped(&self, list_key: &str, payload: &[u8]) {
-        let cap = self.event_list_cap as isize;
+    /// `cap` entries. Uses a pipeline for atomicity.
+    pub async fn lpush_capped(&self, list_key: &str, payload: &[u8], cap: usize) {
+        let cap = cap as isize;
         let mut pipe = redis::pipe();
         pipe.lpush(list_key, payload)
             .ltrim(list_key, 0, cap - 1)

@@ -9,6 +9,14 @@ impl RedisKey {
     pub fn bba(exchange: &str, symbol: &str) -> String {
         format!("bba:{exchange}:{symbol}")
     }
+    /// Capped list of recent orderbook snapshots: `snapshots:{exchange}:{symbol}`
+    pub fn snapshots(exchange: &str, symbol: &str) -> String {
+        format!("snapshots:{exchange}:{symbol}")
+    }
+    /// Capped list of recent last-trade events: `trades:{exchange}:{symbol}`
+    pub fn trades(exchange: &str, symbol: &str) -> String {
+        format!("trades:{exchange}:{symbol}")
+    }
 
     pub fn position(exchange: &str, symbol: &str) -> String {
         format!("position:{exchange}:{symbol}")

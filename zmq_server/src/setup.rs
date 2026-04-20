@@ -7,8 +7,9 @@
 use libs::configs::{KalshiMarketConfig, PolymarketMarketConfig};
 use libs::constants::WS_STATUS_SOCKET;
 use libs::credentials::KalshiCredentials;
-use libs::protocol::{ExchangeName, OrderbookSnapshot, UserEvent};
-use libs::redis_client::{keys::Events, RedisHandle};
+use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot, UserEvent};
+use libs::redis_client::{keys::{Events, RedisKey}, RedisHandle};
+use crate::topics::bba::BbaPayload;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -287,44 +288,46 @@ async fn spawn_kalshi_window(
 
 /// Register engine hooks that write market and account state to Redis.
 ///
-/// Hooks fire synchronously inside the engine task — they must be cheap.
-/// All Redis writes are dispatched with `tokio::spawn` so the hook returns
-/// immediately without blocking the engine loop.
-pub fn attach_redis(engine: &mut StreamEngine, handle: RedisHandle) {
-    // Orderbook snapshot → SET ob:exchange:symbol + SET bba:exchange:symbol
+/// - Latest snapshot: `SET ob:{exchange}:{symbol}` (overwritten each tick)
+/// - Latest BBA:      `SET bba:{exchange}:{symbol}` (overwritten each tick)
+/// - Recent snapshots: `LPUSH snapshots:{exchange}:{symbol}`, capped at `snapshot_cap`
+/// - Recent trades:    `LPUSH trades:{exchange}:{symbol}`, capped at `trade_cap`
+/// - Account state:    `SET position:*`, `SET balance:*`
+/// - Event lists:      `LPUSH events:fills`, `LPUSH events:orders`, capped at `event_list_cap`
+///
+/// Hooks fire synchronously — all Redis I/O is dispatched via `tokio::spawn`.
+pub fn attach_redis(
+    engine: &mut StreamEngine,
+    handle: RedisHandle,
+    snapshot_cap: usize,
+    trade_cap: usize,
+) {
+    // Orderbook snapshot hook
     {
         let h = handle.clone();
         engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
-            let exchange = snap.exchange.to_string();
+            let exchange = snap.exchange.to_str().to_owned();
             let symbol = snap.symbol.clone();
 
-            // Full snapshot (all depth levels)
+            // Latest full snapshot (overwrite)
             if let Ok(ob_bytes) = rmp_serde::to_vec_named(snap) {
                 let h2 = h.clone();
                 let ex2 = exchange.clone();
                 let sym2 = symbol.clone();
-                tokio::spawn(async move { h2.set_orderbook(&ex2, &sym2, &ob_bytes).await });
+                let ob2 = ob_bytes.clone();
+                tokio::spawn(async move { h2.set_orderbook(&ex2, &sym2, &ob2).await });
+
+                // Recent snapshot list (capped)
+                let h3 = h.clone();
+                let ex3 = exchange.clone();
+                let sym3 = symbol.clone();
+                tokio::spawn(async move {
+                    h3.lpush_capped(&RedisKey::snapshots(&ex3, &sym3), &ob_bytes, snapshot_cap).await;
+                });
             }
 
-            // BBA-only payload — small struct for fast reads
-            #[derive(serde::Serialize)]
-            struct Bba<'a> {
-                exchange: &'a str,
-                symbol: &'a str,
-                best_bid: Option<(f64, f64)>,
-                best_ask: Option<(f64, f64)>,
-                spread: Option<f64>,
-                mid: Option<f64>,
-            }
-            let bba = Bba {
-                exchange: &exchange,
-                symbol: &symbol,
-                best_bid: snap.best_bid,
-                best_ask: snap.best_ask,
-                spread: snap.spread,
-                mid: snap.mid,
-            };
-            if let Ok(bba_bytes) = rmp_serde::to_vec_named(&bba) {
+            // Latest BBA (overwrite) — reuse BbaPayload from topics::bba
+            if let Ok(bba_bytes) = rmp_serde::to_vec_named(&BbaPayload::from(snap)) {
                 let h2 = h.clone();
                 let ex2 = exchange.clone();
                 let sym2 = symbol.clone();
@@ -333,7 +336,21 @@ pub fn attach_redis(engine: &mut StreamEngine, handle: RedisHandle) {
         });
     }
 
-    // User events → account state keys + capped event lists
+    // Last-trade hook
+    {
+        let h = handle.clone();
+        engine.hooks_mut().on::<LastTradePrice, _>(move |trade| {
+            let Ok(bytes) = rmp_serde::to_vec_named(trade) else { return };
+            let h2 = h.clone();
+            let exchange = trade.exchange.to_str().to_owned();
+            let symbol = trade.symbol.clone();
+            tokio::spawn(async move {
+                h2.lpush_capped(&RedisKey::trades(&exchange, &symbol), &bytes, trade_cap).await;
+            });
+        });
+    }
+
+    // User events hook
     {
         let h = handle.clone();
         engine.hooks_mut().on::<UserEvent, _>(move |ev| {
@@ -349,15 +366,15 @@ pub fn attach_redis(engine: &mut StreamEngine, handle: RedisHandle) {
                         h2.set_balance(exchange, asset, &payload).await;
                     }
                     UserEvent::Fill { .. } => {
-                        h2.lpush_capped(Events::FILLS, &payload).await;
+                        h2.lpush_capped(Events::FILLS, &payload, h2.event_list_cap).await;
                     }
                     UserEvent::OrderUpdate { .. } => {
-                        h2.lpush_capped(Events::ORDERS, &payload).await;
+                        h2.lpush_capped(Events::ORDERS, &payload, h2.event_list_cap).await;
                     }
                 }
             });
         });
     }
 
-    info!("Redis integration enabled");
+    info!("Redis integration enabled (snapshot_cap={snapshot_cap}, trade_cap={trade_cap})");
 }
