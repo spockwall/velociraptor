@@ -150,6 +150,8 @@ async fn get_polymarket_markets(
             s.redis.srem(RedisKey::POLYMARKET_LABEL_INDEX, &id).await;
             s.redis.del(&RedisKey::orderbook("polymarket", &id)).await;
             s.redis.del(&RedisKey::bba("polymarket", &id)).await;
+            s.redis.del(&RedisKey::snapshots("polymarket", &id)).await;
+            s.redis.del(&RedisKey::trades("polymarket", &id)).await;
             continue;
         }
 

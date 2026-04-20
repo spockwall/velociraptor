@@ -240,6 +240,8 @@ async fn spawn_polymarket_window(
             r.srem(RedisKey::POLYMARKET_LABEL_INDEX, prior_id).await;
             r.del(&RedisKey::orderbook("polymarket", prior_id)).await;
             r.del(&RedisKey::bba("polymarket", prior_id)).await;
+            r.del(&RedisKey::snapshots("polymarket", prior_id)).await;
+            r.del(&RedisKey::trades("polymarket", prior_id)).await;
             r.srem(&base_slug_index, prior_id).await;
         }
 
@@ -334,6 +336,8 @@ async fn spawn_polymarket_window(
                 r.srem(RedisKey::POLYMARKET_LABEL_INDEX, id).await;
                 r.del(&RedisKey::orderbook("polymarket", id)).await;
                 r.del(&RedisKey::bba("polymarket", id)).await;
+                r.del(&RedisKey::snapshots("polymarket", id)).await;
+                r.del(&RedisKey::trades("polymarket", id)).await;
                 r.srem(&base_slug_index, id).await;
             }
         });
