@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use libs::protocol::ExchangeName;
 use ordered_float::OrderedFloat;
 use std::collections::BTreeMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 #[derive(Clone, Debug)]
 pub struct PriceLevel {
@@ -48,7 +48,7 @@ impl Orderbook {
             OrderbookAction::Snapshot => {
                 // Every message from BitMart is a snapshot, so we need to check if the orderbook is initialized
                 if !self.is_initialized {
-                    info!(
+                    debug!(
                         "Applying snapshot for {}, Orderbook of {} isinitialized with {} entries",
                         self.exchange,
                         self.symbol,
@@ -175,7 +175,10 @@ impl Orderbook {
             OrderSide::Ask => &mut self.ask_levels,
         };
         if levels.remove(&price_key).is_none() {
-            debug!("Delete for unknown price level {} (stale delta, safe to ignore)", order.price);
+            debug!(
+                "Delete for unknown price level {} (stale delta, safe to ignore)",
+                order.price
+            );
         }
     }
 
