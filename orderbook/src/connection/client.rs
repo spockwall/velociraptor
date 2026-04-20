@@ -226,8 +226,8 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
                 }
                 Err(e) => {
                     error!("{} connection error: {}", self.exchange_name, e);
-                    // set pause to true
-                    self.system_control.pause();
+                    //// set pause to true
+                    //self.system_control.pause();
 
                     if self.reconnect_attempts >= self.config.max_reconnect_attempts {
                         error!("{} max reconnection attempts reached", self.exchange_name);
@@ -245,7 +245,7 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
 
                     let _ = self.message_tx.send(M::disconnected());
                     sleep(Duration::from_secs(self.config.random_reconnect_delay())).await;
-                    self.system_control.resume();
+                    //self.system_control.resume();
                 }
             }
         }
