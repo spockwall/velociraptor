@@ -43,7 +43,7 @@ impl MsgParserTrait<StreamMessage> for BinanceMessageParser {
             }
         };
 
-        let symbol = msg.symbol.to_uppercase();
+        let symbol = msg.symbol.to_lowercase();
         let timestamp = Utc::now();
         let ts_str = timestamp.to_rfc3339();
 

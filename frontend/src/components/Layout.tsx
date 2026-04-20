@@ -3,6 +3,7 @@ import Logo from "./Logo";
 
 const nav = [
     { to: "/orderbook", label: "Orderbook" },
+    { to: "/polymarket", label: "Polymarket" },
     { to: "/trades", label: "Trades" },
     { to: "/account", label: "Account" },
     { to: "/control", label: "Control" },

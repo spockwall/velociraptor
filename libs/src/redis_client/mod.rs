@@ -94,6 +94,63 @@ impl RedisHandle {
             .unwrap_or_default()
     }
 
+    /// HGETALL `key`. Returns empty map on missing key or error.
+    pub async fn hgetall(&self, key: &str) -> std::collections::HashMap<String, String> {
+        self.conn
+            .clone()
+            .hgetall::<_, std::collections::HashMap<String, String>>(key)
+            .await
+            .map_err(|e| error!("Redis HGETALL {key} failed: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// HSET multiple fields at `key` in one round-trip.
+    pub async fn hset_multi(&self, key: &str, fields: &[(&str, &str)]) {
+        if fields.is_empty() {
+            return;
+        }
+        let pairs: Vec<(&str, &str)> = fields.to_vec();
+        if let Err(e) = self
+            .conn
+            .clone()
+            .hset_multiple::<_, _, _, ()>(key, &pairs)
+            .await
+        {
+            error!("Redis HSET {key} failed: {e}");
+        }
+    }
+
+    /// SADD `member` to set `key`.
+    pub async fn sadd(&self, key: &str, member: &str) {
+        if let Err(e) = self.conn.clone().sadd::<_, _, ()>(key, member).await {
+            error!("Redis SADD {key} failed: {e}");
+        }
+    }
+
+    /// SREM `member` from set `key`.
+    pub async fn srem(&self, key: &str, member: &str) {
+        if let Err(e) = self.conn.clone().srem::<_, _, ()>(key, member).await {
+            error!("Redis SREM {key} failed: {e}");
+        }
+    }
+
+    /// SMEMBERS `key`. Returns empty vec on missing key or error.
+    pub async fn smembers(&self, key: &str) -> Vec<String> {
+        self.conn
+            .clone()
+            .smembers::<_, Vec<String>>(key)
+            .await
+            .map_err(|e| error!("Redis SMEMBERS {key} failed: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// DEL `key`.
+    pub async fn del(&self, key: &str) {
+        if let Err(e) = self.conn.clone().del::<_, ()>(key).await {
+            error!("Redis DEL {key} failed: {e}");
+        }
+    }
+
     // ── Capped event lists ────────────────────────────────────────────────────
 
     /// Prepend `payload` to the capped list at `list_key`, trimming it to

@@ -4,7 +4,11 @@ services:
     container_name: velociraptor-redis
     command:
       - redis-server
+      - --save
+      - ""
       - --appendonly
+      - "no"
+      - --stop-writes-on-bgsave-error
       - "no"
       - --maxmemory
       - 512mb

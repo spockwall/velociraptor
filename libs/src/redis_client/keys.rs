@@ -29,6 +29,21 @@ impl RedisKey {
     pub fn orders_open(exchange: &str) -> String {
         format!("orders:open:{exchange}")
     }
+
+    /// Per-asset label hash for Polymarket: `polymarket:label:{asset_id}`
+    /// Stored as a Redis hash with fields: base_slug, full_slug, side, window_start
+    pub fn polymarket_label(asset_id: &str) -> String {
+        format!("polymarket:label:{asset_id}")
+    }
+
+    /// Set membership of all currently-labeled Polymarket asset_ids.
+    pub const POLYMARKET_LABEL_INDEX: &'static str = "polymarket:label:index";
+
+    /// Set of asset_ids belonging to the currently-active window for `base_slug`.
+    /// Used to evict prior-window labels when a new window starts.
+    pub fn polymarket_base_slug_assets(base_slug: &str) -> String {
+        format!("polymarket:base:{base_slug}:assets")
+    }
 }
 
 pub struct Events;

@@ -121,8 +121,8 @@ function OrderbookPanel({ exchange, symbol }: { exchange: string; symbol: string
     const snapFetcher = useCallback(() => api.orderbook(exchange, symbol), [exchange, symbol]);
     const bbaFetcher = useCallback(() => api.bba(exchange, symbol), [exchange, symbol]);
 
-    const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 800);
-    const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 500);
+    const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 300);
+    const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 300);
 
     return (
         <Card title={`${exchange} / ${symbol}`} subtitle="live depth · 800ms" noPad>

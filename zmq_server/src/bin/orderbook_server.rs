@@ -83,9 +83,13 @@ async fn run(config_path: &str) -> Result<()> {
 
     let mut engine = StreamEngine::new(1024, cfg.storage.depth);
 
+    let mut redis_handle: Option<libs::redis_client::RedisHandle> = None;
     if cfg.redis.enabled {
         match libs::redis_client::RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await {
-            Ok(handle) => attach_redis(&mut engine, handle, cfg.redis.snapshot_cap, cfg.redis.trade_cap),
+            Ok(handle) => {
+                attach_redis(&mut engine, handle.clone(), cfg.redis.snapshot_cap, cfg.redis.trade_cap);
+                redis_handle = Some(handle);
+            }
             Err(e) => error!("Redis connection failed: {e} — continuing without Redis"),
         }
     }
@@ -101,7 +105,13 @@ async fn run(config_path: &str) -> Result<()> {
 
     // ── Rolling-window schedulers (Polymarket + Kalshi) ───────────────────────
 
-    let _pm  = spawn_polymarket_schedulers(&cfg.polymarket.markets, cfg.storage.depth);
+    let _pm  = spawn_polymarket_schedulers(
+        &cfg.polymarket.markets,
+        cfg.storage.depth,
+        redis_handle.clone(),
+        cfg.redis.snapshot_cap,
+        cfg.redis.trade_cap,
+    );
     let _kal = spawn_kalshi_schedulers(&cfg.kalshi.market, cfg.storage.depth, KALSHI_CREDENTIALS_PATH);
 
     // ── Run until Ctrl-C or engine error ─────────────────────────────────────

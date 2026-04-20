@@ -53,6 +53,15 @@ async function get<T>(path: string): Promise<T> {
     return res.json() as Promise<T>;
 }
 
+export interface PolymarketMarket {
+    asset_id: string;
+    base_slug: string;
+    full_slug: string;
+    side: string;
+    window_start: number;
+    title: string;
+}
+
 export const api = {
     health: () => get<{ ok: boolean }>("/health"),
 
@@ -65,4 +74,6 @@ export const api = {
 
     trades: (exchange: string, symbol: string, limit = 50) =>
         get<LastTradePrice[]>(`${BASE}/trades/${exchange}/${symbol}?limit=${limit}`),
+
+    polymarketMarkets: () => get<PolymarketMarket[]>(`${BASE}/polymarket/markets`),
 };

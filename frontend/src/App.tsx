@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import Landing from "./pages/Landing";
 import Orderbook from "./pages/Orderbook";
+import Polymarket from "./pages/Polymarket";
 import Trades from "./pages/Trades";
 import Account from "./pages/Account";
 import Control from "./pages/Control";
@@ -23,6 +24,7 @@ export default function App() {
                 <Route element={<Layout />}>
                     <Route path="/" element={<Landing />} />
                     <Route path="/orderbook" element={<Orderbook />} />
+                    <Route path="/polymarket" element={<Polymarket />} />
                     <Route path="/trades" element={<Trades />} />
                     <Route path="/account" element={<Account />} />
                     <Route path="/control" element={<Control />} />
