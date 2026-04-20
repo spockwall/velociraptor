@@ -6,7 +6,7 @@ authors = {workspace = true}
 license = {workspace = true}
 
 [dependencies]
-libs = { path = "../libs" }
+libs = { path = "../libs", features = ["redis"] }
 orderbook = { path = "../orderbook" }
 recorder = { path = "../recorder" }
 tokio = { workspace = true }

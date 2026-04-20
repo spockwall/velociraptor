@@ -4,10 +4,11 @@
 //! returning whether it actually registered anything. The binary calls these
 //! in sequence then decides whether to call `validate()`.
 
-use libs::configs::{Config, KalshiMarketConfig, PolymarketMarketConfig};
+use libs::configs::{KalshiMarketConfig, PolymarketMarketConfig};
 use libs::constants::WS_STATUS_SOCKET;
 use libs::credentials::KalshiCredentials;
-use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
+use libs::protocol::{ExchangeName, OrderbookSnapshot, UserEvent};
+use libs::redis_client::{keys::Events, RedisHandle};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -20,9 +21,7 @@ use orderbook::exchanges::polymarket::{
     PolymarketSubMsgBuilder, WindowTask as PolymarketWindowTask,
 };
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
-use recorder::{RecorderEvent, RotationPolicy, StorageConfig, StorageWriter};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::ZmqServer;
@@ -75,66 +74,6 @@ pub fn add_hyperliquid(cfg: &mut StreamSystemConfig, coins: &[String]) -> bool {
     );
     info!(coins = ?coins, "Hyperliquid enabled");
     true
-}
-
-// ── Storage recorder ──────────────────────────────────────────────────────────
-
-/// Attach storage hooks to `engine` and return the writer handle.
-/// Must be called before the engine is consumed by `StreamSystem::new`.
-pub fn attach_storage(
-    engine: &mut StreamEngine,
-    server_cfg: &Config,
-) -> Option<(StorageConfig, broadcast::Receiver<RecorderEvent>)> {
-    if !server_cfg.storage.enabled {
-        return None;
-    }
-    let rotation = match server_cfg.storage.rotation.as_str() {
-        "none" => RotationPolicy::None,
-        _ => RotationPolicy::Daily,
-    };
-    let zstd_level = match server_cfg.storage.zstd_level {
-        0 => None,
-        l => Some(l as i32),
-    };
-    let storage_config = StorageConfig {
-        base_path: server_cfg.storage.base_path.clone().into(),
-        depth: server_cfg.storage.depth,
-        flush_interval_ms: server_cfg.storage.flush_interval,
-        rotation,
-        zstd_level,
-    };
-    info!(
-        base_path = %storage_config.base_path.display(),
-        depth = storage_config.depth,
-        "Storage recorder enabled"
-    );
-
-    let (rec_tx, rec_rx) = broadcast::channel::<RecorderEvent>(1024);
-    {
-        let tx = rec_tx.clone();
-        engine
-            .hooks_mut()
-            .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-                let _ = tx.send(RecorderEvent::Snapshot(snap.clone()));
-            });
-    }
-    {
-        use orderbook::types::orderbook::OrderbookUpdate;
-        let tx = rec_tx.clone();
-        engine.hooks_mut().on::<OrderbookUpdate, _>(move |_| {
-            let _ = tx.send(RecorderEvent::RawUpdate);
-        });
-    }
-    {
-        let tx = rec_tx.clone();
-        engine
-            .hooks_mut()
-            .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
-                let _ = tx.send(RecorderEvent::Trade(trade.clone()));
-            });
-    }
-    drop(rec_tx);
-    Some((storage_config, rec_rx))
 }
 
 // ── StreamSystem bootstrap ────────────────────────────────────────────────────
@@ -344,14 +283,81 @@ async fn spawn_kalshi_window(
     Some(KalshiWindowTask::new(ticker, control, handle))
 }
 
-// ── StorageWriter attachment ──────────────────────────────────────────────────
+// ── Redis attachment ──────────────────────────────────────────────────────────
 
-/// Start the `StorageWriter` and attach it to `system`.
-pub fn attach_storage_writer(
-    system: &mut StreamSystem,
-    setup: Option<(StorageConfig, broadcast::Receiver<RecorderEvent>)>,
-) {
-    if let Some((storage_config, rec_rx)) = setup {
-        system.attach_handle(StorageWriter::new(storage_config).start(rec_rx));
+/// Register engine hooks that write market and account state to Redis.
+///
+/// Hooks fire synchronously inside the engine task — they must be cheap.
+/// All Redis writes are dispatched with `tokio::spawn` so the hook returns
+/// immediately without blocking the engine loop.
+pub fn attach_redis(engine: &mut StreamEngine, handle: RedisHandle) {
+    // Orderbook snapshot → SET ob:exchange:symbol + SET bba:exchange:symbol
+    {
+        let h = handle.clone();
+        engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
+            let exchange = snap.exchange.to_string();
+            let symbol = snap.symbol.clone();
+
+            // Full snapshot (all depth levels)
+            if let Ok(ob_bytes) = rmp_serde::to_vec_named(snap) {
+                let h2 = h.clone();
+                let ex2 = exchange.clone();
+                let sym2 = symbol.clone();
+                tokio::spawn(async move { h2.set_orderbook(&ex2, &sym2, &ob_bytes).await });
+            }
+
+            // BBA-only payload — small struct for fast reads
+            #[derive(serde::Serialize)]
+            struct Bba<'a> {
+                exchange: &'a str,
+                symbol: &'a str,
+                best_bid: Option<(f64, f64)>,
+                best_ask: Option<(f64, f64)>,
+                spread: Option<f64>,
+                mid: Option<f64>,
+            }
+            let bba = Bba {
+                exchange: &exchange,
+                symbol: &symbol,
+                best_bid: snap.best_bid,
+                best_ask: snap.best_ask,
+                spread: snap.spread,
+                mid: snap.mid,
+            };
+            if let Ok(bba_bytes) = rmp_serde::to_vec_named(&bba) {
+                let h2 = h.clone();
+                let ex2 = exchange.clone();
+                let sym2 = symbol.clone();
+                tokio::spawn(async move { h2.set_bba(&ex2, &sym2, &bba_bytes).await });
+            }
+        });
     }
+
+    // User events → account state keys + capped event lists
+    {
+        let h = handle.clone();
+        engine.hooks_mut().on::<UserEvent, _>(move |ev| {
+            let Ok(payload) = rmp_serde::to_vec_named(ev) else { return };
+            let h2 = h.clone();
+            let ev = ev.clone();
+            tokio::spawn(async move {
+                match &ev {
+                    UserEvent::Position { exchange, symbol, .. } => {
+                        h2.set_position(exchange, symbol, &payload).await;
+                    }
+                    UserEvent::Balance { exchange, asset, .. } => {
+                        h2.set_balance(exchange, asset, &payload).await;
+                    }
+                    UserEvent::Fill { .. } => {
+                        h2.lpush_capped(Events::FILLS, &payload).await;
+                    }
+                    UserEvent::OrderUpdate { .. } => {
+                        h2.lpush_capped(Events::ORDERS, &payload).await;
+                    }
+                }
+            });
+        });
+    }
+
+    info!("Redis integration enabled");
 }

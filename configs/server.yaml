@@ -7,7 +7,7 @@ server:
   render_interval: 300
 
 storage:
-  enabled: false
+  enabled: true
   base_path: "./data"
   depth: 20 # depth levels to store (bids + asks)
   flush_interval: 1000 # ms between BufWriter flushes
