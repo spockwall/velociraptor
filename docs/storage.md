@@ -83,16 +83,20 @@ data/okx/BTC-USDT/2026-04-03.mpack
 
 ### Polymarket (`polymarket_recorder`)
 
-Polymarket markets rotate on fixed windows (e.g. every 5 minutes). Each window produces two files — one for the Up token and one for the Down token. The layout uses the **base slug** (no timestamp), the UTC date of the window start, and the window time range as the filename:
+Polymarket markets rotate on fixed windows (e.g. every 5 minutes). Each window produces four files — orderbook snapshots and last-trade records, each split by token side (Up / Down). The layout uses the **base slug** (no timestamp), the UTC date of the window start, and the window time range as the filename:
 
 ```
 {base_path}/
-└── {base_slug}/              ← e.g. btc-updown-5m
-    └── {YYYY-MM-DD}/         ← UTC date of window start
+└── {base_slug}/                   ← e.g. btc-updown-5m
+    └── {YYYY-MM-DD}/              ← UTC date of window start
         ├── {HH:MM}-{HH:MM}-up.mpack
         ├── {HH:MM}-{HH:MM}-down.mpack
-        ├── {HH:MM}-{HH:MM}-up.mpack.zst    ← compressed after window close
-        └── {HH:MM}-{HH:MM}-down.mpack.zst
+        ├── {HH:MM}-{HH:MM}-up-trades.mpack
+        ├── {HH:MM}-{HH:MM}-down-trades.mpack
+        ├── {HH:MM}-{HH:MM}-up.mpack.zst         ← compressed after window close
+        ├── {HH:MM}-{HH:MM}-down.mpack.zst
+        ├── {HH:MM}-{HH:MM}-up-trades.mpack.zst
+        └── {HH:MM}-{HH:MM}-down-trades.mpack.zst
 ```
 
 Example for a 5-minute BTC market:
@@ -101,8 +105,12 @@ Example for a 5-minute BTC market:
 data/polymarket/btc-updown-5m/2026-04-06/
     06:10-06:15-up.mpack
     06:10-06:15-down.mpack
+    06:10-06:15-up-trades.mpack
+    06:10-06:15-down-trades.mpack
     06:15-06:20-up.mpack
     06:15-06:20-down.mpack
+    06:15-06:20-up-trades.mpack
+    06:15-06:20-down-trades.mpack
     ...
 ```
 
@@ -110,8 +118,25 @@ Key layout rules:
 
 - **Base slug only** — the timestamp suffix (e.g. `-1775456100`) is never part of the directory name. All windows for the same market land under the same slug folder.
 - **UTC date** — the date directory reflects the window start time in UTC, not local time.
-- **Window filename** — times are in `HH:MM` UTC, e.g. `06:15-06:20-up.mpack`.
+- **Window filename** — times are in `HH:MM` UTC. Snapshot files end in `-up.mpack` / `-down.mpack`; trade files end in `-up-trades.mpack` / `-down-trades.mpack`.
+- **Token side** — Up and Down token data are always written to separate files. Trade records are routed to the correct side file by matching the `asset_id` from the wire event to the resolved token list.
 - **Compression** — if `zstd_level > 0`, after the window closes the `.mpack` is replaced by `.mpack.zst`.
+
+---
+
+## Trade Record Schema (Polymarket)
+
+Trade files (`*-trades.mpack`) use a different schema from snapshot files. Each record is one matched maker-taker event emitted by the Polymarket `last_trade_price` WS channel:
+
+| Field | Type | Description |
+| -------------- | ------ | ----------------------------------------------- |
+| `ts_ns` | i64 | UTC timestamp in nanoseconds since Unix epoch |
+| `price` | f64 | Trade price (0–1 USDC, represents implied probability) |
+| `size` | f64 | Trade size in USDC |
+| `side` | String | Taker direction: `"BUY"` or `"SELL"` |
+| `fee_rate_bps` | f64 | Fee rate in basis points |
+
+`exchange` and `symbol` are not stored — they are encoded in the file path (slug and `-up` / `-down` suffix).
 
 ---
 
@@ -298,6 +323,30 @@ print(merged[["ts", "window_up", "mid_up", "mid_down", "sum_mid"]].head())
 # Per-window summary table
 print(summary("data/polymarket/btc-updown-5m/2026-04-06/"))
 ```
+
+### Reading trade files
+
+Trade files use the same length-prefixed msgpack format as snapshot files but have a flat schema — no `bids`/`asks` arrays.
+
+```python
+import struct, msgpack, pandas as pd
+
+def read_trades(path):
+    records = []
+    with open(path, "rb") as f:
+        while header := f.read(4):
+            (n,) = struct.unpack("<I", header)
+            records.append(msgpack.unpackb(f.read(n), raw=False))
+    df = pd.DataFrame(records)
+    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
+    return df
+
+# Up-side trades for one window
+up_trades = read_trades("data/polymarket/btc-updown-5m/2026-04-06/06:15-06:20-up-trades.mpack")
+print(up_trades[["ts", "price", "size", "side", "fee_rate_bps"]].head())
+```
+
+For compressed files pass the decompressed stream to the same unpacking loop (see `read_mpack_zst` above).
 
 ### Interpreting prices
 

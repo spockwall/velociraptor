@@ -289,18 +289,23 @@ Config: `configs/polymarket.yaml`
 
 ### Disk recorder
 
-Writes every orderbook snapshot per window per side:
+Writes every orderbook snapshot and last-trade event per window per side:
 
 ```
-data/polymarket/btc-updown-15m/2026-04-05/09:45-10:00-up.mpack
-                                           09:45-10:00-down.mpack
+data/polymarket/btc-updown-15m/2026-04-05/
+    09:45-10:00-up.mpack
+    09:45-10:00-down.mpack
+    09:45-10:00-up-trades.mpack
+    09:45-10:00-down-trades.mpack
 ```
+
+Snapshot files contain `[price, qty]` depth levels. Trade files contain one record per matched maker-taker event (`ts_ns`, `price`, `size`, `side`, `fee_rate_bps`). Up and Down tokens are always written to separate files.
 
 ```bash
 cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
 ```
 
-See [`docs/polymarket.md`](docs/polymarket.md) for file format and Python reader.
+See [`docs/storage.md`](docs/storage.md) for file format, schemas, and Python readers.
 
 ---
 
