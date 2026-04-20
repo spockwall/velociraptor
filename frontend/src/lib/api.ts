@@ -62,6 +62,14 @@ export interface PolymarketMarket {
     title: string;
 }
 
+export interface KalshiMarket {
+    ticker: string;
+    series: string;
+    window_start: number;
+    interval_secs: number;
+    title: string;
+}
+
 export const api = {
     health: () => get<{ ok: boolean }>("/health"),
 
@@ -76,4 +84,6 @@ export const api = {
         get<LastTradePrice[]>(`${BASE}/trades/${exchange}/${symbol}?limit=${limit}`),
 
     polymarketMarkets: () => get<PolymarketMarket[]>(`${BASE}/polymarket/markets`),
+
+    kalshiMarkets: () => get<KalshiMarket[]>(`${BASE}/kalshi/markets`),
 };

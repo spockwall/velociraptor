@@ -44,6 +44,21 @@ impl RedisKey {
     pub fn polymarket_base_slug_assets(base_slug: &str) -> String {
         format!("polymarket:base:{base_slug}:assets")
     }
+
+    /// Per-ticker label hash for Kalshi: `kalshi:label:{ticker}`
+    /// Stored as a Redis hash with fields: series, ticker, window_start, window_close, interval_secs
+    pub fn kalshi_label(ticker: &str) -> String {
+        format!("kalshi:label:{ticker}")
+    }
+
+    /// Set membership of all currently-labeled Kalshi market tickers.
+    pub const KALSHI_LABEL_INDEX: &'static str = "kalshi:label:index";
+
+    /// Set of tickers belonging to the currently-active window for `series`.
+    /// Used to evict prior-window labels when a new window starts.
+    pub fn kalshi_series_tickers(series: &str) -> String {
+        format!("kalshi:series:{series}:tickers")
+    }
 }
 
 pub struct Events;

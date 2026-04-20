@@ -182,6 +182,66 @@ async fn get_polymarket_markets(
     Ok(Json(out))
 }
 
+#[derive(Serialize)]
+pub struct KalshiMarket {
+    pub ticker: String,
+    pub series: String,
+    pub window_start: u64,
+    pub interval_secs: u64,
+    /// Title — currently the ticker itself; UI can format if desired.
+    pub title: String,
+}
+
+async fn get_kalshi_markets(
+    State(s): State<Arc<AppState>>,
+) -> Result<Json<Vec<KalshiMarket>>, ApiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let tickers = s.redis.smembers(RedisKey::KALSHI_LABEL_INDEX).await;
+    let mut out = Vec::with_capacity(tickers.len());
+    for ticker in tickers {
+        let key = RedisKey::kalshi_label(&ticker);
+        let h = s.redis.hgetall(&key).await;
+        if h.is_empty() {
+            s.redis.srem(RedisKey::KALSHI_LABEL_INDEX, &ticker).await;
+            continue;
+        }
+        let window_start = h
+            .get("window_start")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let interval_secs = h
+            .get("interval_secs")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        if interval_secs > 0 && window_start > 0 && window_start + interval_secs <= now {
+            s.redis.del(&key).await;
+            s.redis.srem(RedisKey::KALSHI_LABEL_INDEX, &ticker).await;
+            s.redis.del(&RedisKey::orderbook("kalshi", &ticker)).await;
+            s.redis.del(&RedisKey::bba("kalshi", &ticker)).await;
+            s.redis.del(&RedisKey::snapshots("kalshi", &ticker)).await;
+            s.redis.del(&RedisKey::trades("kalshi", &ticker)).await;
+            continue;
+        }
+
+        let series = h.get("series").cloned().unwrap_or_default();
+        let title = ticker.clone();
+        out.push(KalshiMarket {
+            ticker,
+            series,
+            window_start,
+            interval_secs,
+            title,
+        });
+    }
+    out.sort_by(|a, b| a.series.cmp(&b.series).then(a.window_start.cmp(&b.window_start)).then(a.ticker.cmp(&b.ticker)));
+    Ok(Json(out))
+}
+
 async fn get_trades(
     State(s): State<Arc<AppState>>,
     Path((exchange, symbol)): Path<(String, String)>,
@@ -207,5 +267,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/snapshots/:exchange/:symbol", get(get_snapshots))
         .route("/api/trades/:exchange/:symbol", get(get_trades))
         .route("/api/polymarket/markets", get(get_polymarket_markets))
+        .route("/api/kalshi/markets", get(get_kalshi_markets))
         .with_state(state)
 }

@@ -358,10 +358,17 @@ async fn spawn_polymarket_window(
 
 /// Spawn one rolling-window scheduler per enabled Kalshi series.
 /// Returns an empty vec and logs a warning if credentials are missing.
+///
+/// `redis` (optional) is used to persist the ticker → label mapping so the
+/// HTTP backend can render readable titles, and to write per-window snapshots
+/// to `ob:kalshi:{ticker}`.
 pub fn spawn_kalshi_schedulers(
     markets: &[KalshiMarketConfig],
     depth: usize,
     credentials_path: &str,
+    redis: Option<RedisHandle>,
+    snapshot_cap: usize,
+    trade_cap: usize,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let enabled: Vec<_> = markets.iter().filter(|m| m.enable).cloned().collect();
     if enabled.is_empty() {
@@ -379,17 +386,34 @@ pub fn spawn_kalshi_schedulers(
         }
     };
 
+    // Kalshi 15-min windows are aligned on UTC :00/:15/:30/:45.
+    const KALSHI_INTERVAL_SECS: u64 = 900;
+
     enabled
         .into_iter()
         .map(|market| {
             let creds = creds.clone();
+            let redis = redis.clone();
             info!(series = %market.series, "Kalshi enabled");
             tokio::spawn(async move {
                 let series = market.series.clone();
                 kalshi_rolling(series.clone(), move |ticker| {
                     let series = series.clone();
                     let creds = creds.clone();
-                    async move { spawn_kalshi_window(series, ticker, depth, creds).await }
+                    let redis = redis.clone();
+                    async move {
+                        spawn_kalshi_window(
+                            series,
+                            ticker,
+                            depth,
+                            creds,
+                            redis,
+                            snapshot_cap,
+                            trade_cap,
+                            KALSHI_INTERVAL_SECS,
+                        )
+                        .await
+                    }
                 })
                 .await;
             })
@@ -402,6 +426,10 @@ async fn spawn_kalshi_window(
     ticker: String,
     depth: usize,
     creds: KalshiCredentials,
+    redis: Option<RedisHandle>,
+    snapshot_cap: usize,
+    trade_cap: usize,
+    interval_secs: u64,
 ) -> Option<KalshiWindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
         .set_ws_url(creds.ws_url())
@@ -412,13 +440,78 @@ async fn spawn_kalshi_window(
     cfg.with_exchange(conn_cfg);
     cfg.set_snapshot_depth(depth);
 
+    // Persist ticker → {series, ticker, window_start, interval_secs} for the backend.
+    if let Some(r) = redis.clone() {
+        // Compute window_start by snapping `now` to the previous :00/:15/:30/:45.
+        // Pre-start runs ~10s before the current window closes, so `now` is still
+        // inside the previous window — the new window starts at `now + early_start`.
+        // We instead derive it from the rule: window_start = current_close,
+        // i.e. the next 15-min boundary at or after `now + EARLY_START_SECS`.
+        let now = libs::time::now_secs();
+        let probe = now + 30; // safely inside the new window
+        let window_start = (probe / interval_secs) * interval_secs;
+        let window_start_s = window_start.to_string();
+        let interval_s = interval_secs.to_string();
+
+        // Evict expired prior-window labels for this series. Active overlapping
+        // windows clean themselves up via the watchdog — we never touch them here.
+        let series_index = RedisKey::kalshi_series_tickers(&series);
+        let prior_tickers = r.smembers(&series_index).await;
+        for prior_ticker in &prior_tickers {
+            if prior_ticker == &ticker {
+                continue;
+            }
+            let prior_label = RedisKey::kalshi_label(prior_ticker);
+            let prior_hash = r.hgetall(&prior_label).await;
+            let p_ws = prior_hash
+                .get("window_start")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let p_iv = prior_hash
+                .get("interval_secs")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let is_stale = p_iv == 0 || (p_ws > 0 && p_ws + p_iv <= now);
+            if !is_stale {
+                continue;
+            }
+            r.del(&prior_label).await;
+            r.srem(RedisKey::KALSHI_LABEL_INDEX, prior_ticker).await;
+            r.del(&RedisKey::orderbook("kalshi", prior_ticker)).await;
+            r.del(&RedisKey::bba("kalshi", prior_ticker)).await;
+            r.del(&RedisKey::snapshots("kalshi", prior_ticker)).await;
+            r.del(&RedisKey::trades("kalshi", prior_ticker)).await;
+            r.srem(&series_index, prior_ticker).await;
+        }
+
+        r.sadd(&series_index, &ticker).await;
+        let r2 = r.clone();
+        let key = RedisKey::kalshi_label(&ticker);
+        let series_clone = series.clone();
+        let ticker_clone = ticker.clone();
+        tokio::spawn(async move {
+            r2.hset_multi(
+                &key,
+                &[
+                    ("series", &series_clone),
+                    ("ticker", &ticker_clone),
+                    ("window_start", &window_start_s),
+                    ("interval_secs", &interval_s),
+                ],
+            )
+            .await;
+            r2.sadd(RedisKey::KALSHI_LABEL_INDEX, &ticker_clone).await;
+        });
+    }
+
     let control = SystemControl::new();
     let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, depth);
+    let series_for_log = series.clone();
     engine
         .hooks_mut()
         .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
             debug!(
-                series = %series,
+                series = %series_for_log,
                 symbol = %snap.symbol,
                 seq = snap.sequence,
                 bid = ?snap.best_bid,
@@ -427,9 +520,37 @@ async fn spawn_kalshi_window(
             );
         });
 
+    if let Some(r) = redis.clone() {
+        attach_redis(&mut engine, r, snapshot_cap, trade_cap);
+    }
+
     let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
     let ctrl = control.clone();
     let ticker_log = ticker.clone();
+    let cleanup_redis = redis.clone();
+    let cleanup_ticker = ticker.clone();
+    let cleanup_series = series.clone();
+
+    if let Some(r) = cleanup_redis {
+        let watch_ctrl = control.clone();
+        tokio::spawn(async move {
+            loop {
+                if watch_ctrl.is_shutdown() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            let series_index = RedisKey::kalshi_series_tickers(&cleanup_series);
+            r.del(&RedisKey::kalshi_label(&cleanup_ticker)).await;
+            r.srem(RedisKey::KALSHI_LABEL_INDEX, &cleanup_ticker).await;
+            r.del(&RedisKey::orderbook("kalshi", &cleanup_ticker)).await;
+            r.del(&RedisKey::bba("kalshi", &cleanup_ticker)).await;
+            r.del(&RedisKey::snapshots("kalshi", &cleanup_ticker)).await;
+            r.del(&RedisKey::trades("kalshi", &cleanup_ticker)).await;
+            r.srem(&series_index, &cleanup_ticker).await;
+        });
+    }
+
     let handle = tokio::spawn(async move {
         if let Err(e) = system.run().await {
             error!(ticker = %ticker_log, "Kalshi system error: {e}");

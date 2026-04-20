@@ -112,7 +112,14 @@ async fn run(config_path: &str) -> Result<()> {
         cfg.redis.snapshot_cap,
         cfg.redis.trade_cap,
     );
-    let _kal = spawn_kalshi_schedulers(&cfg.kalshi.market, cfg.storage.depth, KALSHI_CREDENTIALS_PATH);
+    let _kal = spawn_kalshi_schedulers(
+        &cfg.kalshi.market,
+        cfg.storage.depth,
+        KALSHI_CREDENTIALS_PATH,
+        redis_handle.clone(),
+        cfg.redis.snapshot_cap,
+        cfg.redis.trade_cap,
+    );
 
     // ── Run until Ctrl-C or engine error ─────────────────────────────────────
 
