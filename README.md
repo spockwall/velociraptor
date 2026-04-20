@@ -21,7 +21,7 @@ A high-performance Rust workspace for real-time market data streaming and order 
 | `zmq_server` | ZMQ transport layer — PUB (market data), ROUTER (subscriptions), PUB (user events) |
 | `recorder` | Append-only MessagePack snapshot writer with daily rotation and zstd compression |
 | `executor` | ZMQ REP gateway for REST order placement (stub) |
-| `backend` | Axum HTTP API for React frontend (stub) |
+| `backend` | Axum HTTP API — reads Redis, exposes market data over REST |
 
 ---
 
@@ -41,6 +41,16 @@ cp configs/example.yaml configs/server.yaml
 server:
   pub_endpoint: "tcp://*:5555"
   router_endpoint: "tcp://*:5556"
+
+redis:
+  enabled: true
+  url: "redis://127.0.0.1:6379"
+  snapshot_cap: 100     # max snapshots kept per symbol
+  trade_cap: 1000         # max trades kept per symbol
+  event_list_cap: 5000   # max entries in events:fills / events:orders
+
+backend:
+  port: 3000
 
 storage:
   enabled: false
@@ -90,7 +100,13 @@ private_key: |
 ws_url: "wss://api.elections.kalshi.com/trade-api/ws/v2"
 ```
 
-### 2. Start the zmq-server
+### 2. Start Redis (optional, required for backend)
+
+```bash
+docker compose up redis -d
+```
+
+### 3. Start the ZMQ server
 
 ```bash
 cargo run --bin orderbook_server --release -- --config configs/server.yaml
@@ -102,9 +118,28 @@ The server logs its socket addresses on startup:
 ZMQ PUB    tcp://*:5555
 ZMQ ROUTER tcp://*:5556
 ZMQ user PUB  ipc:///tmp/trading/ws_status.sock
+Redis integration enabled (snapshot_cap=1000, trade_cap=500)
 ```
 
-### 3. Subscribe from Python
+### 4. Start the HTTP backend (optional)
+
+```bash
+cargo run --bin backend --release -- --config configs/server.yaml
+```
+
+Query market data from Redis over HTTP:
+
+```bash
+curl http://localhost:3000/health
+curl http://localhost:3000/api/bba/binance/btcusdt
+curl http://localhost:3000/api/orderbook/binance/btcusdt
+curl "http://localhost:3000/api/snapshots/binance/btcusdt?limit=10"
+curl "http://localhost:3000/api/trades/polymarket/<asset_id>?limit=5"
+```
+
+All responses are JSON. Returns `404` when a key has no data yet, `500` on decode error.
+
+### 5. Subscribe from Python
 
 ```bash
 pip install pyzmq msgpack
@@ -126,7 +161,7 @@ python3 zmq_server/examples/orderbook_subscriber.py \
     --symbol 71321045679252212594626385532706912750332728571942532289631379312455583992563
 ```
 
-### 4. Read stored snapshots
+### 6. Read stored snapshots
 
 ```bash
 python3 scripts/read_mpack.py data/binance/BTCUSDT/
@@ -755,6 +790,55 @@ python3 zmq_server/examples/orderbook_subscriber.py --exchange hyperliquid --sym
 
 ---
 
+## Redis Integration
+
+When `redis.enabled: true`, `orderbook_server` writes market data to Redis on every engine tick:
+
+| Key pattern | Type | Contents |
+|---|---|---|
+| `ob:{exchange}:{symbol}` | String | Latest full orderbook snapshot (msgpack) |
+| `bba:{exchange}:{symbol}` | String | Latest best-bid-ask (msgpack) |
+| `snapshots:{exchange}:{symbol}` | List | Recent snapshots, capped at `snapshot_cap` |
+| `trades:{exchange}:{symbol}` | List | Recent last-trade events, capped at `trade_cap` |
+| `position:{exchange}:{symbol}` | String | Latest position (msgpack, from user channel) |
+| `balance:{exchange}:{asset}` | String | Latest balance (msgpack, from user channel) |
+| `events:fills` | List | Recent fill events, capped at `event_list_cap` |
+| `events:orders` | List | Recent order updates, capped at `event_list_cap` |
+
+All values are msgpack-encoded. Lists use `LPUSH + LTRIM` so index 0 is always the most recent entry.
+
+Start Redis via Docker Compose (included in repo):
+
+```bash
+docker compose up redis -d
+```
+
+---
+
+## HTTP Backend
+
+`backend` is a lightweight Axum HTTP server that reads the Redis keys above and exposes them as JSON.
+
+```bash
+cargo run --bin backend --release -- --config configs/example.yaml
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | `{"ok": true}` |
+| `GET` | `/api/orderbook/:exchange/:symbol` | Latest full snapshot |
+| `GET` | `/api/bba/:exchange/:symbol` | Latest best-bid-ask |
+| `GET` | `/api/snapshots/:exchange/:symbol?limit=N` | Recent N snapshots (default 20) |
+| `GET` | `/api/trades/:exchange/:symbol?limit=N` | Recent N last-trade events (default 20) |
+
+`:exchange` matches the lowercase exchange name (`binance`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `:symbol` is the exchange-native symbol (e.g. `btcusdt`, `BTC-USDT`, `<token_id>`).
+
+Responses are JSON. Missing keys return `{"error": "..."}` with status `404`.
+
+---
+
 ## Server Configuration
 
 All options are set via the YAML config file. Only `--config`, `--log-level`, and `--log-json` are accepted as CLI flags.
@@ -804,8 +888,11 @@ cargo check --workspace
 cargo fmt
 cargo clippy
 
-# Run server
+# Run server (ZMQ + optional Redis)
 cargo run --bin orderbook_server --release -- --config configs/server.yaml
+
+# Run HTTP backend (reads Redis)
+cargo run --bin backend --release -- --config configs/server.yaml
 
 # Terminal visualisers
 cargo run --example polymarket_orderbook --release
