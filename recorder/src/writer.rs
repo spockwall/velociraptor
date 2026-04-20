@@ -1,6 +1,6 @@
 use crate::config::{RotationPolicy, StorageConfig};
 use crate::event::RecorderEvent;
-use crate::format::StorageRecord;
+use crate::format::{StorageRecord, TradeRecord};
 use libs::time::current_date;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -26,7 +26,7 @@ impl StorageWriter {
         let config = self.config;
 
         tokio::spawn(async move {
-            // key: "exchange:symbol"  →  (writer, current_date_str)
+            // key: "exchange:symbol" (snapshots) or "exchange:symbol_trades" (trades)
             let mut handles: HashMap<String, (BufWriter<File>, String)> = HashMap::new();
             let mut flush_tick = interval(Duration::from_millis(config.flush_interval_ms));
 
@@ -54,6 +54,21 @@ impl StorageWriter {
                                 error!("StorageWriter: write failed for {key}: {e}");
                             }
                         }
+                        Ok(RecorderEvent::Trade(trade)) => {
+                            let record = TradeRecord::from_trade(&trade);
+                            // "{symbol}_trades" suffix → {base_path}/{exchange}/{symbol}_trades/
+                            let key = format!("{}:{}_trades", trade.exchange, trade.symbol);
+                            let today = current_date();
+
+                            let writer = match get_or_open(&mut handles, &key, &today, &config) {
+                                Some(w) => w,
+                                None => continue,
+                            };
+
+                            if let Err(e) = write_record(writer, &record) {
+                                error!("StorageWriter: trade write failed for {key}: {e}");
+                            }
+                        }
                         Ok(RecorderEvent::RawUpdate) => {}
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("StorageWriter: lagged, skipped {n} events");
@@ -75,7 +90,8 @@ impl StorageWriter {
             }
 
             // Final flush on shutdown
-            for (key, (ref mut writer, date)) in &mut handles {
+            for (key, (ref mut writer, date)) in &mut handles
+            {
                 if let Err(e) = writer.flush() {
                     error!("StorageWriter: final flush failed for {key}: {e}");
                 }
@@ -195,7 +211,10 @@ fn get_or_open<'a>(
     handles.get_mut(key).map(|(w, _)| w)
 }
 
-fn write_record(writer: &mut BufWriter<File>, record: &StorageRecord) -> anyhow::Result<()> {
+fn write_record<T: serde::Serialize>(
+    writer: &mut BufWriter<File>,
+    record: &T,
+) -> anyhow::Result<()> {
     let payload = rmp_serde::to_vec_named(record)?;
     let len = payload.len() as u32;
     writer.write_all(&len.to_le_bytes())?;

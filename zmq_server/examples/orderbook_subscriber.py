@@ -5,10 +5,18 @@ Velociraptor orderbook subscriber.
 Sends a subscribe request over the DEALER→ROUTER control socket, then
 receives snapshots from the PUB socket on every engine update.
 
+For `last_trade` type, no ROUTER handshake is needed — the server publishes
+trade events directly on the PUB socket without requiring a subscription.
+
 Wire format
 -----------
 Control (DEALER↔ROUTER):  JSON
 Data    (SUB←PUB):        msgpack — two frames: [topic_bytes, payload_bytes]
+
+Topic format
+------------
+    snapshot / bba : "{exchange}:{symbol}"             e.g. "binance:BTCUSDT"
+    last_trade     : "{exchange}:{symbol}:last_trade"  e.g. "polymarket:<token_id>:last_trade"
 
 Usage
 -----
@@ -23,18 +31,23 @@ Usage
     python3 zmq_server/examples/orderbook_subscriber.py \\
         --exchange hyperliquid --symbol BTC
 
-    # Polymarket (token ID as symbol)
+    # Polymarket orderbook snapshot (token ID as symbol)
     python3 zmq_server/examples/orderbook_subscriber.py \\
         --exchange polymarket \\
         --symbol 71321045679252212594626385532706912750332728571942532289631379312455583992563
 
+    # Polymarket last-trade stream (no ROUTER handshake needed)
+    python3 zmq_server/examples/orderbook_subscriber.py \\
+        --exchange polymarket --type last_trade \\
+        --symbol 71321045679252212594626385532706912750332728571942532289631379312455583992563
+
 Options
 -------
-    --exchange   Exchange name, lowercase  (default: binance)
-    --symbol     Symbol as published       (default: BTCUSDT)
-    --type       snapshot | bba            (default: snapshot)
-    --pub        PUB endpoint              (default: tcp://localhost:5555)
-    --router     ROUTER endpoint           (default: tcp://localhost:5556)
+    --exchange   Exchange name, lowercase          (default: binance)
+    --symbol     Symbol as published               (default: BTCUSDT)
+    --type       snapshot | bba | last_trade       (default: snapshot)
+    --pub        PUB endpoint                      (default: tcp://localhost:5555)
+    --router     ROUTER endpoint                   (default: tcp://localhost:5556)
 """
 
 import argparse
@@ -58,7 +71,7 @@ def parse_args() -> argparse.Namespace:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exchange", default="binance")
     p.add_argument("--symbol",   default="BTCUSDT")
-    p.add_argument("--type",     default="snapshot", choices=["snapshot", "bba"],
+    p.add_argument("--type",     default="snapshot", choices=["snapshot", "bba", "last_trade"],
                    dest="sub_type")
     p.add_argument("--pub",    default="tcp://localhost:5555")
     p.add_argument("--router", default="tcp://localhost:5556")
@@ -120,41 +133,66 @@ def print_bba(msg: dict) -> None:
     print(f"[{ex}:{sym}] seq={seq}  bid={bid}  ask={ask}  spread={spread_str}")
 
 
+def print_last_trade(msg: dict) -> None:
+    ex    = exchange_name(msg.get("exchange"))
+    sym   = msg.get("symbol", "?")
+    price = msg.get("price", 0.0)
+    size  = msg.get("size", 0.0)
+    side  = msg.get("side", "?")
+    fee   = msg.get("fee_rate_bps", 0.0)
+    ts    = msg.get("timestamp", "?")
+    print(f"[{ex}:{sym}] TRADE {side}  px={price:.4f}  sz={size:.6f}  fee_bps={fee}  ts={ts}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     args = parse_args()
     ctx  = zmq.Context()
 
-    # Control socket — DEALER (no identity envelope needed).
-    dealer = ctx.socket(zmq.DEALER)
-    dealer.connect(args.router)
+    is_trade = args.sub_type == "last_trade"
 
-    request = {
-        "action":   "subscribe",
-        "exchange": args.exchange,
-        "symbol":   args.symbol,
-        "type":     args.sub_type,
-    }
-    dealer.send_json(request)
-    print(f"→ {request}")
+    dealer = None
+    if not is_trade:
+        # snapshot / bba — register with ROUTER so the server tracks the client.
+        dealer = ctx.socket(zmq.DEALER)
+        dealer.connect(args.router)
 
-    ack = dealer.recv_json()
-    print(f"← {ack}")
-    if ack.get("status") != "ok":
-        print(f"Subscription failed: {ack.get('message')}", file=sys.stderr)
-        sys.exit(1)
+        request = {
+            "action":   "subscribe",
+            "exchange": args.exchange,
+            "symbol":   args.symbol,
+            "type":     args.sub_type,
+        }
+        dealer.send_json(request)
+        print(f"→ {request}")
+
+        ack = dealer.recv_json()
+        print(f"← {ack}")
+        if ack.get("status") != "ok":
+            print(f"Subscription failed: {ack.get('message')}", file=sys.stderr)
+            sys.exit(1)
 
     # Data socket — SUB filtered to our topic.
+    # last_trade topic: "{exchange}:{symbol}:last_trade"
+    # snapshot/bba topic: "{exchange}:{symbol}"
     sub = ctx.socket(zmq.SUB)
     sub.connect(args.pub)
-    topic = f"{args.exchange}:{args.symbol}"
+    if is_trade:
+        topic = f"{args.exchange}:{args.symbol}:last_trade"
+    else:
+        topic = f"{args.exchange}:{args.symbol}"
     sub.setsockopt(zmq.SUBSCRIBE, topic.encode())
 
     print(f"\nListening on '{topic}' ({args.sub_type})")
     print("-" * 60)
 
-    printer = print_snapshot if args.sub_type == "snapshot" else print_bba
+    if args.sub_type == "snapshot":
+        printer = print_snapshot
+    elif args.sub_type == "bba":
+        printer = print_bba
+    else:
+        printer = print_last_trade
 
     try:
         while True:
@@ -171,14 +209,16 @@ def main() -> None:
             printer(msg)
 
     except KeyboardInterrupt:
-        print("\nUnsubscribing…")
-        dealer.send_json({
-            "action":   "unsubscribe",
-            "exchange": args.exchange,
-            "symbol":   args.symbol,
-        })
+        print("\nDone.")
+        if dealer is not None:
+            dealer.send_json({
+                "action":   "unsubscribe",
+                "exchange": args.exchange,
+                "symbol":   args.symbol,
+            })
     finally:
-        dealer.close()
+        if dealer is not None:
+            dealer.close()
         sub.close()
         ctx.term()
 

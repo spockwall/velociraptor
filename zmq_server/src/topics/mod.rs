@@ -10,6 +10,7 @@
 
 pub mod bba;
 pub mod snapshot;
+pub mod trade;
 pub mod user;
 
 /// Encoding contract for a ZMQ PUB topic.

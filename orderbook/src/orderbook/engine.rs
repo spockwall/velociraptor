@@ -136,6 +136,10 @@ impl StreamEngine {
                         hooks.fire(&ev);
                         let _ = event_broadcast_tx.send(StreamEvent::User(ev));
                     }
+                    Some(StreamMessage::LastTradePrice(trade)) => {
+                        hooks.fire(&trade);
+                        let _ = event_broadcast_tx.send(StreamEvent::LastTradePrice(trade));
+                    }
                     Some(StreamMessage::Base(b)) => {
                         debug!(?b, "Base connection message");
                     }

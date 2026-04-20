@@ -20,6 +20,10 @@ path = "examples/polymarket_user_channel.rs"
 name = "kalshi_orderbook"
 path = "examples/kalshi_orderbook.rs"
 
+[[example]]
+name = "polymarket_last_trade"
+path = "examples/polymarket_last_trade.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }

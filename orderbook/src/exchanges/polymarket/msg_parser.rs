@@ -1,10 +1,13 @@
 use crate::connection::MsgParserTrait;
 use crate::exchanges::polymarket::types::{
-    PolyOrderEvent, PolyTradeEvent, PolymarketBookEvent, PolymarketPriceChangeEvent,
+    PolyLastTradePriceEvent, PolyOrderEvent, PolyTradeEvent, PolymarketBookEvent,
+    PolymarketPriceChangeEvent,
 };
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use libs::protocol::{ExchangeName, OrderStatus, Side, UserEvent};
+use chrono::TimeZone;
+use chrono::Utc;
+use libs::protocol::{ExchangeName, LastTradePrice, OrderStatus, Side, UserEvent};
 use libs::time::now_ns;
 use libs::time::parse_timestamp_ms;
 use tracing::{error, info, warn};
@@ -15,6 +18,7 @@ use tracing::{error, info, warn};
 /// ## Market channel events (`type: "market"` subscription)
 /// - `"book"` → `StreamMessage::OrderbookUpdate` with `action: Snapshot`
 /// - `"price_change"` → `StreamMessage::OrderbookUpdate` with `action: Update|Delete`
+/// - `"last_trade_price"` → `StreamMessage::LastTradePrice`
 ///
 /// ## User channel events (`type: "user"` subscription)
 /// - `"order"` → `StreamMessage::UserEvent(UserEvent::OrderUpdate)`
@@ -80,7 +84,12 @@ impl MsgParserTrait<StreamMessage> for PolymarketMessageParser {
                         messages.push(msg);
                     }
                 }
-                _ => {} // tick_size_change, last_trade_price, etc. — silently ignore
+                "last_trade_price" => {
+                    if let Some(msg) = self.parse_last_trade_price(event) {
+                        messages.push(msg);
+                    }
+                }
+                _ => {} // tick_size_change, best_bid_ask, etc. — silently ignore
             }
         }
         Ok(messages)
@@ -277,6 +286,31 @@ impl PolymarketMessageParser {
             ts_ns: now_ns(),
         }))
     }
+
+    fn parse_last_trade_price(&self, value: &serde_json::Value) -> Option<StreamMessage> {
+        let e: PolyLastTradePriceEvent = match serde_json::from_value(value.clone()) {
+            Ok(v) => v,
+            Err(err) => {
+                error!("Polymarket: failed to deserialise last_trade_price: {err}");
+                return None;
+            }
+        };
+        let ms: i64 = e.timestamp.parse().ok()?;
+        let ts = Utc
+            .timestamp_millis_opt(ms)
+            .single()
+            .unwrap_or_else(Utc::now);
+        Some(StreamMessage::LastTradePrice(LastTradePrice {
+            exchange: self.exchange_name,
+            symbol: e.asset_id,
+            price: e.price.parse().ok()?,
+            size: e.size.parse().ok()?,
+            side: e.side,
+            fee_rate_bps: e.fee_rate_bps.parse().unwrap_or(0.0),
+            market: e.market,
+            timestamp: ts,
+        }))
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -315,7 +349,7 @@ fn parse_order_type(raw: &str) -> OrderStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libs::protocol::{OrderStatus, Side, UserEvent};
+    use libs::protocol::{ExchangeName, OrderStatus, Side, UserEvent};
 
     fn parser() -> PolymarketMessageParser {
         PolymarketMessageParser::new()
@@ -325,10 +359,39 @@ mod tests {
     fn ignores_unknown_event_type() {
         assert!(
             parser()
-                .parse_message(r#"[{"event_type":"last_trade_price"}]"#)
+                .parse_message(r#"[{"event_type":"tick_size_change"}]"#)
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn parses_last_trade_price() {
+        let raw = r#"[{
+            "asset_id": "114122071509644379678018727908709560226618148003371446110114509806601493071694",
+            "event_type": "last_trade_price",
+            "fee_rate_bps": "0",
+            "market": "0x6a67b9d828d53862160e470329ffea5246f338ecfffdf2cab45211ec578b0347",
+            "price": "0.456",
+            "side": "BUY",
+            "size": "219.217767",
+            "timestamp": "1750428146322"
+        }]"#;
+
+        let msgs = parser().parse_message(raw).unwrap();
+        assert_eq!(msgs.len(), 1);
+        let StreamMessage::LastTradePrice(trade) = &msgs[0] else {
+            panic!("expected LastTradePrice, got {:?}", msgs[0]);
+        };
+        assert_eq!(
+            trade.symbol,
+            "114122071509644379678018727908709560226618148003371446110114509806601493071694"
+        );
+        assert!((trade.price - 0.456).abs() < 1e-9);
+        assert!((trade.size - 219.217767).abs() < 1e-6);
+        assert_eq!(trade.side, "BUY");
+        assert_eq!(trade.fee_rate_bps, 0.0);
+        assert_eq!(trade.exchange, ExchangeName::Polymarket);
     }
 
     #[test]

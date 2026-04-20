@@ -90,3 +90,23 @@ pub struct OrderbookSnapshot {
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
 }
+
+/// A single matched trade on the public market channel.
+///
+/// Distinct from `UserEvent::Fill` (which is a private account fill with
+/// `client_oid` / `fee` fields). `LastTradePrice` is broadcast to all
+/// subscribers on `MARKET_DATA_SOCKET` with topic `"{exchange}:{symbol}:last_trade"`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LastTradePrice {
+    pub exchange: ExchangeName,
+    /// Asset / token ID (Polymarket: the YES/NO token ID).
+    pub symbol: String,
+    pub price: f64,
+    pub size: f64,
+    /// Taker side: `"BUY"` or `"SELL"`.
+    pub side: String,
+    pub fee_rate_bps: f64,
+    /// Condition market hash (Polymarket: `market` field).
+    pub market: String,
+    pub timestamp: DateTime<Utc>,
+}

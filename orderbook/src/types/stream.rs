@@ -1,6 +1,5 @@
 use crate::types::orderbook::OrderbookUpdate;
-use libs::protocol::OrderbookSnapshot;
-use libs::protocol::UserEvent;
+use libs::protocol::{LastTradePrice, OrderbookSnapshot, UserEvent};
 use tokio::sync::broadcast;
 
 /// A (price, quantity) pair.
@@ -14,6 +13,8 @@ pub enum StreamEvent {
     OrderbookSnapshot(OrderbookSnapshot),
     /// User/private channel event (fills, order updates, positions, balances).
     User(UserEvent),
+    /// Public market last-trade event — emitted when a maker/taker order is matched.
+    LastTradePrice(LastTradePrice),
 }
 
 /// Source of engine events for downstream consumers (transport layers,

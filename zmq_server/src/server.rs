@@ -14,6 +14,7 @@
 
 use crate::control::{dispatch, handle_control, Registry};
 use crate::socket::{parse_router_frames, PubSocket, RouterSocket};
+use crate::topics::trade::LastTradeTopic;
 use crate::topics::user::UserEventTopic;
 use crate::topics::Topic;
 use orderbook::{StreamEvent, StreamEventSource};
@@ -111,6 +112,13 @@ impl ZmqServer {
                             }
                         }
                         Ok(StreamEvent::OrderbookRaw(_)) => {}
+                        Ok(StreamEvent::LastTradePrice(trade)) => {
+                            if let Some((topic, bytes)) = LastTradeTopic(&trade).frame() {
+                                if let Err(e) = market_pub.send(topic, bytes).await {
+                                    error!("ZMQ trade PUB send error: {e}");
+                                }
+                            }
+                        }
                         Ok(StreamEvent::User(ev)) => {
                             if let Some((topic, bytes)) = UserEventTopic(&ev).frame() {
                                 if let Err(e) = user_pub.send(topic, bytes).await {

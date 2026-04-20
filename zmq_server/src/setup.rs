@@ -7,7 +7,7 @@
 use libs::configs::{Config, KalshiMarketConfig, PolymarketMarketConfig};
 use libs::constants::WS_STATUS_SOCKET;
 use libs::credentials::KalshiCredentials;
-use libs::protocol::{ExchangeName, OrderbookSnapshot};
+use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -124,6 +124,14 @@ pub fn attach_storage(
         engine.hooks_mut().on::<OrderbookUpdate, _>(move |_| {
             let _ = tx.send(RecorderEvent::RawUpdate);
         });
+    }
+    {
+        let tx = rec_tx.clone();
+        engine
+            .hooks_mut()
+            .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
+                let _ = tx.send(RecorderEvent::Trade(trade.clone()));
+            });
     }
     drop(rec_tx);
     Some((storage_config, rec_rx))

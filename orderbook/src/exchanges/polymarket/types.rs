@@ -45,6 +45,23 @@ pub struct PolymarketPriceChangeEvent {
     pub price_changes: Vec<PolymarketPriceChange>,
 }
 
+/// Public market `last_trade_price` event — emitted when a maker and taker
+/// order is matched.
+#[derive(Debug, Deserialize)]
+pub struct PolyLastTradePriceEvent {
+    pub asset_id: String,
+    pub price: String,
+    pub size: String,
+    /// Taker side: `"BUY"` or `"SELL"`.
+    pub side: String,
+    #[serde(default)]
+    pub fee_rate_bps: String,
+    #[serde(default)]
+    pub market: String,
+    /// Unix milliseconds as a string.
+    pub timestamp: String,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // User channel wire types
 // ═══════════════════════════════════════════════════════════════════════════════

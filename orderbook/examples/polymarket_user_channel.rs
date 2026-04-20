@@ -176,6 +176,12 @@ fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
                 u.orders.len()
             );
         }
+        StreamMessage::LastTradePrice(t) => {
+            eprintln!(
+                "[{tag}] TRADE {} {} px={:.4} sz={:.4}",
+                t.symbol, t.side, t.price, t.size
+            );
+        }
         StreamMessage::Base(b) => {
             eprintln!("[{tag}] base {b:?}");
         }
