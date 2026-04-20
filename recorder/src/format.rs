@@ -7,7 +7,7 @@ use serde::Serialize;
 /// exchange, symbol, spread, mid, and wmid are omitted — they are either
 /// encoded in the file path or derivable from bids/asks.
 #[derive(Serialize)]
-pub struct StorageRecord {
+pub struct SnapshotRecord {
     pub sequence: u64,
     /// Unix nanosecond timestamp — use `pd.to_datetime(ts_ns, unit='ns', utc=True)` in Python.
     pub ts_ns: i64,
@@ -44,7 +44,7 @@ impl TradeRecord {
     }
 }
 
-impl StorageRecord {
+impl SnapshotRecord {
     pub fn from_snapshot(snap: &OrderbookSnapshot, depth: usize) -> Self {
         Self {
             sequence: snap.sequence,

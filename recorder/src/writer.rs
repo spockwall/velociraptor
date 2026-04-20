@@ -1,6 +1,6 @@
 use crate::config::{RotationPolicy, StorageConfig};
 use crate::event::RecorderEvent;
-use crate::format::{StorageRecord, TradeRecord};
+use crate::format::{SnapshotRecord, TradeRecord};
 use libs::time::current_date;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -41,7 +41,7 @@ impl StorageWriter {
                 tokio::select! {
                     event = event_rx.recv() => match event {
                         Ok(RecorderEvent::Snapshot(snap)) => {
-                            let record = StorageRecord::from_snapshot(&snap, config.depth);
+                            let record = SnapshotRecord::from_snapshot(&snap, config.depth);
                             let key = format!("{}:{}", snap.exchange, snap.symbol);
                             let today = current_date();
 
@@ -90,8 +90,7 @@ impl StorageWriter {
             }
 
             // Final flush on shutdown
-            for (key, (ref mut writer, date)) in &mut handles
-            {
+            for (key, (ref mut writer, date)) in &mut handles {
                 if let Err(e) = writer.flush() {
                     error!("StorageWriter: final flush failed for {key}: {e}");
                 }

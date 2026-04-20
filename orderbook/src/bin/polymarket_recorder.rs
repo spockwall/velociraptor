@@ -1,38 +1,37 @@
-//! Polymarket orderbook recorder.
+//! Polymarket orderbook + last-trade recorder.
 //!
-//! Streams live orderbook data, writes it to disk per-window-per-side, and
-//! renders a live terminal UI for monitoring.
+//! Streams live orderbook data and last-trade events, writes them to disk
+//! per-window-per-side, and renders a live terminal UI for monitoring.
 //!
 //! # Directory layout
 //!
 //! ```text
 //! {base_path}/polymarket/{slug}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}-up.mpack
 //!                                            {HH:MM}-{HH:MM}-down.mpack
+//!                                            {HH:MM}-{HH:MM}-trades.mpack
 //! ```
 //!
-//! Each file contains length-prefixed MessagePack records. Files are optionally
-//! zstd-compressed after each window closes, producing `*.mpack.zst`.
+//! Each file contains length-prefixed MessagePack records.  Files are
+//! optionally zstd-compressed after each window closes, producing `*.mpack.zst`.
 //!
 //! # Usage
 //!
 //! ```bash
 //! cargo run --bin polymarket_recorder -- --config configs/polymarket.yaml
-//! cargo run --bin polymarket_recorder -- \
-//!     --slug btc-updown-5m --interval-secs 300 \
-//!     --base-path ./data --depth 10
 //! ```
 
 use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
-use libs::protocol::{ExchangeName, OrderbookSnapshot};
+use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
-use libs::time::now_secs;
 use orderbook::connection::{ClientConfig, SystemControl};
-use orderbook::exchanges::polymarket::{PolymarketSubMsgBuilder, resolve_assets_with_labels};
+use orderbook::exchanges::polymarket::{
+    run_rolling_scheduler, resolve_assets_with_labels, PolymarketSubMsgBuilder, WindowTask,
+};
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
-use recorder::format::StorageRecord;
+use recorder::format::{SnapshotRecord, TradeRecord};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -41,43 +40,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-/// How many seconds before a window ends to start the next window's connection.
-const EARLY_START_SECS: u64 = 10;
+const DEFAULT_CONFIG: &str = "configs/polymarket.yaml";
 
-// ── CLI args ──────────────────────────────────────────────────────────────────
+// ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
+#[clap(about = "Polymarket orderbook + trade recorder")]
 struct Args {
-    /// Path to YAML config file (e.g. configs/polymarket.yaml)
-    #[clap(long)]
-    config: Option<String>,
-
-    /// Market slug (repeatable, e.g. --slug btc-updown-5m)
-    #[clap(long = "slug", action = clap::ArgAction::Append)]
-    slugs: Vec<String>,
-
-    /// Window size in seconds paired with each --slug (repeatable)
-    #[clap(long = "interval-secs", action = clap::ArgAction::Append)]
-    intervals: Vec<u64>,
-
-    /// Orderbook depth levels
-    #[clap(long)]
-    depth: Option<usize>,
-
-    /// Terminal render interval in milliseconds
-    #[clap(long)]
-    render_interval: Option<u64>,
-
-    /// Root directory for recorded files
-    #[clap(long)]
-    base_path: Option<String>,
-
-    /// zstd compression level (0 = disabled)
-    #[clap(long)]
-    zstd_level: Option<u8>,
+    #[clap(long, default_value = DEFAULT_CONFIG)]
+    config: String,
 }
 
-// ── Shared snap store (for UI) ────────────────────────────────────────────────
+// ── Shared snap store (for terminal UI) ──────────────────────────────────────
 
 #[derive(Clone)]
 struct SideSnap {
@@ -92,54 +66,30 @@ struct SideSnap {
 
 type SnapStore = Arc<Mutex<HashMap<String, SideSnap>>>;
 
-// ── Polymarket storage writer ─────────────────────────────────────────────────
+// ── On-disk writer ────────────────────────────────────────────────────────────
 
-/// Writes orderbook snapshots for one window side (Up or Down) to disk.
-///
-/// Path: `{base}/{slug}/{date}/{interval_label}-{side}.mpack`
-struct PolymarketWriter {
+struct MpackWriter {
     writer: BufWriter<File>,
     path: PathBuf,
     zstd_level: Option<i32>,
 }
 
-impl PolymarketWriter {
-    /// Open (or create) the file for this window side.
-    fn open(
-        base_path: &PathBuf,
-        slug: &str, // e.g. "btc-updown-5m"
-        win_start_secs: u64,
-        win_end_secs: u64,
-        is_up: bool,
-        zstd_level: Option<i32>,
-    ) -> Option<Self> {
-        let win_start: DateTime<Utc> = Utc.timestamp_opt(win_start_secs as i64, 0).single()?;
-        let win_end: DateTime<Utc> = Utc.timestamp_opt(win_end_secs as i64, 0).single()?;
-
-        let date_str = win_start.format("%Y-%m-%d").to_string();
-        let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"));
-        let side_str = if is_up { "up" } else { "down" };
-        let filename = format!("{interval_str}-{side_str}.mpack");
-
-        let dir = base_path.join(slug).join(&date_str);
-        if let Err(e) = fs::create_dir_all(&dir) {
-            error!(
-                "PolymarketWriter: failed to create dir {}: {e}",
-                dir.display()
-            );
-            return None;
+impl MpackWriter {
+    fn open(path: PathBuf, zstd_level: Option<i32>) -> Option<Self> {
+        if let Some(dir) = path.parent() {
+            if let Err(e) = fs::create_dir_all(dir) {
+                error!("MpackWriter: failed to create dir {}: {e}", dir.display());
+                return None;
+            }
         }
-        let path = dir.join(&filename);
-
         let file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => f,
             Err(e) => {
-                error!("PolymarketWriter: failed to open {}: {e}", path.display());
+                error!("MpackWriter: failed to open {}: {e}", path.display());
                 return None;
             }
         };
-
-        info!("PolymarketWriter: opened {}", path.display());
+        info!("MpackWriter: opened {}", path.display());
         Some(Self {
             writer: BufWriter::new(file),
             path,
@@ -147,7 +97,7 @@ impl PolymarketWriter {
         })
     }
 
-    fn write(&mut self, record: &StorageRecord) -> anyhow::Result<()> {
+    fn write<T: serde::Serialize>(&mut self, record: &T) -> anyhow::Result<()> {
         let payload = rmp_serde::to_vec_named(record)?;
         let len = payload.len() as u32;
         self.writer.write_all(&len.to_le_bytes())?;
@@ -157,23 +107,17 @@ impl PolymarketWriter {
 
     fn flush(&mut self) {
         if let Err(e) = self.writer.flush() {
-            error!(
-                "PolymarketWriter: flush failed for {}: {e}",
-                self.path.display()
-            );
+            error!("MpackWriter: flush failed for {}: {e}", self.path.display());
         }
     }
 
-    /// Flush, close, and optionally compress. Called when the window expires.
     fn close_and_compress(mut self) {
         self.flush();
-        // Drop the BufWriter (closes the file) before compressing.
         let path = self.path.clone();
-        let zstd_level = self.zstd_level;
+        let level = self.zstd_level;
         drop(self.writer);
-
-        if let Some(level) = zstd_level {
-            spawn_compress(path, level);
+        if let Some(lvl) = level {
+            spawn_compress(path, lvl);
         }
     }
 }
@@ -185,8 +129,7 @@ fn spawn_compress(path: PathBuf, level: i32) {
             let input = File::open(&path)?;
             let output = File::create(&zst_path)?;
             let mut encoder = zstd::Encoder::new(output, level)?;
-            let mut reader = std::io::BufReader::new(input);
-            std::io::copy(&mut reader, &mut encoder)?;
+            std::io::copy(&mut std::io::BufReader::new(input), &mut encoder)?;
             encoder.finish()?;
             fs::remove_file(&path)?;
             Ok(())
@@ -198,140 +141,233 @@ fn spawn_compress(path: PathBuf, level: i32) {
     });
 }
 
-// ── Market task ───────────────────────────────────────────────────────────────
+// ── Window file paths ─────────────────────────────────────────────────────────
 
-struct MarketTask {
-    full_slug: String,
-    system_control: SystemControl,
-    handle: tokio::task::JoinHandle<()>,
+fn window_dir(base_path: &PathBuf, slug: &str, win_start_secs: u64) -> Option<(PathBuf, String)> {
+    let win_start: DateTime<Utc> = Utc.timestamp_opt(win_start_secs as i64, 0).single()?;
+    let date_str = win_start.format("%Y-%m-%d").to_string();
+    Some((base_path.join(slug).join(&date_str), date_str))
 }
 
-impl MarketTask {
-    async fn spawn(
-        market: &PolymarketMarketConfig,
-        base_slug: String,
-        full_slug: String,
-        win_start_secs: u64,
-        win_end_secs: u64,
-        store: SnapStore,
-        base_path: PathBuf,
-        depth: usize,
-        zstd_level: Option<i32>,
-    ) -> Option<Self> {
-        let single = vec![PolymarketMarketConfig {
-            enabled: market.enabled,
-            slug: full_slug.clone(),
-            interval_secs: 0,
-        }];
+fn snapshot_path(
+    base_path: &PathBuf,
+    slug: &str,
+    win_start_secs: u64,
+    win_end_secs: u64,
+    is_up: bool,
+) -> Option<PathBuf> {
+    let win_start: DateTime<Utc> = Utc.timestamp_opt(win_start_secs as i64, 0).single()?;
+    let win_end: DateTime<Utc> = Utc.timestamp_opt(win_end_secs as i64, 0).single()?;
+    let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"));
+    let side_str = if is_up { "up" } else { "down" };
+    let (dir, _) = window_dir(base_path, slug, win_start_secs)?;
+    Some(dir.join(format!("{interval_str}-{side_str}.mpack")))
+}
 
-        let labeled = tokio::task::spawn_blocking({
-            let single = single.clone();
-            move || resolve_assets_with_labels(&single)
-        })
-        .await
-        .ok()?;
+fn trade_path(
+    base_path: &PathBuf,
+    slug: &str,
+    win_start_secs: u64,
+    win_end_secs: u64,
+    is_up: bool,
+) -> Option<PathBuf> {
+    let win_start: DateTime<Utc> = Utc.timestamp_opt(win_start_secs as i64, 0).single()?;
+    let win_end: DateTime<Utc> = Utc.timestamp_opt(win_end_secs as i64, 0).single()?;
+    let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"));
+    let side_str = if is_up { "up" } else { "down" };
+    let (dir, _) = window_dir(base_path, slug, win_start_secs)?;
+    Some(dir.join(format!("{interval_str}-{side_str}-trades.mpack")))
+}
 
-        if labeled.is_empty() {
-            warn!("No tokens for {full_slug} (market not open yet?)");
-            return None;
+// ── Window state (shared between hooks and scheduler) ────────────────────────
+
+struct WindowWriters {
+    /// key: "{full_slug}-Up" / "{full_slug}-Down" for snapshots,
+    ///      "{full_slug}-trades" for last-trade records.
+    writers: HashMap<String, MpackWriter>,
+}
+
+impl WindowWriters {
+    fn new() -> Self {
+        Self {
+            writers: HashMap::new(),
         }
+    }
 
-        // Build writers for Up and Down sides.
-        // Use `base_slug` (from the caller, no timestamp) as the directory name so all
-        // windows for the same market land under the same slug folder.
-        let mut writers: HashMap<String, PolymarketWriter> = HashMap::new();
-        for (_, _, _, is_up) in &labeled {
-            let sk = side_key(&full_slug, *is_up);
-            if let Some(w) = PolymarketWriter::open(
-                &base_path,
-                &base_slug,
-                win_start_secs,
-                win_end_secs,
-                *is_up,
-                zstd_level,
-            ) {
-                writers.insert(sk, w);
+    fn insert(&mut self, key: String, w: MpackWriter) {
+        self.writers.insert(key, w);
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut MpackWriter> {
+        self.writers.get_mut(key)
+    }
+
+    fn flush_all(&mut self) {
+        for w in self.writers.values_mut() {
+            w.flush();
+        }
+    }
+
+    fn close_all(mut self) {
+        for (_, w) in self.writers.drain() {
+            w.close_and_compress();
+        }
+    }
+}
+
+fn snap_key(full_slug: &str, is_up: bool) -> String {
+    if is_up {
+        format!("{full_slug}-Up")
+    } else {
+        format!("{full_slug}-Down")
+    }
+}
+
+fn trade_key(full_slug: &str, is_up: bool) -> String {
+    if is_up {
+        format!("{full_slug}-Up-trades")
+    } else {
+        format!("{full_slug}-Down-trades")
+    }
+}
+
+// ── Per-window task spawner ───────────────────────────────────────────────────
+
+struct SpawnArgs {
+    base_slug: String,
+    base_path: PathBuf,
+    depth: usize,
+    zstd_level: Option<i32>,
+    store: SnapStore,
+}
+
+async fn spawn_window(
+    args: Arc<SpawnArgs>,
+    full_slug: String,
+    win_start_secs: u64,
+    win_end_secs: u64,
+) -> Option<WindowTask> {
+    let single = vec![PolymarketMarketConfig {
+        enabled: true,
+        slug: full_slug.clone(),
+        interval_secs: 0,
+    }];
+
+    let labeled = tokio::task::spawn_blocking({
+        let single = single.clone();
+        move || resolve_assets_with_labels(&single)
+    })
+    .await
+    .ok()?;
+
+    if labeled.is_empty() {
+        warn!(full_slug = %full_slug, "No tokens resolved — market not open yet?");
+        return None;
+    }
+
+    // Build the writers map for this window.
+    let mut ww = WindowWriters::new();
+
+    for (_, _, _, is_up) in &labeled {
+        if let Some(path) = snapshot_path(
+            &args.base_path,
+            &args.base_slug,
+            win_start_secs,
+            win_end_secs,
+            *is_up,
+        ) {
+            if let Some(w) = MpackWriter::open(path, args.zstd_level) {
+                ww.insert(snap_key(&full_slug, *is_up), w);
             }
         }
-        let writers = Arc::new(Mutex::new(writers));
+    }
 
-        // label_map: token_id → (full_slug, is_up)
-        let label_map = Arc::new(Mutex::new(
-            labeled
-                .iter()
-                .map(|(id, _base, full, is_up)| (id.clone(), (full.clone(), *is_up)))
-                .collect::<HashMap<_, _>>(),
-        ));
-
-        let mut builder = PolymarketSubMsgBuilder::new();
-        for (id, _, _, _) in &labeled {
-            builder = builder.with_asset(id);
-        }
-
-        let mut cfg = StreamSystemConfig::new();
-        cfg.with_exchange(
-            ClientConfig::new(ExchangeName::Polymarket).set_subscription_message(builder.build()),
-        );
-        if cfg.validate().is_err() {
-            return None;
-        }
-
-        let control = SystemControl::new();
-        let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, 20);
-
-        // Flush ticker for writers.
-        let writers_flush = writers.clone();
-        let flush_handle = tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                ticker.tick().await;
-                if let Ok(mut map) = writers_flush.lock() {
-                    for w in map.values_mut() {
-                        w.flush();
-                    }
-                }
+    for is_up in [true, false] {
+        if let Some(path) = trade_path(
+            &args.base_path,
+            &args.base_slug,
+            win_start_secs,
+            win_end_secs,
+            is_up,
+        ) {
+            if let Some(w) = MpackWriter::open(path, args.zstd_level) {
+                ww.insert(trade_key(&full_slug, is_up), w);
             }
-        });
+        }
+    }
 
-        let store_writer = store.clone();
-        let lm = label_map.clone();
-        let base = base_slug.clone();
-        let writers_for_hook = writers.clone();
+    let writers = Arc::new(Mutex::new(ww));
+
+    // asset_id → (full_slug, is_up)
+    let label_map: HashMap<String, (String, bool)> = labeled
+        .iter()
+        .map(|(id, _, full, is_up)| (id.clone(), (full.clone(), *is_up)))
+        .collect();
+    let label_map = Arc::new(label_map);
+
+    let mut builder = PolymarketSubMsgBuilder::new();
+    for (id, _, _, _) in &labeled {
+        builder = builder.with_asset(id);
+    }
+
+    let mut cfg = StreamSystemConfig::new();
+    cfg.with_exchange(
+        ClientConfig::new(ExchangeName::Polymarket).set_subscription_message(builder.build()),
+    );
+    cfg.validate().ok()?;
+
+    let control = SystemControl::new();
+    let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, args.depth);
+
+    // Periodic flush task.
+    let writers_flush = writers.clone();
+    let flush_handle = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            if let Ok(mut ww) = writers_flush.lock() {
+                ww.flush_all();
+            }
+        }
+    });
+
+    // Snapshot hook.
+    {
+        let writers = writers.clone();
+        let label_map = label_map.clone();
+        let store = args.store.clone();
+        let base_slug = args.base_slug.clone();
+        let full_slug_hook = full_slug.clone();
+        let depth = args.depth;
         engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
-            let (full, is_up) = match lm.lock().ok().and_then(|m| m.get(&snap.symbol).cloned()) {
+            let (_, is_up) = match label_map.get(&snap.symbol) {
                 Some(v) => v,
                 None => return,
             };
-
-            let sk = side_key(&full, is_up);
+            let sk = snap_key(&full_slug_hook, *is_up);
             let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
             let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
 
-            if let Ok(mut map) = writers_for_hook.lock() {
-                if let Some(w) = map.get_mut(&sk) {
-                    let rec = StorageRecord {
-                        sequence: snap.sequence,
-                        ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
-                        bids: bids.iter().map(|&(p, q)| [p, q]).collect(),
-                        asks: asks.iter().map(|&(p, q)| [p, q]).collect(),
-                    };
+            if let Ok(mut ww) = writers.lock() {
+                if let Some(w) = ww.get_mut(&sk) {
+                    let rec = SnapshotRecord::from_snapshot(snap, depth);
                     if let Err(e) = w.write(&rec) {
-                        error!("Write failed for {sk}: {e}");
+                        error!("Snapshot write failed for {sk}: {e}");
                     }
                 }
             }
 
-            let store_key = if is_up {
-                format!("{base}-Up")
+            let store_key = if *is_up {
+                format!("{base_slug}-Up")
             } else {
-                format!("{base}-Down")
+                format!("{base_slug}-Down")
             };
-            if let Ok(mut map) = store_writer.lock() {
+            if let Ok(mut map) = store.lock() {
                 map.insert(
                     store_key,
                     SideSnap {
-                        full_slug: full.clone(),
-                        is_up,
+                        full_slug: full_slug_hook.clone(),
+                        is_up: *is_up,
                         sequence: snap.sequence,
                         bids,
                         asks,
@@ -341,158 +377,93 @@ impl MarketTask {
                 );
             }
         });
-
-        let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
-
-        let ctrl = control.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(e) = system.run().await {
-                error!("MarketTask system error: {e}");
-            }
-            ctrl.shutdown();
-        });
-
-        info!("Started task for {full_slug}");
-        Some(Self {
-            full_slug,
-            system_control: control,
-            handle: tokio::spawn(async move {
-                handle.await.ok();
-                flush_handle.abort();
-            }),
-        })
     }
 
-    fn stop(self, writers_to_close: Option<Arc<Mutex<HashMap<String, PolymarketWriter>>>>) {
-        info!("Stopping task for {}", self.full_slug);
-        self.system_control.shutdown();
-        self.handle.abort();
-        // Flush and compress completed window files.
-        if let Some(writers) = writers_to_close {
-            if let Ok(mut map) = writers.lock() {
-                for (_, w) in map.drain() {
-                    w.close_and_compress();
+    // Last-trade hook — routes to up or down file via label_map.
+    {
+        let writers = writers.clone();
+        let label_map = label_map.clone();
+        let full_slug_hook = full_slug.clone();
+        engine.hooks_mut().on::<LastTradePrice, _>(move |trade| {
+            let is_up = match label_map.get(&trade.symbol) {
+                Some((_, is_up)) => *is_up,
+                None => return,
+            };
+            let tk = trade_key(&full_slug_hook, is_up);
+            if let Ok(mut ww) = writers.lock() {
+                if let Some(w) = ww.get_mut(&tk) {
+                    let rec = TradeRecord::from_trade(trade);
+                    if let Err(e) = w.write(&rec) {
+                        error!("Trade write failed for {tk}: {e}");
+                    }
                 }
             }
+        });
+    }
+
+    let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
+    let ctrl = control.clone();
+    let handle = tokio::spawn(async move {
+        if let Err(e) = system.run().await {
+            error!("Polymarket recorder system error: {e}");
         }
-    }
+        ctrl.shutdown();
+        flush_handle.abort();
+        // Drain and compress all open files.
+        if let Ok(ww) = Arc::try_unwrap(writers).map(|m| m.into_inner()) {
+            if let Ok(ww) = ww {
+                ww.close_all();
+            }
+        }
+    });
+
+    info!(full_slug = %full_slug, "Window started");
+    Some(WindowTask::new(full_slug, control, handle))
 }
 
-fn side_key(full_slug: &str, is_up: bool) -> String {
-    if is_up {
-        format!("{full_slug}-Up")
-    } else {
-        format!("{full_slug}-Down")
-    }
-}
+// ── Per-market scheduler ──────────────────────────────────────────────────────
 
-// ── Scheduler ─────────────────────────────────────────────────────────────────
-
-fn spawn_scheduler(
+fn spawn_market_scheduler(
     market: PolymarketMarketConfig,
-    store: SnapStore,
-    ui: Arc<Mutex<PolymarketUi>>,
     base_path: PathBuf,
     depth: usize,
     zstd_level: Option<i32>,
+    store: SnapStore,
+    ui: Arc<Mutex<PolymarketUi>>,
 ) -> tokio::task::JoinHandle<()> {
+    let base_slug = market.slug.clone();
+    let interval_secs = market.interval_secs;
+
+    if let Ok(mut ui) = ui.lock() {
+        ui.ensure(&base_slug);
+    }
+
+    let args = Arc::new(SpawnArgs {
+        base_slug: base_slug.clone(),
+        base_path,
+        depth,
+        zstd_level,
+        store,
+    });
+
     tokio::spawn(async move {
-        let base_slug = market.slug.clone();
-
-        if market.interval_secs == 0 {
-            if let Ok(mut ui) = ui.lock() {
-                ui.ensure(&base_slug);
+        run_rolling_scheduler(base_slug, interval_secs, move |full_slug| {
+            let args = args.clone();
+            async move {
+                // For static markets (interval_secs == 0), win_start/end are 0.
+                // For windowed markets the scheduler itself controls timing;
+                // we derive the current window bounds here.
+                let (win_start, win_end) = if interval_secs == 0 {
+                    (0u64, 0u64)
+                } else {
+                    let now = libs::time::now_secs();
+                    let ws = (now / interval_secs) * interval_secs;
+                    (ws, ws + interval_secs)
+                };
+                spawn_window(args, full_slug, win_start, win_end).await
             }
-            if let Some(task) = MarketTask::spawn(
-                &market,
-                base_slug.clone(),
-                base_slug.clone(),
-                0,
-                0,
-                store,
-                base_path,
-                depth,
-                zstd_level,
-            )
-            .await
-            {
-                let _ = task.handle.await;
-            }
-            return;
-        }
-
-        if let Ok(mut ui) = ui.lock() {
-            ui.ensure(&base_slug);
-        }
-        let mut current_task: Option<MarketTask> = None;
-
-        loop {
-            let now = now_secs();
-            let interval = market.interval_secs;
-            let win_start = (now / interval) * interval;
-            let win_end = win_start + interval;
-            let full_slug = format!("{base_slug}-{win_start}");
-
-            if current_task
-                .as_ref()
-                .map(|t| t.full_slug != full_slug)
-                .unwrap_or(true)
-            {
-                if let Some(old) = current_task.take() {
-                    old.stop(None);
-                }
-                current_task = MarketTask::spawn(
-                    &market,
-                    base_slug.clone(),
-                    full_slug.clone(),
-                    win_start,
-                    win_end,
-                    store.clone(),
-                    base_path.clone(),
-                    depth,
-                    zstd_level,
-                )
-                .await;
-            }
-
-            // Sleep until EARLY_START_SECS before window ends.
-            let secs_until_early = win_end
-                .saturating_sub(now_secs())
-                .saturating_sub(EARLY_START_SECS);
-            if secs_until_early > 0 {
-                tokio::time::sleep(Duration::from_secs(secs_until_early)).await;
-            }
-
-            // Pre-start next window.
-            let next_start = win_end;
-            let next_end = next_start + interval;
-            let next_slug = format!("{base_slug}-{next_start}");
-            info!("Pre-starting next window: {next_slug}");
-            let next_task = MarketTask::spawn(
-                &market,
-                base_slug.clone(),
-                next_slug,
-                next_start,
-                next_end,
-                store.clone(),
-                base_path.clone(),
-                depth,
-                zstd_level,
-            )
-            .await;
-
-            // Wait for current window to expire.
-            let remaining = win_end.saturating_sub(now_secs());
-            if remaining > 0 {
-                tokio::time::sleep(Duration::from_secs(remaining)).await;
-            }
-
-            // Stop old task and compress its files.
-            if let Some(old) = current_task.take() {
-                old.stop(None);
-            }
-            current_task = next_task;
-        }
+        })
+        .await;
     })
 }
 
@@ -539,40 +510,7 @@ async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
 
     let args = Args::parse();
-
-    let mut cfg = args
-        .config
-        .as_deref()
-        .map(PolymarketFileConfig::load)
-        .unwrap_or_default();
-
-    // CLI overrides.
-    if let Some(r) = args.render_interval {
-        cfg.server.render_interval = r;
-    }
-    if let Some(d) = args.depth {
-        cfg.storage.depth = d;
-    }
-    if let Some(p) = args.base_path {
-        cfg.storage.base_path = p;
-    }
-    if let Some(z) = args.zstd_level {
-        cfg.storage.zstd_level = z;
-    }
-
-    // CLI --slug flags override config markets entirely.
-    if !args.slugs.is_empty() {
-        cfg.polymarket.markets = args
-            .slugs
-            .into_iter()
-            .enumerate()
-            .map(|(i, slug)| PolymarketMarketConfig {
-                enabled: true,
-                slug,
-                interval_secs: *args.intervals.get(i).unwrap_or(&0),
-            })
-            .collect();
-    }
+    let cfg = PolymarketFileConfig::load(&args.config);
 
     let markets: Vec<PolymarketMarketConfig> = cfg
         .polymarket
@@ -582,9 +520,7 @@ async fn main() -> Result<()> {
         .collect();
 
     if markets.is_empty() {
-        eprintln!(
-            "No markets configured. Pass --config <file> or --slug <slug> --interval-secs <n>."
-        );
+        eprintln!("No enabled markets in {}.", args.config);
         std::process::exit(1);
     }
 
@@ -601,13 +537,13 @@ async fn main() -> Result<()> {
     let _schedulers: Vec<_> = markets
         .into_iter()
         .map(|market| {
-            spawn_scheduler(
+            spawn_market_scheduler(
                 market,
-                store.clone(),
-                ui.clone(),
                 base_path.clone(),
                 depth,
                 zstd_level,
+                store.clone(),
+                ui.clone(),
             )
         })
         .collect();
