@@ -3,7 +3,7 @@ export function fmtPrice(v: number | null | undefined, decimals = 4): string {
     return v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-export function fmtQty(v: number | null | undefined, decimals = 2): string {
+export function fmtQty(v: number | null | undefined, decimals = 4): string {
     if (v == null) return "—";
     if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
     if (v >= 1_000) return `${(v / 1_000).toFixed(2)}K`;
