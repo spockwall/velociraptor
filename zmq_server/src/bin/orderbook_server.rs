@@ -3,6 +3,9 @@
 //! Reads all configuration from a YAML file and starts the ZMQ server.
 //! Exchange wiring is delegated to `zmq_server::setup`.
 //!
+//! Storage is handled separately by `orderbook_recorder` — this process
+//! only streams data over ZMQ.
+//!
 //! # Usage
 //!
 //! ```bash
@@ -11,14 +14,15 @@
 
 use anyhow::Result;
 use clap::Parser;
+use libs;
 use libs::configs::Config;
 use orderbook::configs::init_logging;
 use orderbook::connection::SystemControl;
 use orderbook::StreamEngine;
 use tracing::error;
 use zmq_server::setup::{
-    add_binance, add_hyperliquid, add_okx, attach_storage, attach_storage_writer, attach_zmq,
-    build_system, spawn_kalshi_schedulers, spawn_polymarket_schedulers,
+    add_binance, add_hyperliquid, add_okx, attach_redis, attach_zmq, build_system,
+    spawn_kalshi_schedulers, spawn_polymarket_schedulers,
 };
 use zmq_server::StreamSystemConfig;
 
@@ -75,20 +79,25 @@ async fn run(config_path: &str) -> Result<()> {
         anyhow::bail!("No exchanges enabled in {config_path}");
     }
 
-    // ── Engine + optional storage hooks ───────────────────────────────────────
+    // ── Engine + optional Redis hooks ─────────────────────────────────────────
 
     let mut engine = StreamEngine::new(1024, cfg.storage.depth);
-    let storage_setup = attach_storage(&mut engine, &cfg);
+
+    if cfg.redis.enabled {
+        match libs::redis_client::RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await {
+            Ok(handle) => attach_redis(&mut engine, handle),
+            Err(e) => error!("Redis connection failed: {e} — continuing without Redis"),
+        }
+    }
 
     // ── Build StreamSystem ────────────────────────────────────────────────────
 
     let ctrl = SystemControl::new();
     let mut system = build_system(engine, system_cfg, ctrl.clone(), has_static)?;
 
-    // ── ZMQ server + storage writer ───────────────────────────────────────────
+    // ── ZMQ server ────────────────────────────────────────────────────────────
 
     attach_zmq(&mut system, &cfg.server.pub_endpoint, &cfg.server.router_endpoint);
-    attach_storage_writer(&mut system, storage_setup);
 
     // ── Rolling-window schedulers (Polymarket + Kalshi) ───────────────────────
 
