@@ -71,6 +71,29 @@ impl RedisHandle {
         }
     }
 
+    // ── Read helpers ──────────────────────────────────────────────────────────
+
+    /// GET a raw msgpack blob from `key`. Returns `None` if the key is absent.
+    pub async fn get_raw(&self, key: &str) -> Option<Vec<u8>> {
+        self.conn
+            .clone()
+            .get::<_, Option<Vec<u8>>>(key)
+            .await
+            .map_err(|e| error!("Redis GET {key} failed: {e}"))
+            .ok()
+            .flatten()
+    }
+
+    /// LRANGE `key` from `start` to `stop` (inclusive), returning raw msgpack blobs.
+    pub async fn lrange_raw(&self, key: &str, start: isize, stop: isize) -> Vec<Vec<u8>> {
+        self.conn
+            .clone()
+            .lrange::<_, Vec<Vec<u8>>>(key, start, stop)
+            .await
+            .map_err(|e| error!("Redis LRANGE {key} failed: {e}"))
+            .unwrap_or_default()
+    }
+
     // ── Capped event lists ────────────────────────────────────────────────────
 
     /// Prepend `payload` to the capped list at `list_key`, trimming it to
