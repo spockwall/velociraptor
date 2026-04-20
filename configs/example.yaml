@@ -6,6 +6,8 @@ server:
 redis:
   enabled: false
   url: "redis://127.0.0.1:6379"
+  snapshot_cap: 1000     # max snapshots kept per symbol in snapshots:{exchange}:{symbol}
+  trade_cap: 500         # max trades kept per symbol in trades:{exchange}:{symbol}
   event_list_cap: 5000   # max entries in events:fills / events:orders / events:log
 
 storage:
@@ -60,7 +62,7 @@ polymarket:
       slug: "eth-updown-5m"
       interval_secs: 300
 
-    # example of static market
-    - enabled: false 
-      slug: "will-btc-reach-100k-in-2025"
-      interval_secs: 0
+    ## example of static market
+    #- enabled: false 
+    #  slug: "will-btc-reach-100k-in-2025"
+    #  interval_secs: 0

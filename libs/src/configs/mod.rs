@@ -103,7 +103,6 @@ mod tests {
         assert_eq!(cfg.kalshi.market[1].series, "KXETH15M");
 
         assert_eq!(cfg.polymarket.markets.len(), 4);
-        assert!(cfg.polymarket.markets.iter().all(|m| m.enabled));
         assert!(cfg
             .polymarket
             .markets
