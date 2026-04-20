@@ -291,3 +291,108 @@ At a typical Polymarket update rate of one update per 100–500ms with 10 depth 
 | 4 slugs | 200ms avg | ~8–20 MB | ~2–4 MB |
 
 Daily totals depend heavily on market activity. Quiet windows generate far fewer updates.
+
+---
+
+## Redis Integration (orderbook_server)
+
+When `orderbook_server` runs with `redis.enabled: true`, every Polymarket window publishes its live state to Redis so the HTTP backend (`backend/`) and frontend can render markets without subscribing to the ZMQ stream. Recording to disk (above) and writing to Redis are independent — the recorder is a separate process; Redis writes happen inside `orderbook_server`.
+
+The flow has two moving parts: the **scheduler** that owns window lifecycle, and the **per-window engine** that owns Redis writes and cleanup.
+
+### Key Schema
+
+All keys are constructed by `RedisKey` (`libs/src/redis_client/keys.rs`).
+
+| Key | Type | Lifetime | Written by |
+|-----|------|----------|------------|
+| `ob:polymarket:{asset_id}` | string (msgpack) | overwritten each tick | per-window engine snapshot hook |
+| `bba:polymarket:{asset_id}` | string (msgpack) | overwritten each tick | per-window engine snapshot hook |
+| `snapshots:polymarket:{asset_id}` | list (msgpack) | LPUSH + LTRIM to `snapshot_cap` | per-window engine snapshot hook |
+| `trades:polymarket:{asset_id}` | list (msgpack) | LPUSH + LTRIM to `trade_cap` | per-window engine trade hook |
+| `polymarket:label:{asset_id}` | hash | one entry per live asset | window setup |
+| `polymarket:label:index` | set of `asset_id` | mirrors live labels | window setup |
+| `polymarket:base:{base_slug}:assets` | set of `asset_id` | per base slug | window setup |
+
+The `polymarket:label:{asset_id}` hash carries everything the backend needs to render a market without a second API call:
+
+```
+base_slug      = "btc-updown-15m"
+full_slug      = "btc-updown-15m-1776683700"
+side           = "up" | "down"
+window_start   = "1776683700"   # Unix seconds — the new window's start, NOT now
+interval_secs  = "900"          # 0 = static market, never expires
+```
+
+> **`window_start` invariant.** It must be parsed from the trailing timestamp of `full_slug`, not from `now`. Window setup runs ~10 s before the previous window ends (pre-start overlap), so `now / interval * interval` would yield the *current* window's start and the new window would be flagged stale by the backend's freshness check the moment the previous window ends.
+
+### Window Setup (`spawn_polymarket_window` in `zmq_server/src/setup.rs`)
+
+When the scheduler fires for a new `full_slug`:
+
+1. **Resolve token IDs** via the Gamma REST API → `Vec<(asset_id, base_slug, full_slug, is_up)>`.
+2. **Evict expired prior-window keys** for this `base_slug`. For each `asset_id` in `polymarket:base:{base_slug}:assets` that is NOT in the freshly resolved set:
+   - Read its `polymarket:label:{asset_id}` hash; treat it as stale if `interval_secs == 0` (legacy/missing) or `window_start + interval_secs <= now`.
+   - If stale: `DEL` `polymarket:label`, `ob`, `bba`, `snapshots`, `trades`; `SREM` from `polymarket:label:index` and the base-slug set.
+   - **Active overlapping windows are skipped** — they are owned by their own task and clean up when they exit. Touching them would briefly blank the UI.
+3. **Register new assets** under `polymarket:base:{base_slug}:assets`.
+4. **Write `polymarket:label:{asset_id}`** for each new asset and add to `polymarket:label:index`.
+5. **Spin up a per-window engine** (separate `StreamEngine` from the main one) and call `attach_redis(...)` so its snapshots/trades flow into Redis under the keys above.
+6. **Spawn a watchdog task** that polls `SystemControl.is_shutdown()`. When the scheduler stops this window via `WindowTask::stop()` → `handle.abort()`, the abort cancels any await past it, so cleanup cannot live inline after `system.run().await`. The watchdog runs independently and `DEL`s/`SREM`s every key tied to the assets this window owned.
+
+### Backend Read Path (`backend/src/lib.rs::get_polymarket_markets`)
+
+The `GET /api/polymarket/markets` handler:
+
+1. Reads `polymarket:label:index`.
+2. For each `asset_id`, loads `polymarket:label:{asset_id}`. Empty hash → orphan index entry, `SREM` and skip.
+3. **Lazy expiry:** if `interval_secs > 0 && window_start + interval_secs <= now`, the label is past its window. Delete `polymarket:label`, `ob`, `bba`, `snapshots`, `trades` and remove from the index. This is a backstop for the scheduler eviction in case a window's watchdog never ran (e.g. process killed).
+4. Sort by `(base_slug, window_start, side)` and return.
+
+### Why Two Cleanup Paths?
+
+| Path | Trigger | Owner | Purpose |
+|------|---------|-------|---------|
+| Eviction loop in window setup | New window starts | Scheduler | Remove the previous window's keys at rollover |
+| Watchdog | `SystemControl.shutdown()` from `WindowTask::stop()` | Per-window task | Remove this window's keys when the scheduler tells it to stop |
+| Backend lazy expiry | API request hits a stale label | Backend handler | Backstop: clean up if the orderbook_server crashed or was restarted before the watchdog ran |
+
+Together they keep the schema coherent in steady state. The expected health invariant is:
+
+```
+COUNT polymarket:label:* == SCARD polymarket:label:index
+                         == COUNT ob:polymarket:*
+                         == COUNT bba:polymarket:*
+                         == COUNT snapshots:polymarket:*
+                         == COUNT trades:polymarket:*
+```
+
+If those diverge after a clean restart, something in the eviction/watchdog chain dropped a key.
+
+### Health-check command
+
+```bash
+docker compose exec -T redis sh -c '
+labels=$(redis-cli SMEMBERS polymarket:label:index | sort)
+for prefix in ob bba snapshots trades; do
+  ids=$(redis-cli --scan --pattern "$prefix:polymarket:*" | sed "s|$prefix:polymarket:||" | sort)
+  echo "--- orphan $prefix (no label) ---"; comm -23 <(echo "$ids") <(echo "$labels")
+done
+echo "--- label has no ob ---"
+obs=$(redis-cli --scan --pattern "ob:polymarket:*" | sed "s|ob:polymarket:||" | sort)
+comm -13 <(echo "$obs") <(echo "$labels")
+'
+```
+
+### Configuration
+
+```yaml
+redis:
+  enabled: true
+  url: "redis://127.0.0.1:6379"
+  snapshot_cap: 1000   # LTRIM cap for snapshots:polymarket:{asset_id}
+  trade_cap: 500       # LTRIM cap for trades:polymarket:{asset_id}
+  event_list_cap: 5000 # LTRIM cap for events:fills, events:orders
+```
+
+The caps are per-key, not global, so total memory scales with the number of currently-live assets. Once eviction is working correctly, that is exactly `2 × (# enabled rolling markets)` for live keys plus a transient overlap of one extra window during pre-start.

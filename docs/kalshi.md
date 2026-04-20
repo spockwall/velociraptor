@@ -397,3 +397,126 @@ Added to `docs/exchange-wire-formats.md` for completeness. Key differences from 
 | Book as rendered | Combined into YES-perspective two-sided book (NO complemented) | per-token | bids/asks |
 | Price unit | USD (0.00–1.00) | USDC (0.00–1.00) | USD |
 | Ticker | Event from clock + strike suffix resolved via REST | Token ID (256-bit) | Coin name |
+
+---
+
+## Redis Integration (orderbook_server)
+
+When `orderbook_server` runs with `redis.enabled: true`, every Kalshi window publishes its live state to Redis so the HTTP backend (`backend/`) and frontend can render markets without subscribing to the ZMQ stream. The architecture mirrors the [Polymarket Redis integration](polymarket.md#redis-integration-orderbook_server) — a scheduler owns window lifecycle, a per-window engine owns Redis writes, and a watchdog handles cleanup at shutdown.
+
+### Key Schema
+
+All keys are constructed by `RedisKey` (`libs/src/redis_client/keys.rs`).
+
+| Key | Type | Lifetime | Written by |
+|-----|------|----------|------------|
+| `ob:kalshi:{ticker}` | string (msgpack) | overwritten each tick | per-window engine snapshot hook |
+| `bba:kalshi:{ticker}` | string (msgpack) | overwritten each tick | per-window engine snapshot hook |
+| `snapshots:kalshi:{ticker}` | list (msgpack) | LPUSH + LTRIM to `snapshot_cap` | per-window engine snapshot hook |
+| `trades:kalshi:{ticker}` | list (msgpack) | LPUSH + LTRIM to `trade_cap` | per-window engine trade hook |
+| `kalshi:label:{ticker}` | hash | one entry per live ticker | window setup |
+| `kalshi:label:index` | set of `ticker` | mirrors live labels | window setup |
+| `kalshi:series:{series}:tickers` | set of `ticker` | per series | window setup |
+
+`{ticker}` is the full Kalshi market ticker (e.g. `KXBTC15M-26APR160700-00`), which is also what the orderbook publishes as `symbol`. There is no UP/DOWN pairing in Redis — Kalshi gives one combined two-sided book per market (see [Orderbook mechanism](#orderbook-mechanism)), so each window contributes exactly **one** label.
+
+The `kalshi:label:{ticker}` hash:
+
+```
+series         = "KXBTC15M"
+ticker         = "KXBTC15M-26APR160700-00"
+window_start   = "1776681900"   # Unix seconds — UTC :00/:15/:30/:45 boundary
+interval_secs  = "900"          # always 900 for the rolling 15-min markets
+```
+
+> **`window_start` derivation.** Kalshi windows are clock-aligned and always 15 minutes long, so `window_start = (now + 30) / interval * interval`. The `+30` jumps safely past the pre-start overlap (~10s before close), so the value resolves to the new window's boundary rather than the previous one's. Because the boundary is deterministic, no parsing of `ticker` is needed (unlike Polymarket where `window_start` lives in the `full_slug`).
+
+### Window Setup (`spawn_kalshi_window` in `zmq_server/src/setup.rs`)
+
+When the scheduler fires for a new `ticker`:
+
+1. **Build the connection config** with the resolved `ticker`, WebSocket URL, and signed credentials.
+2. **Evict expired prior-window keys** for this `series`. For each `prior_ticker` in `kalshi:series:{series}:tickers` other than the current one:
+   - Read its `kalshi:label:{prior_ticker}` hash; treat it as stale if `interval_secs == 0` (legacy/missing) or `window_start + interval_secs <= now`.
+   - If stale: `DEL` `kalshi:label`, `ob`, `bba`, `snapshots`, `trades`; `SREM` from `kalshi:label:index` and the series set.
+   - **Active overlapping windows are skipped** — they are owned by their own task and clean up when they exit.
+3. **Register the new ticker** under `kalshi:series:{series}:tickers`.
+4. **Write `kalshi:label:{ticker}`** and add to `kalshi:label:index`.
+5. **Spin up a per-window engine** (separate `StreamEngine` from the main one) and call `attach_redis(...)` so its snapshots/trades flow into Redis under the keys above.
+6. **Spawn a watchdog task** that polls `SystemControl.is_shutdown()`. When the scheduler stops this window via `WindowTask::stop()` → `handle.abort()`, the abort cancels any await past it, so cleanup cannot live inline after `system.run().await`. The watchdog runs independently and `DEL`s/`SREM`s every key tied to this ticker.
+
+### Backend Read Path (`backend/src/lib.rs::get_kalshi_markets`)
+
+The `GET /api/kalshi/markets` handler:
+
+1. Reads `kalshi:label:index`.
+2. For each `ticker`, loads `kalshi:label:{ticker}`. Empty hash → orphan index entry, `SREM` and skip.
+3. **Lazy expiry:** if `interval_secs > 0 && window_start + interval_secs <= now`, the label is past its window. Delete `kalshi:label`, `ob`, `bba`, `snapshots`, `trades` and remove from the index. This is a backstop for the scheduler eviction in case a window's watchdog never ran (e.g. process killed).
+4. Sort by `(series, window_start, ticker)` and return.
+
+Response shape:
+
+```json
+[
+  {
+    "ticker": "KXBTC15M-26APR160700-00",
+    "series": "KXBTC15M",
+    "window_start": 1776681900,
+    "interval_secs": 900,
+    "title": "KXBTC15M-26APR160700-00"
+  }
+]
+```
+
+### Why Three Cleanup Paths?
+
+| Path | Trigger | Owner | Purpose |
+|------|---------|-------|---------|
+| Eviction loop in window setup | New window starts | Scheduler | Remove the previous window's keys at rollover |
+| Watchdog | `SystemControl.shutdown()` from `WindowTask::stop()` | Per-window task | Remove this window's keys when the scheduler tells it to stop |
+| Backend lazy expiry | API request hits a stale label | Backend handler | Backstop: clean up if the orderbook_server crashed or was restarted before the watchdog ran |
+
+Steady-state invariant:
+
+```
+COUNT kalshi:label:* == SCARD kalshi:label:index
+                     == COUNT ob:kalshi:*
+                     == COUNT bba:kalshi:*
+                     == COUNT snapshots:kalshi:*
+                     == COUNT trades:kalshi:*
+                     == (# enabled series)         # one ticker per series per window
+```
+
+A transient overlap of one extra ticker per series is expected during pre-start (~10s before window close).
+
+### Health-check command
+
+```bash
+docker compose exec -T redis sh -c '
+labels=$(redis-cli SMEMBERS kalshi:label:index | sort)
+for prefix in ob bba snapshots trades; do
+  ids=$(redis-cli --scan --pattern "$prefix:kalshi:*" | sed "s|$prefix:kalshi:||" | sort)
+  echo "--- orphan $prefix (no label) ---"; comm -23 <(echo "$ids") <(echo "$labels")
+done
+echo "--- label has no ob ---"
+obs=$(redis-cli --scan --pattern "ob:kalshi:*" | sed "s|ob:kalshi:||" | sort)
+comm -13 <(echo "$obs") <(echo "$labels")
+'
+```
+
+### Configuration
+
+```yaml
+redis:
+  enabled: true
+  url: "redis://127.0.0.1:6379"
+  snapshot_cap: 1000   # LTRIM cap for snapshots:kalshi:{ticker}
+  trade_cap: 500       # LTRIM cap for trades:kalshi:{ticker}
+  event_list_cap: 5000 # LTRIM cap for events:fills, events:orders
+```
+
+The caps are per-key, not global, so total memory scales with the number of currently-live tickers. Once eviction is working correctly that is exactly `# enabled series`, plus a transient extra per series during pre-start.
+
+### Frontend
+
+The Kalshi page at `/kalshi` (`frontend/src/pages/Kalshi.tsx`) polls `/api/kalshi/markets` every 5s and renders one panel per live ticker, showing best bid / spread / best ask plus a depth-bar visualisation of the top-12 levels per side. The panel header shows the series and the window close time (UTC).
