@@ -22,7 +22,7 @@ pub mod orders;
 use chrono::{DateTime, Utc};
 pub use control::ControlMessage;
 use core::fmt;
-pub use events::{EventKind, UserEvent};
+pub use events::{BbaPayload, EventKind, UserEvent};
 pub use orders::{
     HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest, OrderResponse,
     OrderResult, OrderStatus, PlaceOne, Side, Tif,
@@ -89,6 +89,20 @@ pub struct OrderbookSnapshot {
     pub wmid: f64,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
+}
+
+impl From<&OrderbookSnapshot> for BbaPayload {
+    fn from(snap: &OrderbookSnapshot) -> Self {
+        Self {
+            exchange: snap.exchange.to_str().to_owned(),
+            symbol: snap.symbol.clone(),
+            sequence: snap.sequence,
+            timestamp: snap.timestamp,
+            best_bid: snap.best_bid,
+            best_ask: snap.best_ask,
+            spread: snap.spread,
+        }
+    }
 }
 
 /// A single matched trade on the public market channel.

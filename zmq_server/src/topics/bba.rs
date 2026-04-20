@@ -1,37 +1,11 @@
 use super::Topic;
-use chrono::{DateTime, Utc};
 use libs::protocol::OrderbookSnapshot;
-use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+pub use libs::protocol::BbaPayload;
 
 /// Best-bid-ask only frame — a slim alternative to the full snapshot.
 pub struct BbaTopic<'a>(pub &'a OrderbookSnapshot);
-
-/// Owned BBA payload returned by decode.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BbaPayload {
-    pub exchange: String,
-    pub symbol: String,
-    pub sequence: u64,
-    pub timestamp: DateTime<Utc>,
-    pub best_bid: Option<(f64, f64)>,
-    pub best_ask: Option<(f64, f64)>,
-    pub spread: Option<f64>,
-}
-
-impl<'a> From<&'a OrderbookSnapshot> for BbaPayload {
-    fn from(snap: &'a OrderbookSnapshot) -> Self {
-        Self {
-            exchange: snap.exchange.to_str().to_owned(),
-            symbol: snap.symbol.clone(),
-            sequence: snap.sequence,
-            timestamp: snap.timestamp,
-            best_bid: snap.best_bid,
-            best_ask: snap.best_ask,
-            spread: snap.spread,
-        }
-    }
-}
 
 impl Topic for BbaTopic<'_> {
     fn topic(&self) -> String {

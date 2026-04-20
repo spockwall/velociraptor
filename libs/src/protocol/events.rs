@@ -1,5 +1,18 @@
 use super::orders::{OrderStatus, Side};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Slim best-bid-ask payload stored in Redis and served by the backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BbaPayload {
+    pub exchange: String,
+    pub symbol: String,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub best_bid: Option<(f64, f64)>,
+    pub best_ask: Option<(f64, f64)>,
+    pub spread: Option<f64>,
+}
 
 /// Which capped Redis list / spillover stream an event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
