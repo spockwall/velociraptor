@@ -47,25 +47,24 @@ impl BinanceMessageParser {
     }
 
     fn dispatch(&self, value: serde_json::Value, text: &str) -> Result<Vec<StreamMessage>> {
-        match value.get("e").and_then(|v| v.as_str()) {
-            Some("trade") => match serde_json::from_value::<BinanceTradeEvent>(value) {
+        // Trade stream is the only event with `e == "trade"`. Everything else
+        // (spot `@depth20@100ms` has no `e`; futures `@depth20@100ms` has
+        // `e == "depthUpdate"`) is routed to the depth parser.
+        if value.get("e").and_then(|v| v.as_str()) == Some("trade") {
+            return match serde_json::from_value::<BinanceTradeEvent>(value) {
                 Ok(ev) => Ok(self.parse_trade(ev).into_iter().collect()),
                 Err(e) => {
                     error!("Failed to parse Binance trade: {e} - {text}");
                     Ok(vec![])
                 }
-            },
-            Some(other) => {
-                tracing::debug!("Binance: ignoring event type '{other}'");
+            };
+        }
+        match serde_json::from_value::<BinanceDepthData>(value) {
+            Ok(msg) => Ok(self.parse_depth(msg).into_iter().collect()),
+            Err(e) => {
+                error!("Failed to parse Binance depth: {e} - {text}");
                 Ok(vec![])
             }
-            None => match serde_json::from_value::<BinanceDepthData>(value) {
-                Ok(msg) => Ok(self.parse_depth(msg).into_iter().collect()),
-                Err(e) => {
-                    error!("Failed to parse Binance depth: {e} - {text}");
-                    Ok(vec![])
-                }
-            },
         }
     }
 
