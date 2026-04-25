@@ -2,13 +2,14 @@
 
 A high-performance Rust workspace for real-time market data streaming and order execution on prediction markets and crypto exchanges.
 
-| Exchange    | Status | Stream Type |
-|-------------|--------|-------------|
-| Binance     | Live   | Partial Book Depth 20 @ 100ms |
-| OKX         | Live   | `books` channel — snapshot + incremental updates |
-| Polymarket  | Live   | `book` snapshot + `price_change` incremental diffs |
-| Hyperliquid | Live   | `l2Book` full snapshot on every update |
-| Kalshi      | Live   | `orderbook_snapshot` + signed `orderbook_delta` — requires API key |
+| Exchange       | Status | Stream Type |
+|----------------|--------|-------------|
+| Binance (USDT-M futures) | Live | Partial Book Depth 20 @ 100ms |
+| Binance Spot   | Live   | Partial Book Depth 20 @ 100ms + raw `@trade` stream |
+| OKX            | Live   | `books` channel — snapshot + incremental updates |
+| Polymarket     | Live   | `book` snapshot + `price_change` incremental diffs |
+| Hyperliquid    | Live   | `l2Book` full snapshot on every update |
+| Kalshi         | Live   | `orderbook_snapshot` + signed `orderbook_delta` — requires API key |
 
 ---
 
@@ -60,7 +61,11 @@ storage:
   rotation: "daily"      # "daily" | "none"
   zstd_level: 0          # 0 = off, 1–22 = zstd level
 
-binance:
+binance:                 # USDT-margined futures (fstream.binance.com)
+  enabled: true
+  symbols: ["btcusdt", "ethusdt"]
+
+binance_spot:            # spot (stream.binance.com) — depth + trades
   enabled: true
   symbols: ["btcusdt", "ethusdt"]
 
@@ -134,6 +139,7 @@ curl http://localhost:3000/health
 curl http://localhost:3000/api/bba/binance/btcusdt
 curl http://localhost:3000/api/orderbook/binance/btcusdt
 curl "http://localhost:3000/api/snapshots/binance/btcusdt?limit=10"
+curl "http://localhost:3000/api/trades/binance_spot/btcusdt?limit=5"
 curl "http://localhost:3000/api/trades/polymarket/<asset_id>?limit=5"
 ```
 
@@ -165,6 +171,8 @@ python3 zmq_server/examples/orderbook_subscriber.py \
 
 ```bash
 python3 scripts/read_mpack.py data/binance/BTCUSDT/
+python3 scripts/read_mpack.py data/binance_spot/btcusdt/                       # snapshots + trades
+python3 scripts/read_mpack.py data/binance_spot/btcusdt/2026-04-25-trades.mpack
 python3 scripts/read_mpack.py data/polymarket/btc-updown-15m/2026-04-05/
 ```
 
@@ -560,9 +568,16 @@ ob.vamp(n)           // f64 — volume-weighted average mid price
 ### Binance
 
 ```rust
+// Futures (depth only)
 BinanceSubMsgBuilder::new()
     .with_orderbook_channel(&["btcusdt", "ethusdt"])
     .build()   // -> String
+
+// Spot (depth + raw trades)
+BinanceSubMsgBuilder::new()
+    .with_orderbook_channel(&["btcusdt", "ethusdt"])
+    .with_trade_channel(&["btcusdt", "ethusdt"])
+    .build()   // -> String — pair with ExchangeName::BinanceSpot
 ```
 
 ### OKX
@@ -668,7 +683,7 @@ Clients filter by topic prefix using ZMQ's built-in `SUBSCRIBE` option. They mus
 | Field | Values |
 |---|---|
 | `action` | `subscribe` \| `unsubscribe` |
-| `exchange` | `binance` `okx` `polymarket` `hyperliquid` `kalshi` |
+| `exchange` | `binance` `binance_spot` `okx` `polymarket` `hyperliquid` `kalshi` |
 | `symbol` | Exchange-native format — `btcusdt`, `BTC-USDT`, `<token_id>`, `KXBTC15M-…` |
 | `type` | `snapshot` \| `bba` — required on subscribe, ignored on unsubscribe |
 
@@ -833,7 +848,7 @@ cargo run --bin backend --release -- --config configs/example.yaml
 | `GET` | `/api/snapshots/:exchange/:symbol?limit=N` | Recent N snapshots (default 20) |
 | `GET` | `/api/trades/:exchange/:symbol?limit=N` | Recent N last-trade events (default 20) |
 
-`:exchange` matches the lowercase exchange name (`binance`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `:symbol` is the exchange-native symbol (e.g. `btcusdt`, `BTC-USDT`, `<token_id>`).
+`:exchange` matches the lowercase exchange name (`binance`, `binance_spot`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `:symbol` is the exchange-native symbol (e.g. `btcusdt`, `BTC-USDT`, `<token_id>`).
 
 Responses are JSON. Missing keys return `{"error": "..."}` with status `404`.
 

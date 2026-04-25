@@ -81,6 +81,31 @@ data/hyperliquid/BTC/2026-04-03.mpack
 data/okx/BTC-USDT/2026-04-03.mpack
 ```
 
+### Binance Spot (`binance_spot`)
+
+Binance Spot collects both **partial-depth orderbook snapshots** and **raw trade events** (one record per matched fill). Both streams write into the same per-symbol directory; the trade file uses a `-trades.mpack` filename suffix:
+
+```
+{base_path}/
+└── binance_spot/
+    └── {symbol}/                    ← lowercase, e.g. btcusdt
+        ├── 2026-04-25.mpack         ← orderbook snapshots
+        ├── 2026-04-25-trades.mpack  ← trade events
+        ├── 2026-04-25.mpack.zst         ← compressed after daily rotation
+        └── 2026-04-25-trades.mpack.zst
+```
+
+Example for `btcusdt` and `ethusdt`:
+
+```
+data/binance_spot/btcusdt/2026-04-25.mpack
+data/binance_spot/btcusdt/2026-04-25-trades.mpack
+data/binance_spot/ethusdt/2026-04-25.mpack
+data/binance_spot/ethusdt/2026-04-25-trades.mpack
+```
+
+The futures-channel `binance` exchange (`fstream.binance.com`) keeps the standard layout with no trade file. Spot is a separate `ExchangeName::BinanceSpot` and produces both files.
+
 ### Polymarket (`polymarket_recorder`)
 
 Polymarket markets rotate on fixed windows (e.g. every 5 minutes). Each window produces four files — orderbook snapshots and last-trade records, each split by token side (Up / Down). The layout uses the **base slug** (no timestamp), the UTC date of the window start, and the window time range as the filename:
@@ -124,19 +149,25 @@ Key layout rules:
 
 ---
 
-## Trade Record Schema (Polymarket)
+## Trade Record Schema
 
-Trade files (`*-trades.mpack`) use a different schema from snapshot files. Each record is one matched maker-taker event emitted by the Polymarket `last_trade_price` WS channel:
+Trade files (`*-trades.mpack`) use a different schema from snapshot files. Each record is one matched maker-taker event:
 
 | Field | Type | Description |
-| -------------- | ------ | ----------------------------------------------- |
+| -------------- | --------- | ----------------------------------------------- |
 | `ts_ns` | i64 | UTC timestamp in nanoseconds since Unix epoch |
-| `price` | f64 | Trade price (0–1 USDC, represents implied probability) |
-| `size` | f64 | Trade size in USDC |
+| `price` | f64 | Trade price |
+| `size` | f64 | Trade size |
 | `side` | String | Taker direction: `"BUY"` or `"SELL"` |
-| `fee_rate_bps` | f64 | Fee rate in basis points |
+| `fee_rate_bps` | f64 | Fee rate in basis points (`0.0` for public feeds without fees) |
+| `trade_id` | i64? | Exchange-assigned trade id — omitted for feeds that don't carry one |
 
-`exchange` and `symbol` are not stored — they are encoded in the file path (slug and `-up` / `-down` suffix).
+`exchange` and `symbol` are not stored — they are encoded in the file path.
+
+**Per-exchange notes:**
+
+- **Polymarket** (`last_trade_price` WS channel): `price` is in USDC 0–1 (implied probability), `size` is in USDC, `fee_rate_bps` is set, `trade_id` is **absent** (the Polymarket feed does not include one).
+- **Binance Spot** (`@trade` stream): `price` is the trade price, `size` is the base-asset quantity. `fee_rate_bps` is `0.0` (public feed has no fee info). `trade_id` is **present** and carries Binance's exchange-assigned trade id (`t` field). `side` is the taker side, derived from the wire `m` flag (buyer-is-maker `→ "SELL"`, otherwise `"BUY"`).
 
 ---
 
@@ -263,6 +294,36 @@ mid    = (best_bid + best_ask) / 2
 spread = best_ask - best_bid
 wmid   = (best_ask * bid_qtys[0] + best_bid * ask_qtys[0]) / (bid_qtys[0] + ask_qtys[0])
 ```
+
+---
+
+## Reading Binance Spot Data
+
+Binance Spot uses the standard `{base_path}/binance_spot/{symbol}/{date}.mpack` layout for orderbook snapshots, plus a sibling `{date}-trades.mpack` for raw trades.
+
+```python
+import struct, msgpack, pandas as pd
+
+def read_mpack(path):
+    records = []
+    with open(path, "rb") as f:
+        while header := f.read(4):
+            (n,) = struct.unpack("<I", header)
+            records.append(msgpack.unpackb(f.read(n), raw=False))
+    df = pd.DataFrame(records)
+    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
+    return df
+
+# Orderbook snapshots
+ob = read_mpack("data/binance_spot/btcusdt/2026-04-25.mpack")
+print(ob[["ts", "sequence"]].head())
+
+# Trades — one row per matched fill
+trades = read_mpack("data/binance_spot/btcusdt/2026-04-25-trades.mpack")
+print(trades[["ts", "price", "size", "side", "trade_id"]].head())
+```
+
+`trade_id` is an `int64` from Binance's `t` field — useful for de-duplication when joining multiple data sources or replaying.
 
 ---
 
