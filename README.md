@@ -25,6 +25,37 @@ A high-performance Rust workspace for real-time market data streaming and order 
 | `backend` | Axum HTTP API — reads Redis, exposes market data over REST |
 
 ---
+## Command Overview 
+
+```bash
+# Build
+cargo build --release
+
+# Check / lint / format
+cargo check --workspace
+cargo fmt
+cargo clippy
+
+# Run server (ZMQ + optional Redis)
+cargo run --bin orderbook_server --release -- --config configs/server.yaml
+
+# Run HTTP backend (reads Redis)
+cargo run --bin backend --release -- --config configs/server.yaml
+
+# Terminal visualisers
+cargo run --example polymarket_orderbook --release
+cargo run --example kalshi_orderbook --release
+cargo run --example orderbook --release          # multi-exchange TUI
+
+# Disk recorder (Polymarket)
+cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
+
+# Disk recorder (Binance, Binance Spot, Okx, yperliquid)
+cargo run --bin orderbook_recorder --release -- --config configs/server.yaml
+
+# Python subscriber
+python3 zmq_server/examples/orderbook_subscriber.py
+```
 
 ## Quick Start
 
@@ -892,34 +923,3 @@ python3 scripts/read_mpack.py data/binance/BTCUSDT/   # all dates
 
 ---
 
-## Commands
-
-```bash
-# Build
-cargo build --release
-
-# Check / lint / format
-cargo check --workspace
-cargo fmt
-cargo clippy
-
-# Run server (ZMQ + optional Redis)
-cargo run --bin orderbook_server --release -- --config configs/server.yaml
-
-# Run HTTP backend (reads Redis)
-cargo run --bin backend --release -- --config configs/server.yaml
-
-# Terminal visualisers
-cargo run --example polymarket_orderbook --release
-cargo run --example kalshi_orderbook --release
-cargo run --example orderbook --release          # multi-exchange TUI
-
-# Disk recorder (Polymarket)
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
-
-# ZMQ publisher example (connects to a running server)
-cargo run --example zmq_publisher
-
-# Python subscriber
-python3 zmq_server/examples/orderbook_subscriber.py
-```
