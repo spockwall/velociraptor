@@ -9,7 +9,7 @@ pub mod server;
 pub mod storage;
 
 pub use backend::BackendConfig;
-pub use binance::BinanceConfig;
+pub use binance::{BinanceConfig, BinanceSpotConfig};
 pub use hyperliquid::HyperliquidConfig;
 pub use kalshi::{KalshiConfig, KalshiMarketConfig};
 pub use okx::OkxConfig;
@@ -31,6 +31,7 @@ pub struct Config {
     pub redis: RedisConfig,
     pub backend: BackendConfig,
     pub binance: BinanceConfig,
+    pub binance_spot: BinanceSpotConfig,
     pub okx: OkxConfig,
     pub hyperliquid: HyperliquidConfig,
     pub kalshi: KalshiConfig,

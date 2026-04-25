@@ -27,6 +27,12 @@ binance:
     - "btcusdt"
     - "ethusdt"
 
+binance_spot:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
 okx:
   enabled: true
   symbols:

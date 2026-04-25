@@ -1,5 +1,4 @@
 use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
-use crate::exchanges::ExchangeName;
 use crate::exchanges::binance::BinanceMessageParser;
 use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
@@ -16,14 +15,15 @@ impl BinanceClient {
         message_tx: UnboundedSender<StreamMessage>,
         system_control: SystemControl,
     ) -> Self {
-        let message_parser = BinanceMessageParser::new();
+        let exchange = config.exchange.clone();
+        let message_parser = BinanceMessageParser::with_exchange(exchange.clone());
 
         let inner = ClientBase::new(
             config,
             message_tx,
             system_control,
             message_parser,
-            ExchangeName::Binance,
+            exchange,
             None,
         );
 

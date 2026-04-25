@@ -20,7 +20,7 @@ pub struct SnapshotRecord {
 /// One persisted last-trade-price record.
 ///
 /// Serialised as MessagePack, prefixed with a `u32 LE` byte length.
-/// Written to `{base_path}/{exchange}/{symbol}_trades/{date}.mpack`.
+/// Written to `{base_path}/{exchange}/{symbol}/{date}-trades.mpack`.
 #[derive(Serialize)]
 pub struct TradeRecord {
     /// Unix nanosecond timestamp.
@@ -30,6 +30,10 @@ pub struct TradeRecord {
     /// Taker side: `"BUY"` or `"SELL"`.
     pub side: String,
     pub fee_rate_bps: f64,
+    /// Exchange-assigned trade id (Binance `t`); omitted for feeds that
+    /// don't carry one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade_id: Option<i64>,
 }
 
 impl TradeRecord {
@@ -40,6 +44,7 @@ impl TradeRecord {
             size: trade.size,
             side: trade.side.clone(),
             fee_rate_bps: trade.fee_rate_bps,
+            trade_id: trade.trade_id,
         }
     }
 }

@@ -24,7 +24,7 @@ pub struct ConnectionFactory {
 impl ConnectionFactory {
     pub fn create_connection(&self, system_control: SystemControl) -> Box<dyn ClientTrait> {
         match self.config.exchange {
-            ExchangeName::Binance => Box::new(BinanceClient::new(
+            ExchangeName::Binance | ExchangeName::BinanceSpot => Box::new(BinanceClient::new(
                 self.config.clone(),
                 self.message_tx.clone(),
                 system_control,

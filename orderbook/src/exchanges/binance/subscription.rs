@@ -28,6 +28,15 @@ impl BinanceSubMsgBuilder {
         self
     }
 
+    /// Add raw trade channels for the given symbols (lowercase).
+    /// Uses the `@trade` stream (one event per matched fill).
+    pub fn with_trade_channel(mut self, symbols: &[&str]) -> Self {
+        for sym in symbols {
+            self.params.push(format!("{}@trade", sym.to_lowercase()));
+        }
+        self
+    }
+
     pub fn build(self) -> String {
         serde_json::json!({
             "method": "SUBSCRIBE",

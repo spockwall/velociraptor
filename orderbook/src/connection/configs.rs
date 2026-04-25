@@ -23,6 +23,7 @@ impl ClientConfig {
         let (ws_url, ping_interval) = match name {
             ExchangeName::Okx => (okx::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
+            ExchangeName::BinanceSpot => (binance::ws::SPOT_PUBLIC_STREAM, 15u64),
             ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 45u64),
 

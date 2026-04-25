@@ -21,8 +21,8 @@ use orderbook::connection::SystemControl;
 use orderbook::StreamEngine;
 use tracing::error;
 use zmq_server::setup::{
-    add_binance, add_hyperliquid, add_okx, attach_redis, attach_zmq, build_system,
-    spawn_kalshi_schedulers, spawn_polymarket_schedulers,
+    add_binance, add_binance_spot, add_hyperliquid, add_okx, attach_redis, attach_zmq,
+    build_system, spawn_kalshi_schedulers, spawn_polymarket_schedulers,
 };
 use zmq_server::StreamSystemConfig;
 
@@ -66,6 +66,7 @@ async fn run(config_path: &str) -> Result<()> {
 
     let has_static = [
         cfg.binance.enabled && add_binance(&mut system_cfg, &cfg.binance.symbols),
+        cfg.binance_spot.enabled && add_binance_spot(&mut system_cfg, &cfg.binance_spot.symbols),
         cfg.okx.enabled     && add_okx(&mut system_cfg, &cfg.okx.symbols),
         cfg.hyperliquid.enabled && add_hyperliquid(&mut system_cfg, &cfg.hyperliquid.coins),
     ]

@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 pub enum ExchangeName {
     Okx,
     Binance,
+    BinanceSpot,
     Polymarket,
     Hyperliquid,
     Kalshi,
@@ -44,6 +45,7 @@ impl ExchangeName {
         match self {
             ExchangeName::Okx => "okx",
             ExchangeName::Binance => "binance",
+            ExchangeName::BinanceSpot => "binance_spot",
             ExchangeName::Polymarket => "polymarket",
             ExchangeName::Hyperliquid => "hyperliquid",
             ExchangeName::Kalshi => "kalshi",
@@ -58,6 +60,7 @@ impl ExchangeName {
         match s.to_lowercase().as_str() {
             "okx" => Some(ExchangeName::Okx),
             "binance" => Some(ExchangeName::Binance),
+            "binance_spot" => Some(ExchangeName::BinanceSpot),
             "polymarket" => Some(ExchangeName::Polymarket),
             "hyperliquid" => Some(ExchangeName::Hyperliquid),
             "kalshi" => Some(ExchangeName::Kalshi),
@@ -123,4 +126,9 @@ pub struct LastTradePrice {
     /// Condition market hash (Polymarket: `market` field).
     pub market: String,
     pub timestamp: DateTime<Utc>,
+    /// Exchange-assigned trade identifier. Present when the upstream feed
+    /// emits one (e.g. Binance `t`); `None` for sources that don't (e.g.
+    /// Polymarket `last_trade_price`).
+    #[serde(default)]
+    pub trade_id: Option<i64>,
 }

@@ -26,7 +26,9 @@ impl StorageWriter {
         let config = self.config;
 
         tokio::spawn(async move {
-            // key: "exchange:symbol" (snapshots) or "exchange:symbol_trades" (trades)
+            // key: "exchange:symbol:" (snapshots) or "exchange:symbol:trades"
+            //   → {base_path}/{exchange}/{symbol}/{date}.mpack
+            //   → {base_path}/{exchange}/{symbol}/{date}-trades.mpack
             let mut handles: HashMap<String, (BufWriter<File>, String)> = HashMap::new();
             let mut flush_tick = interval(Duration::from_millis(config.flush_interval_ms));
 
@@ -42,7 +44,9 @@ impl StorageWriter {
                     event = event_rx.recv() => match event {
                         Ok(RecorderEvent::Snapshot(snap)) => {
                             let record = SnapshotRecord::from_snapshot(&snap, config.depth);
-                            let key = format!("{}:{}", snap.exchange, snap.symbol);
+                            // 3-part key: "exchange:symbol:" — empty 3rd part = snapshots
+                            // → {base_path}/{exchange}/{symbol}/{date}.mpack
+                            let key = format!("{}:{}:", snap.exchange, snap.symbol);
                             let today = current_date();
 
                             let writer = match get_or_open(&mut handles, &key, &today, &config) {
@@ -56,8 +60,9 @@ impl StorageWriter {
                         }
                         Ok(RecorderEvent::Trade(trade)) => {
                             let record = TradeRecord::from_trade(&trade);
-                            // "{symbol}_trades" suffix → {base_path}/{exchange}/{symbol}_trades/
-                            let key = format!("{}:{}_trades", trade.exchange, trade.symbol);
+                            // 3-part key: "exchange:symbol:trades"
+                            // → {base_path}/{exchange}/{symbol}/{date}-trades.mpack
+                            let key = format!("{}:{}:trades", trade.exchange, trade.symbol);
                             let today = current_date();
 
                             let writer = match get_or_open(&mut handles, &key, &today, &config) {
@@ -97,14 +102,12 @@ impl StorageWriter {
                 // Compress if daily rotation and zstd enabled
                 if matches!(config.rotation, RotationPolicy::Daily) {
                     if let Some(level) = config.zstd_level {
-                        let mut parts = key.splitn(2, ':');
-                        let exchange = parts.next().unwrap_or("unknown");
-                        let symbol = parts.next().unwrap_or("unknown");
+                        let (exchange, symbol, kind) = parse_key(key);
                         let path = config
                             .base_path
                             .join(exchange)
                             .join(symbol)
-                            .join(format!("{date}.mpack"));
+                            .join(filename_for(date, kind, RotationPolicy::Daily));
                         spawn_compress(path, level);
                     }
                 }
@@ -164,14 +167,12 @@ fn get_or_open<'a>(
             }
             // old_writer dropped here — file handle closed before compress reads it
             if let Some(level) = config.zstd_level {
-                let mut parts = key.splitn(2, ':');
-                let exchange = parts.next().unwrap_or("unknown");
-                let symbol = parts.next().unwrap_or("unknown");
+                let (exchange, symbol, kind) = parse_key(key);
                 let path = config
                     .base_path
                     .join(exchange)
                     .join(symbol)
-                    .join(format!("{old_date}.mpack"));
+                    .join(filename_for(&old_date, kind, RotationPolicy::Daily));
                 info!("StorageWriter: rotated {key} ({old_date} → {today})");
                 spawn_compress(path, level);
             }
@@ -179,9 +180,7 @@ fn get_or_open<'a>(
     }
 
     if !handles.contains_key(key) {
-        let mut parts = key.splitn(2, ':');
-        let exchange = parts.next().unwrap_or("unknown");
-        let symbol = parts.next().unwrap_or("unknown");
+        let (exchange, symbol, kind) = parse_key(key);
 
         let dir = config.base_path.join(exchange).join(symbol);
         if let Err(e) = fs::create_dir_all(&dir) {
@@ -189,10 +188,7 @@ fn get_or_open<'a>(
             return None;
         }
 
-        let filename = match config.rotation {
-            RotationPolicy::Daily => format!("{today}.mpack"),
-            RotationPolicy::None => "data.mpack".to_string(),
-        };
+        let filename = filename_for(today, kind, config.rotation);
         let path = dir.join(&filename);
 
         let file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
@@ -208,6 +204,30 @@ fn get_or_open<'a>(
     }
 
     handles.get_mut(key).map(|(w, _)| w)
+}
+
+/// Split a 3-part key `"exchange:symbol:kind"` into its components.
+/// `kind` is empty for snapshots (default file) or e.g. `"trades"` for the
+/// `-trades` suffix variant. Older 2-part keys (no trailing colon) treat
+/// `kind` as empty.
+fn parse_key(key: &str) -> (&str, &str, &str) {
+    let mut parts = key.splitn(3, ':');
+    let exchange = parts.next().unwrap_or("unknown");
+    let symbol = parts.next().unwrap_or("unknown");
+    let kind = parts.next().unwrap_or("");
+    (exchange, symbol, kind)
+}
+
+/// Build the on-disk filename for a given date / kind / rotation policy.
+/// - snapshots (kind == ""): `{date}.mpack` or `data.mpack`
+/// - other (kind == "trades"): `{date}-trades.mpack` or `trades.mpack`
+fn filename_for(date: &str, kind: &str, rotation: RotationPolicy) -> String {
+    match (rotation, kind) {
+        (RotationPolicy::Daily, "") => format!("{date}.mpack"),
+        (RotationPolicy::Daily, k) => format!("{date}-{k}.mpack"),
+        (RotationPolicy::None, "") => "data.mpack".to_string(),
+        (RotationPolicy::None, k) => format!("{k}.mpack"),
+    }
 }
 
 fn write_record<T: serde::Serialize>(

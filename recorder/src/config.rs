@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum RotationPolicy {
     /// Create a new file per UTC day: `{base}/{exchange}/{symbol}/{YYYY-MM-DD}.mpack`
     Daily,

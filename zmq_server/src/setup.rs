@@ -29,7 +29,7 @@ use crate::ZmqServer;
 
 // ── Static exchanges ──────────────────────────────────────────────────────────
 
-/// Register Binance symbols into `cfg`. Returns `true` if any were added.
+/// Register Binance (USDT-M futures) symbols into `cfg`. Returns `true` if any were added.
 pub fn add_binance(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
     if symbols.is_empty() {
         return false;
@@ -43,6 +43,25 @@ pub fn add_binance(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
         ),
     );
     info!(symbols = ?symbols, "Binance enabled");
+    true
+}
+
+/// Register Binance Spot symbols into `cfg`, subscribing to both `@depth20@100ms`
+/// and `@trade` streams. Returns `true` if any were added.
+pub fn add_binance_spot(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
+    if symbols.is_empty() {
+        return false;
+    }
+    let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
+    cfg.with_exchange(
+        ClientConfig::new(ExchangeName::BinanceSpot).set_subscription_message(
+            BinanceSubMsgBuilder::new()
+                .with_orderbook_channel(&refs)
+                .with_trade_channel(&refs)
+                .build(),
+        ),
+    );
+    info!(symbols = ?symbols, "Binance Spot enabled");
     true
 }
 

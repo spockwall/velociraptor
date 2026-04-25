@@ -309,6 +309,7 @@ impl PolymarketMessageParser {
             fee_rate_bps: e.fee_rate_bps.parse().unwrap_or(0.0),
             market: e.market,
             timestamp: ts,
+            trade_id: None,
         }))
     }
 }
