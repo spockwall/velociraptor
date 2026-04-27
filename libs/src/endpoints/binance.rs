@@ -1,15 +1,13 @@
-/// Binance WebSocket endpoints
-#[derive(Debug, Clone, Copy)]
-pub struct BinanceWs {
-    pub public_stream: &'static str,
-    pub private_stream: &'static str,
-}
+pub mod binance {
+    pub const BASE_URL: &str = "https://api.binance.com";
 
-impl BinanceWs {
-    pub fn new() -> Self {
-        Self {
-            public_stream: "wss://stream.binance.com:9443/ws",
-            private_stream: "wss://stream.binance.com:9443/ws",
-        }
+    pub mod ws {
+        /// Binance USDT-margined futures public stream.
+        pub const PUBLIC_STREAM: &str = "wss://fstream.binance.com/ws";
+        /// Binance spot public combined stream.
+        /// Combined endpoint wraps each frame as `{"stream":"<name>","data":{...}}`,
+        /// which lets us recover the symbol for streams whose `data` payload
+        /// omits it (e.g. `@depth20@100ms`).
+        pub const SPOT_PUBLIC_STREAM: &str = "wss://stream.binance.com:9443/stream";
     }
 }

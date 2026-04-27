@@ -1,5 +1,4 @@
 pub mod client;
-pub mod endpoints;
 pub mod msg_parser;
 pub mod subscription;
 pub mod types;

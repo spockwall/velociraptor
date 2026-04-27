@@ -1,8 +1,7 @@
-pub mod endpoints {
+pub mod okx {
     pub const BASE_URL: &str = "https://www.okx.com";
 
     pub mod endpoints {
-
         // Account
         pub const ACCOUNT_INSTRUMENTS: &str = "/api/v5/account/instruments";
         pub const ACCOUNT_BALANCE: &str = "/api/v5/account/balance";
@@ -33,7 +32,7 @@ pub mod endpoints {
         pub const ASSET_CURRENCIES: &str = "/api/v5/asset/currencies";
         pub const ASSET_BALANCES: &str = "/api/v5/asset/balances";
         pub const ASSET_VALUATION: &str = "/api/v5/asset/asset-valuation";
-        pub const ASSET_TRANSFER: &str = "/api/v5/asset/transfer"; // funds transfer
+        pub const ASSET_TRANSFER: &str = "/api/v5/asset/transfer";
         pub const ASSET_TRANSFER_STATE: &str = "/api/v5/asset/transfer-state";
         pub const ASSET_BILLS: &str = "/api/v5/asset/bills";
         pub const ASSET_DEPOSIT_ADDRESS: &str = "/api/v5/asset/deposit-address";
