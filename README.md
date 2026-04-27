@@ -64,6 +64,12 @@ python3 zmq_server/examples/orderbook_subscriber.py
 #   orderbook_server -> 127.0.0.1:5555 (PUB) / :5556 (ROUTER)
 #   frontend (nginx) -> 127.0.0.1:8080
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# Run the system via command line
+docker compose up -d redis
+cargo run --bin orderbook_server --release -- --config configs/example.yaml
+cargo run --bin backend --release -- --config configs/example.yaml
+cd frontend && npm run dev
 ```
 
 ## Quick Start

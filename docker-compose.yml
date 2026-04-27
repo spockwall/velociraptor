@@ -19,3 +19,49 @@ services:
     volumes:
       - ./data/redis:/data
     restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: velociraptor/backend:latest
+    container_name: velociraptor-backend
+    command: ["--config", "/app/configs/example.docker.yaml"]
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+  orderbook_server:
+    build:
+      context: .
+      dockerfile: zmq_server/Dockerfile
+    image: velociraptor/orderbook-server:latest
+    container_name: velociraptor-orderbook-server
+    command: ["--config", "/app/configs/example.docker.yaml"]
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./credentials:/app/credentials:ro
+      - ./data:/app/data
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:5555:5555"
+      - "127.0.0.1:5556:5556"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: velociraptor/frontend:latest
+    container_name: velociraptor-frontend
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
