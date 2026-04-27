@@ -4,6 +4,8 @@ import { ChevronDown } from "lucide-react";
 export const PRESETS = [
     { exchange: "binance", symbol: "btcusdt", label: "Binance · BTCUSDT" },
     { exchange: "binance", symbol: "ethusdt", label: "Binance · ETHUSDT" },
+    { exchange: "binance_spot", symbol: "btcusdt", label: "Binance Spot · BTCUSDT" },
+    { exchange: "binance_spot", symbol: "ethusdt", label: "Binance Spot · ETHUSDT" },
     { exchange: "okx", symbol: "BTC-USDT", label: "OKX · BTC-USDT" },
     { exchange: "okx", symbol: "ETH-USDT-SWAP", label: "OKX · ETH-USDT-SWAP" },
     { exchange: "hyperliquid", symbol: "BTC", label: "Hyperliquid · BTC" },
