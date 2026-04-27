@@ -73,7 +73,7 @@ async fn spawn_market_task(
     creds: KalshiCredentials,
 ) -> Option<WindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
-        .set_ws_url(kalshi::BASE_URL)
+        .set_ws_url(kalshi::ws::PUBLIC_STREAM)
         .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
         .set_api_credentials(creds.api_key, creds.secret, None);
 
