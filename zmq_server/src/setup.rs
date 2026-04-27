@@ -4,12 +4,16 @@
 //! returning whether it actually registered anything. The binary calls these
 //! in sequence then decides whether to call `validate()`.
 
+use crate::topics::bba::BbaPayload;
 use libs::configs::{KalshiMarketConfig, PolymarketMarketConfig};
 use libs::constants::WS_STATUS_SOCKET;
 use libs::credentials::KalshiCredentials;
+use libs::endpoints::kalshi::kalshi;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot, UserEvent};
-use libs::redis_client::{keys::{Events, RedisKey}, RedisHandle};
-use crate::topics::bba::BbaPayload;
+use libs::redis_client::{
+    keys::{Events, RedisKey},
+    RedisHandle,
+};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -451,7 +455,7 @@ async fn spawn_kalshi_window(
     interval_secs: u64,
 ) -> Option<KalshiWindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
-        .set_ws_url(creds.ws_url())
+        .set_ws_url(kalshi::BASE_URL)
         .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
         .set_api_credentials(creds.api_key, creds.secret, None);
 
@@ -618,7 +622,8 @@ pub fn attach_redis(
                 let ex3 = exchange.clone();
                 let sym3 = symbol.clone();
                 tokio::spawn(async move {
-                    h3.lpush_capped(&RedisKey::snapshots(&ex3, &sym3), &ob_bytes, snapshot_cap).await;
+                    h3.lpush_capped(&RedisKey::snapshots(&ex3, &sym3), &ob_bytes, snapshot_cap)
+                        .await;
                 });
             }
 
@@ -636,12 +641,15 @@ pub fn attach_redis(
     {
         let h = handle.clone();
         engine.hooks_mut().on::<LastTradePrice, _>(move |trade| {
-            let Ok(bytes) = rmp_serde::to_vec_named(trade) else { return };
+            let Ok(bytes) = rmp_serde::to_vec_named(trade) else {
+                return;
+            };
             let h2 = h.clone();
             let exchange = trade.exchange.to_str().to_owned();
             let symbol = trade.symbol.clone();
             tokio::spawn(async move {
-                h2.lpush_capped(&RedisKey::trades(&exchange, &symbol), &bytes, trade_cap).await;
+                h2.lpush_capped(&RedisKey::trades(&exchange, &symbol), &bytes, trade_cap)
+                    .await;
             });
         });
     }
@@ -650,22 +658,30 @@ pub fn attach_redis(
     {
         let h = handle.clone();
         engine.hooks_mut().on::<UserEvent, _>(move |ev| {
-            let Ok(payload) = rmp_serde::to_vec_named(ev) else { return };
+            let Ok(payload) = rmp_serde::to_vec_named(ev) else {
+                return;
+            };
             let h2 = h.clone();
             let ev = ev.clone();
             tokio::spawn(async move {
                 match &ev {
-                    UserEvent::Position { exchange, symbol, .. } => {
+                    UserEvent::Position {
+                        exchange, symbol, ..
+                    } => {
                         h2.set_position(exchange, symbol, &payload).await;
                     }
-                    UserEvent::Balance { exchange, asset, .. } => {
+                    UserEvent::Balance {
+                        exchange, asset, ..
+                    } => {
                         h2.set_balance(exchange, asset, &payload).await;
                     }
                     UserEvent::Fill { .. } => {
-                        h2.lpush_capped(Events::FILLS, &payload, h2.event_list_cap).await;
+                        h2.lpush_capped(Events::FILLS, &payload, h2.event_list_cap)
+                            .await;
                     }
                     UserEvent::OrderUpdate { .. } => {
-                        h2.lpush_capped(Events::ORDERS, &payload, h2.event_list_cap).await;
+                        h2.lpush_capped(Events::ORDERS, &payload, h2.event_list_cap)
+                            .await;
                     }
                 }
             });

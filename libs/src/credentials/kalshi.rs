@@ -1,33 +1,41 @@
 use super::{exit_if_empty, load_section_or_exit};
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::Utc;
+use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::pss::SigningKey;
+use rsa::rand_core::OsRng;
+use rsa::sha2::Sha256;
+use rsa::signature::{RandomizedSigner, SignatureEncoding};
+use rsa::RsaPrivateKey;
 use serde::Deserialize;
 use std::path::Path;
 
-/// Kalshi API credentials.
+/// Kalshi API credentials + RSA-PSS request signer.
 ///
-/// `api_key` — the UUID shown in the Kalshi API keys page (sent as `KALSHI-ACCESS-KEY`)
-/// `secret`  — the RSA private key PEM string used to sign each request
-///             (RSA-PSS with SHA-256; the public key is registered on Kalshi).
-///             Must be PKCS#8 (`-----BEGIN PRIVATE KEY-----`). If Kalshi gave you
-///             a PKCS#1 file (`-----BEGIN RSA PRIVATE KEY-----`), convert with:
-///               `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pkcs8.pem`
-/// `env`     — `"prod"` (default, api.elections.kalshi.com) or `"demo"`
-///             (demo-api.kalshi.co). Keys issued on one env do not work on the other.
+/// Header layout (sent on every authenticated REST/WS request):
+///
+/// | Header                   | Value                                                    |
+/// |--------------------------|----------------------------------------------------------|
+/// | `KALSHI-ACCESS-KEY`      | API key UUID                                             |
+/// | `KALSHI-ACCESS-TIMESTAMP`| Current Unix time in milliseconds (string)               |
+/// | `KALSHI-ACCESS-SIGNATURE`| base64(RSA-PSS-SHA256(`timestamp + METHOD + path`))      |
+///
+/// `secret` must be PKCS#8 (`-----BEGIN PRIVATE KEY-----`). PKCS#1 input is
+/// also accepted for legacy keys. To convert PKCS#1:
+/// `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pkcs8.pem`.
+///
+/// `env` selects between `"prod"` (api.elections.kalshi.com) and `"demo"`
+/// (demo-api.kalshi.co). Keys issued on one env do not work on the other.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct KalshiCredentials {
-    /// API key ID (UUID), e.g. `"a1b2c3d4-e5f6-..."`
+    /// API key ID (UUID).
     #[serde(default)]
     pub api_key: String,
-    /// RSA private key in PEM format (PKCS#8).
-    /// Used to sign WebSocket upgrade requests with RSA-PSS / SHA-256.
+    /// RSA private key in PEM format (PKCS#8 preferred, PKCS#1 accepted).
     #[serde(default)]
     pub secret: String,
-    /// Environment: `"prod"` or `"demo"`. Defaults to `"prod"`.
-    #[serde(default = "default_env")]
-    pub env: String,
-}
-
-fn default_env() -> String {
-    "prod".to_string()
 }
 
 impl KalshiCredentials {
@@ -38,12 +46,36 @@ impl KalshiCredentials {
         creds
     }
 
-    /// WebSocket endpoint for the configured environment.
-    pub fn ws_url(&self) -> &'static str {
-        match self.env.as_str() {
-            "demo" => "wss://demo-api.kalshi.co/trade-api/ws/v2",
-            _ => "wss://api.elections.kalshi.com/trade-api/ws/v2",
-        }
+    /// Parse the PEM secret into an RSA-PSS signing key. Call once at startup
+    /// and reuse — parsing is the expensive part, signing is cheap.
+    pub fn signing_key(&self) -> Result<SigningKey<Sha256>> {
+        let rsa_key = RsaPrivateKey::from_pkcs8_pem(&self.secret)
+            .or_else(|_| RsaPrivateKey::from_pkcs1_pem(&self.secret))
+            .map_err(|e| anyhow!("Kalshi: failed to parse RSA private key: {e}"))?;
+        Ok(SigningKey::<Sha256>::new(rsa_key))
+    }
+
+    /// Build the three `KALSHI-ACCESS-*` header tuples for one request.
+    /// `method` is the upper-case HTTP verb; `path` is the URL path including
+    /// any leading slash (e.g. `"/trade-api/v2/portfolio/orders"`).
+    /// Call fresh per request — the timestamp and signature are time-bounded.
+    pub fn build_headers(
+        &self,
+        signing_key: &SigningKey<Sha256>,
+        method: &str,
+        path: &str,
+    ) -> Vec<(String, String)> {
+        let ts_ms = Utc::now().timestamp_millis().to_string();
+        let msg = format!("{ts_ms}{method}{path}");
+        let sig = signing_key.sign_with_rng(&mut OsRng, msg.as_bytes());
+        vec![
+            ("KALSHI-ACCESS-KEY".into(), self.api_key.clone()),
+            ("KALSHI-ACCESS-TIMESTAMP".into(), ts_ms),
+            (
+                "KALSHI-ACCESS-SIGNATURE".into(),
+                BASE64.encode(sig.to_bytes()),
+            ),
+        ]
     }
 }
 
@@ -64,7 +96,6 @@ mod tests {
         let mut root: serde_yaml::Mapping = serde_yaml::from_str(&raw).unwrap();
         let creds: KalshiCredentials =
             serde_yaml::from_value(root.remove("kalshi").unwrap()).unwrap();
-        println!("{:?}", creds);
         assert!(!creds.api_key.is_empty());
         assert!(!creds.secret.is_empty());
     }

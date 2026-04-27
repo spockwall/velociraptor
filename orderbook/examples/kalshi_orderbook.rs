@@ -21,6 +21,7 @@ use anyhow::Result;
 use chrono::Utc;
 use libs::configs::{Config, KalshiMarketConfig};
 use libs::credentials::KalshiCredentials;
+use libs::endpoints::kalshi::kalshi;
 use libs::protocol::{ExchangeName, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
@@ -72,7 +73,7 @@ async fn spawn_market_task(
     creds: KalshiCredentials,
 ) -> Option<WindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
-        .set_ws_url(creds.ws_url())
+        .set_ws_url(kalshi::BASE_URL)
         .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
         .set_api_credentials(creds.api_key, creds.secret, None);
 
@@ -180,8 +181,26 @@ fn spawn_render_loop(
             let Ok(mut ui) = ui.lock() else { continue };
             for (series, snap) in snaps {
                 let lbl = &snap.display_label;
-                ui.set_side(&series, lbl, true,  snap.yes.sequence, snap.yes.bids, snap.yes.asks, snap.yes.spread, snap.yes.mid);
-                ui.set_side(&series, lbl, false, snap.no.sequence,  snap.no.bids,  snap.no.asks,  snap.no.spread,  snap.no.mid);
+                ui.set_side(
+                    &series,
+                    lbl,
+                    true,
+                    snap.yes.sequence,
+                    snap.yes.bids,
+                    snap.yes.asks,
+                    snap.yes.spread,
+                    snap.yes.mid,
+                );
+                ui.set_side(
+                    &series,
+                    lbl,
+                    false,
+                    snap.no.sequence,
+                    snap.no.bids,
+                    snap.no.asks,
+                    snap.no.spread,
+                    snap.no.mid,
+                );
             }
             ui.render();
         }
@@ -212,9 +231,16 @@ async fn main() -> Result<()> {
 
     let now = Utc::now();
     let win_close = current_window_close(now);
-    eprintln!("Current 15-min window closes: {} UTC", win_close.format("%Y-%m-%d %H:%M"));
+    eprintln!(
+        "Current 15-min window closes: {} UTC",
+        win_close.format("%Y-%m-%d %H:%M")
+    );
     for m in &markets {
-        eprintln!("  {} → {}", m.series, build_event_ticker(&m.series, win_close));
+        eprintln!(
+            "  {} → {}",
+            m.series,
+            build_event_ticker(&m.series, win_close)
+        );
     }
 
     let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));

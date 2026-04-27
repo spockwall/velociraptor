@@ -1,7 +1,7 @@
 use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
 use crate::exchanges::kalshi::KalshiMessageParser;
-use crate::exchanges::kalshi::auth::KalshiAuth;
+use crate::exchanges::kalshi::auth::ws_upgrade_headers;
 use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -34,8 +34,8 @@ impl KalshiClient {
     ) -> Self {
         let auth_header = if with_auth {
             match (&config.api_key, &config.api_secret) {
-                (Some(kid), Some(pem)) => match KalshiAuth::new(kid.clone(), pem) {
-                    Ok(auth) => Some(auth.build_headers()),
+                (Some(kid), Some(pem)) => match ws_upgrade_headers(kid.clone(), pem) {
+                    Ok(headers) => Some(headers),
                     Err(e) => {
                         warn!("Kalshi: failed to build signer: {e}");
                         None

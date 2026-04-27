@@ -20,6 +20,10 @@ rmp-serde = { workspace = true }
 serde_yaml = { workspace = true }
 anyhow = { workspace = true }
 
+# Kalshi RSA-PSS signing (used by orderbook WS connector + executor REST client).
+base64 = { workspace = true }
+rsa = { workspace = true }
+
 # Optional — enabled by `redis` feature.
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"], optional = true }
 tracing = { workspace = true, optional = true }
