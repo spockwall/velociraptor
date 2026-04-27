@@ -1,0 +1,70 @@
+server:
+  pub_endpoint: "tcp://*:5555"
+  router_endpoint: "tcp://*:5556"
+  render_interval: 300
+
+redis:
+  enabled: true
+  url: "redis://redis:6379"
+  snapshot_cap: 1000
+  trade_cap: 500
+  event_list_cap: 5000
+
+backend:
+  port: 3000
+
+storage:
+  enabled: false
+  base_path: "./data"
+  depth: 20
+  flush_interval: 1000
+  rotation: "daily"
+  zstd_level: 0
+
+binance:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+binance_spot:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+okx:
+  enabled: true
+  symbols:
+    - "BTC-USDT"
+    - "ETH-USDT-SWAP"
+
+hyperliquid:
+  enabled: true
+  coins:
+    - "BTC"
+    - "ETH"
+
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
+
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300

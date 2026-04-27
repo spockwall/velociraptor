@@ -1,0 +1,12 @@
+target/
+**/target/
+node_modules/
+**/node_modules/
+data/
+logs/
+.git/
+.gitignore
+.idea/
+.vscode/
+*.log
+frontend/dist/

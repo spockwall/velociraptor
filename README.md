@@ -55,6 +55,15 @@ cargo run --bin orderbook_recorder --release -- --config configs/server.yaml
 
 # Python subscriber
 python3 zmq_server/examples/orderbook_subscriber.py
+
+# Run the system via docker
+# !/usr/bin/env bash
+# Boot the full stack in production mode (everything in containers).
+#   redis            -> 127.0.0.1:6379
+#   backend          -> 127.0.0.1:3000
+#   orderbook_server -> 127.0.0.1:5555 (PUB) / :5556 (ROUTER)
+#   frontend (nginx) -> 127.0.0.1:8080
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 ## Quick Start
