@@ -114,6 +114,12 @@ struct Targets {
     final_price: Option<f64>,
     end_iso: Option<String>,
     state: Option<&'static str>,
+    /// Pre-computed direction. Kalshi binary markets carry the up/down outcome
+    /// in `result` ("yes"/"no") and never publish the resolution price, so the
+    /// fetcher must derive the direction without a `final_price` to compare.
+    /// Polymarket leaves this `None` and lets `direction()` compute from
+    /// `(price_to_beat, final_price)`.
+    direction_override: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,28 +190,49 @@ async fn fetch_polymarket(http: &reqwest::Client, slug: &str) -> Result<Targets>
             .get("endDate")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        direction_override: None,
     })
 }
 
-/// Kalshi binary-strike markets carry the strike in `cap_strike` /
-/// `floor_strike`; the resolved settlement price is `settlement_value` (cents)
-/// once the market closes.
+/// Kalshi KX*15M markets are binary "BTC vs strike at close" contracts:
+///   - **`floor_strike`** — used when `strike_type == "greater_or_equal"`.
+///     The target price the close must meet or exceed for "yes". Set on
+///     KX*15M markets.
+///   - **`cap_strike`** — used when `strike_type == "less_or_equal"`. The
+///     target the close must stay at or below for "yes".
+///   - **`expiration_value`** — the actual close price (average of the last
+///     60 seconds of CF Benchmarks BRTI). This **is** Kalshi's `final_price`
+///     analogue. Returned as a string from the API.
+///   - **`result`** — the binary outcome (`"yes"` / `"no"`), derivable from
+///     `expiration_value` vs the strike. We record both: `final_price`
+///     captures the numeric close, `direction` carries the up/down outcome.
 async fn fetch_kalshi(http: &reqwest::Client, ticker: &str) -> Result<Targets> {
     let url = format!("{}/markets/{}", kalshi_ep::BASE_URL, ticker);
     let resp = http.get(&url).send().await?.error_for_status()?;
     let body: Value = resp.json().await?;
     let market = body.get("market").unwrap_or(&body);
 
-    // The strike (constant per market) is the closest analogue to priceToBeat.
-    let line = num(market, "cap_strike")
-        .or_else(|| num(market, "floor_strike"))
+    // Strike. Use whichever side of the strike pair the market populates.
+    let line = num(market, "floor_strike")
+        .or_else(|| num(market, "cap_strike"))
         .or_else(|| num(market, "strike_value"));
-    // `settlement_value` is reported in cents (0–100); other Kalshi numeric
-    // resolution fields exist on some product types — use whatever is present.
-    let final_price = num(market, "settlement_value").or_else(|| num(market, "result_value"));
+
+    // Final price = the BRTI 60s-avg snapshotted at expiration.
+    let final_price = num(market, "expiration_value");
+
+    // Binary outcome → up/down. For `greater_or_equal`, "yes" means
+    // expiration_value >= floor_strike → up; "no" → down.
+    let result = market.get("result").and_then(|v| v.as_str());
+    let direction_override = match result {
+        Some("yes") => Some("up"),
+        Some("no") => Some("down"),
+        _ => None,
+    };
+
     let status = market.get("status").and_then(|v| v.as_str()).unwrap_or("");
     let state = Some(match status {
-        "settled" => "resolved",
+        // `finalized` is Kalshi's terminal state for KX*15M (settled binary).
+        "finalized" | "settled" => "resolved",
         "closed" => "closed",
         "open" | "active" => "open",
         _ => "pending",
@@ -218,7 +245,13 @@ async fn fetch_kalshi(http: &reqwest::Client, ticker: &str) -> Result<Targets> {
         end_iso: market
             .get("close_time")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                market
+                    .get("expected_expiration_time")
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string()),
+        direction_override,
     })
 }
 
@@ -288,7 +321,11 @@ fn build_row(
     interval_secs: i64,
     t: &Targets,
 ) -> Option<CsvRow> {
-    if t.line.is_none() && t.final_price.is_none() {
+    // For Polymarket: skip if neither price is present (window not resolved yet).
+    // For Kalshi: skip if no strike *and* no resolved direction (i.e. nothing
+    // worth recording — open future market).
+    let kalshi_has_outcome = t.direction_override.is_some();
+    if t.line.is_none() && t.final_price.is_none() && !kalshi_has_outcome {
         return None;
     }
     let window_end = t
@@ -296,6 +333,9 @@ fn build_row(
         .as_deref()
         .and_then(iso_to_unix)
         .unwrap_or(window_start + interval_secs);
+    let direction = t
+        .direction_override
+        .unwrap_or_else(|| direction(t.line, t.final_price));
     Some(CsvRow {
         ts_recorded: Utc::now().timestamp(),
         exchange: exchange.to_string(),
@@ -305,7 +345,7 @@ fn build_row(
         window_end,
         price_to_beat: t.line.map(|v| v.to_string()).unwrap_or_default(),
         final_price: t.final_price.map(|v| v.to_string()).unwrap_or_default(),
-        direction: direction(t.line, t.final_price).to_string(),
+        direction: direction.to_string(),
     })
 }
 
