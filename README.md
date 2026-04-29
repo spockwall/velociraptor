@@ -415,6 +415,45 @@ See [`docs/kalshi.md`](docs/kalshi.md) for ticker format and scheduler details.
 
 ---
 
+## Price-to-Beat Backfill
+
+`price_to_beat_backfill` walks a date range and archives Polymarket / Kalshi
+target prices (`priceToBeat` / `finalPrice`) to per-day CSV files at
+`data/price_to_beat/{exchange}/{base_slug_or_series}/{YYYY-MM-DD}.csv`.
+
+It is purely a **backfill** tool — runs to completion, not a daemon. Idempotent
+(dedup by `window_start`), so safe to re-run with overlapping ranges.
+
+```bash
+# Polymarket 15-min
+cargo run --release --bin price_to_beat_backfill -- polymarket \
+    --base-slug btc-updown-15m --interval-secs 900 \
+    --from 2026-04-25T00:00:00Z
+
+# Polymarket 5-min
+cargo run --release --bin price_to_beat_backfill -- polymarket \
+    --base-slug btc-updown-5m --interval-secs 300 \
+    --from 2026-04-25T00:00:00Z
+
+# Kalshi 15-min series
+cargo run --release --bin price_to_beat_backfill -- kalshi \
+    --series KXBTC15M --interval-secs 900 \
+    --from 2026-04-25T00:00:00Z
+```
+
+Defaults: `--to` is now, `--archive-dir` is `./data/price_to_beat`,
+`--interval-secs` is `900`. Inter-request spacing is a compile-time const
+(`REQUEST_SPACING_MS = 100`) — edit the source to tune.
+
+CSV columns: `ts_recorded, exchange, base_slug, full_slug, window_start,
+window_end, price_to_beat, final_price, direction`.
+
+See [`docs/storage.md`](docs/storage.md#price-to-beat-archive-polymarket--kalshi)
+for the full schema, why backfill (the oracle reports late), and Python read
+recipes.
+
+---
+
 ## Architecture
 
 Three layers: **exchange connectors** push raw wire data into the **stream engine**, which maintains live book state and fans out typed events to **consumers** (ZMQ transport, hooks, broadcast subscribers).

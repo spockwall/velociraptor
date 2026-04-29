@@ -428,6 +428,172 @@ print(m["sum_mid"].describe())          # should be near 0.96–1.00
 
 ---
 
+## Price-to-Beat Archive (Polymarket / Kalshi)
+
+The `price_to_beat_backfill` binary walks a historical date range and archives
+each resolved window's `priceToBeat` (start-of-window oracle price) and
+`finalPrice` (end-of-window oracle price) to a daily **CSV** file. This is
+purely a backfill tool — it is not a long-running daemon. Run it on demand to
+fill gaps or seed history from cold start.
+
+### Why CSV (not mpack)
+
+- One row per 15-min (or 5-min) window → tens of rows per day, not millions.
+- Designed for ad-hoc analysis: open in Excel, `pandas.read_csv`, `awk`, etc.
+- Append-only and idempotent (dedup by `window_start`) — safe to re-run.
+
+### File Layout
+
+```
+{archive_dir}/
+└── {exchange}/                     ← `polymarket` or `kalshi`
+    └── {base_slug_or_series}/      ← e.g. btc-updown-15m, btc-updown-5m, KXBTC15M
+        ├── 2026-04-29.csv
+        ├── 2026-04-30.csv
+        └── ...
+```
+
+Examples:
+
+```
+data/price_to_beat/polymarket/btc-updown-15m/2026-04-29.csv
+data/price_to_beat/polymarket/btc-updown-5m/2026-04-29.csv
+data/price_to_beat/polymarket/eth-updown-15m/2026-04-29.csv
+data/price_to_beat/kalshi/KXBTC15M/2026-04-29.csv
+```
+
+The date directory is the UTC date of the **window start**, not when the row
+was written. A row written at 00:05 UTC for a 23:45 UTC window the previous
+day lands in yesterday's file.
+
+### Schema
+
+| Column          | Type   | Description                                                                  |
+| --------------- | ------ | ---------------------------------------------------------------------------- |
+| `ts_recorded`   | i64    | Unix seconds when the row was written                                        |
+| `exchange`      | string | `polymarket` or `kalshi`                                                     |
+| `base_slug`     | string | Polymarket: base slug (e.g. `btc-updown-15m`). Kalshi: series (e.g. `KXBTC15M`) |
+| `full_slug`     | string | Polymarket: full slug with window-start suffix. Kalshi: market ticker        |
+| `window_start`  | i64    | Unix seconds at which the window opened (the dedup key)                      |
+| `window_end`    | i64    | Unix seconds at which the window closed                                      |
+| `price_to_beat` | f64    | Polymarket: `priceToBeat` (Chainlink price at window open). Kalshi: `floor_strike` (for `greater_or_equal` markets) or `cap_strike` (for `less_or_equal`) |
+| `final_price`   | f64    | Polymarket: `finalPrice` (Chainlink price at close). Kalshi: `expiration_value` — the 60-second average of CF Benchmarks BRTI snapshotted at the window close |
+| `direction`     | string | `"up"` / `"down"` outcome. Polymarket: derived from `final_price` vs `price_to_beat`. Kalshi: derived from the `result` field (`"yes"` → `"up"`, `"no"` → `"down"`), equivalent to the price comparison |
+
+Header is written once per file at first append.
+
+### Example
+
+```
+ts_recorded,exchange,base_slug,full_slug,window_start,window_end,price_to_beat,final_price,direction
+1777479718,polymarket,btc-updown-15m,btc-updown-15m-1777467600,1777467600,1777468500,77126.6645582677,77170.16958187832,up
+1777479718,polymarket,btc-updown-15m,btc-updown-15m-1777468500,1777468500,1777469400,77170.16958187832,76912.11387837428,down
+1777479719,polymarket,btc-updown-15m,btc-updown-15m-1777469400,1777469400,1777470300,76912.11387837428,76549.62177890803,down
+1777479719,polymarket,btc-updown-15m,btc-updown-15m-1777470300,1777470300,1777471200,76549.62177890803,76768.27,up
+```
+
+### Why Backfill (Not Real-Time)
+
+**Polymarket**: `priceToBeat` is **not** populated when a window first opens —
+Polymarket resolves the field via the [Chainlink BTC/USD data stream](https://data.chain.link/streams/btc-usd)
+only after the start tick has been observed and confirmed. Likewise,
+`finalPrice` only appears after the close tick has been observed. By running
+this tool against windows that closed at least an hour ago, both fields are
+reliably present.
+
+**Kalshi**: the strike (`floor_strike` / `cap_strike`) is fixed at market
+creation, but `expiration_value` (the 60-second BRTI average at close) and
+the `result` field (`"yes"` / `"no"`) only land once the market reaches
+`status: "finalized"` — typically a few seconds after the close timestamp.
+Backfilling against windows that closed at least an hour ago guarantees both
+fields are present.
+
+For KX*15M markets the `floor_strike` of one window is the `expiration_value`
+of the *previous* window — i.e. each market's strike is the previous window's
+close. This means the CSV self-checks: `row[i].price_to_beat ==
+row[i-1].final_price` for consecutive resolved windows.
+
+### Usage
+
+```bash
+# Polymarket 15-min market
+cargo run --release --bin price_to_beat_backfill -- polymarket \
+    --base-slug btc-updown-15m \
+    --interval-secs 900 \
+    --from 2026-04-25T00:00:00Z \
+    --to 2026-04-29T00:00:00Z] \
+    --archive-dir ./data/price_to_beat \
+    --http-timeout-secs 8
+
+# Polymarket 5-min market — same shape, different cadence
+cargo run --release --bin price_to_beat_backfill -- polymarket \
+    --base-slug btc-updown-5m --interval-secs 300 \
+    --from 2026-04-25T00:00:00Z
+
+# Kalshi 15-min series
+cargo run --release --bin price_to_beat_backfill -- kalshi \
+    --series KXBTC15M --interval-secs 900 \
+    --from 2026-04-25T00:00:00Z
+```
+
+Defaults:
+
+- `--to` is *now*.
+- `--archive-dir` is `./data/price_to_beat`.
+- `--interval-secs` is `900` (15 min).
+- Inter-request spacing is a compile-time constant (`REQUEST_SPACING_MS = 100`)
+  to avoid hammering the upstream API. Edit the source if you need to tune it.
+
+The tool reads every existing CSV under
+`{archive_dir}/{exchange}/{base_slug_or_series}/` first and skips any
+`window_start` already on disk, so re-running with overlapping `--from`/`--to`
+is a no-op.
+
+### Reading the Data
+
+```python
+import pandas as pd
+
+df = pd.read_csv("data/price_to_beat/polymarket/btc-updown-15m/2026-04-29.csv")
+df["ts_recorded"]  = pd.to_datetime(df["ts_recorded"],  unit="s", utc=True)
+df["window_start"] = pd.to_datetime(df["window_start"], unit="s", utc=True)
+df["window_end"]   = pd.to_datetime(df["window_end"],   unit="s", utc=True)
+
+print(df[["window_start", "price_to_beat", "final_price", "direction"]].head())
+
+# Up/down hit rate
+print(df["direction"].value_counts(normalize=True))
+
+# Price drift per window (in USD)
+df["return"] = df["final_price"] - df["price_to_beat"]
+print(df["return"].describe())
+```
+
+To load **all** dates for a slug:
+
+```python
+from pathlib import Path
+import pandas as pd
+
+frames = [pd.read_csv(p) for p in
+          sorted(Path("data/price_to_beat/polymarket/btc-updown-15m/").glob("*.csv"))]
+df = pd.concat(frames, ignore_index=True).sort_values("window_start")
+```
+
+### Disk Usage
+
+CSV is text and rarely worth compressing — typical sizes:
+
+| Cadence       | Rows per day | File size per day |
+| ------------- | ------------ | ----------------- |
+| 15-min market | 96           | ~12 KB            |
+| 5-min market  | 288          | ~36 KB            |
+
+A full year of one slug's data is well under 5 MB. No rotation or compression
+needed.
+
+---
+
 ## Estimating Disk Usage
 
 Each record stores `sequence` (8 bytes), `ts_ns` (8 bytes), and `depth × 2` f64 values for bids and asks. At depth=8 that is ~280 bytes raw per record before msgpack overhead.
