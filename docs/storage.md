@@ -2,10 +2,6 @@
 
 The recorder crate persists every orderbook snapshot to disk as an append-only binary file using the MessagePack format.
 
----
-
-## Why MessagePack
-
 MessagePack is a binary serialization format that is:
 
 - **Compact** — smaller than JSON, no field-name repetition per row
@@ -81,7 +77,7 @@ data/hyperliquid/BTC/2026-04-03.mpack
 data/okx/BTC-USDT/2026-04-03.mpack
 ```
 
-### Binance Spot (`binance_spot`)
+### Binance Spot
 
 Binance Spot collects both **partial-depth orderbook snapshots** and **raw trade events** (one record per matched fill). Both streams write into the same per-symbol directory; the trade file uses a `-trades.mpack` filename suffix:
 
@@ -106,9 +102,9 @@ data/binance_spot/ethusdt/2026-04-25-trades.mpack
 
 The futures-channel `binance` exchange (`fstream.binance.com`) keeps the standard layout with no trade file. Spot is a separate `ExchangeName::BinanceSpot` and produces both files.
 
-### Polymarket (`polymarket_recorder`)
+### Polymarket
 
-Polymarket markets rotate on fixed windows (e.g. every 5 minutes). Each window produces four files — orderbook snapshots and last-trade records, each split by token side (Up / Down). The layout uses the **base slug** (no timestamp), the UTC date of the window start, and the window time range as the filename:
+Polymarket markets rotate on fixed windows (e.g. 5mins and 15mins). Each window produces four files — orderbook snapshots and last-trade records, each split by token side (Up / Down). The layout uses the **base slug** (no timestamp), the UTC date of the window start, and the window time range as the filename:
 
 ```
 {base_path}/
@@ -219,212 +215,6 @@ After a daily rotation (or window close for Polymarket) the closed file is compr
 | `19–22`      | Maximum compression (`--ultra`), very slow. Only useful for archiving cold data. |
 
 Rule of thumb: use `3` for live servers, `15` for nightly archival jobs.
-
----
-
-## Reading the Data
-
-### Python — quick script
-
-```bash
-pip install msgpack pandas zstandard
-
-python scripts/read_mpack.py data/binance/BTCUSDT/          # all files in directory
-python scripts/read_mpack.py data/binance/BTCUSDT/2026-04-03.mpack
-```
-
-### Python — in your own code
-
-```python
-import struct, msgpack, pandas as pd
-from pathlib import Path
-
-def read_mpack(path):
-    records = []
-    with open(path, "rb") as f:
-        while header := f.read(4):
-            (n,) = struct.unpack("<I", header)
-            records.append(msgpack.unpackb(f.read(n), raw=False))
-    df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
-    return df
-
-df = read_mpack("data/binance/BTCUSDT/2026-04-03.mpack")
-```
-
-### Reading compressed files
-
-```python
-import zstandard, io, struct, msgpack, pandas as pd
-
-def read_mpack_zst(path):
-    dctx = zstandard.ZstdDecompressor()
-    records = []
-    with open(path, "rb") as fh:
-        with dctx.stream_reader(fh) as reader:
-            buf = io.BufferedReader(reader)
-            while header := buf.read(4):
-                (n,) = struct.unpack("<I", header)
-                records.append(msgpack.unpackb(buf.read(n), raw=False))
-    df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
-    return df
-
-df = read_mpack_zst("data/binance/BTCUSDT/2026-04-02.mpack.zst")
-```
-
-### Working with the depth levels
-
-The `bids` and `asks` columns contain lists of `[price, qty]` pairs:
-
-```python
-import numpy as np
-
-row = df.iloc[0]
-
-bids = np.array(row["bids"])   # shape (N, 2)
-asks = np.array(row["asks"])
-
-bid_prices, bid_qtys = bids[:, 0], bids[:, 1]
-ask_prices, ask_qtys = asks[:, 0], asks[:, 1]
-
-# Derived metrics
-best_bid, best_ask = bid_prices[0], ask_prices[0]
-mid    = (best_bid + best_ask) / 2
-spread = best_ask - best_bid
-wmid   = (best_ask * bid_qtys[0] + best_bid * ask_qtys[0]) / (bid_qtys[0] + ask_qtys[0])
-```
-
----
-
-## Reading Binance Spot Data
-
-Binance Spot uses the standard `{base_path}/binance_spot/{symbol}/{date}.mpack` layout for orderbook snapshots, plus a sibling `{date}-trades.mpack` for raw trades.
-
-```python
-import struct, msgpack, pandas as pd
-
-def read_mpack(path):
-    records = []
-    with open(path, "rb") as f:
-        while header := f.read(4):
-            (n,) = struct.unpack("<I", header)
-            records.append(msgpack.unpackb(f.read(n), raw=False))
-    df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
-    return df
-
-# Orderbook snapshots
-ob = read_mpack("data/binance_spot/btcusdt/2026-04-25.mpack")
-print(ob[["ts", "sequence"]].head())
-
-# Trades — one row per matched fill
-trades = read_mpack("data/binance_spot/btcusdt/2026-04-25-trades.mpack")
-print(trades[["ts", "price", "size", "side", "trade_id"]].head())
-```
-
-`trade_id` is an `int64` from Binance's `t` field — useful for de-duplication when joining multiple data sources or replaying.
-
----
-
-## Reading Polymarket Data
-
-Polymarket files have a different directory structure than standard exchanges, so there is a dedicated script.
-
-### Quick script
-
-```bash
-pip install msgpack pandas zstandard
-
-# One window side
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/06:15-06:20-up.mpack
-
-# All windows for a date (both sides)
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/
-
-# All dates for a slug
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/
-
-# Only the Up side
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/ --side up
-
-# Per-window summary (record count, mean mid, mean spread)
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/ --summary
-
-# Merge up and down into aligned rows
-python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/ --merge
-```
-
-The script adds metadata columns derived from the filename, and computes `mid`, `spread`, and `wmid` from the stored `bids`/`asks`:
-
-| Column   | Example       | Description                          |
-| -------- | ------------- | ------------------------------------ |
-| `window` | `06:15-06:20` | Window time range (UTC)              |
-| `side`   | `up` / `down` | Token direction                      |
-| `mid`    | `0.445`       | `(best_bid + best_ask) / 2`          |
-| `spread` | `0.01`        | `best_ask - best_bid`                |
-| `wmid`   | `0.447`       | Quantity-weighted mid price          |
-
-### In your own code
-
-```python
-from scripts.read_polymarket import load, load_side, merge_sides, summary
-
-# Load all windows for a date
-df = load("data/polymarket/btc-updown-5m/2026-04-06/")
-print(df[["ts", "window", "side", "mid", "spread"]].head())
-
-# Load only the Up side
-up = load_side("data/polymarket/btc-updown-5m/2026-04-06/", "up")
-
-# Align Up and Down snapshots by nearest timestamp (±500ms)
-merged = merge_sides("data/polymarket/btc-updown-5m/2026-04-06/")
-print(merged[["ts", "window_up", "mid_up", "mid_down", "sum_mid"]].head())
-
-# Per-window summary table
-print(summary("data/polymarket/btc-updown-5m/2026-04-06/"))
-```
-
-### Reading trade files
-
-Trade files use the same length-prefixed msgpack format as snapshot files but have a flat schema — no `bids`/`asks` arrays.
-
-```python
-import struct, msgpack, pandas as pd
-
-def read_trades(path):
-    records = []
-    with open(path, "rb") as f:
-        while header := f.read(4):
-            (n,) = struct.unpack("<I", header)
-            records.append(msgpack.unpackb(f.read(n), raw=False))
-    df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
-    return df
-
-# Up-side trades for one window
-up_trades = read_trades("data/polymarket/btc-updown-5m/2026-04-06/06:15-06:20-up-trades.mpack")
-print(up_trades[["ts", "price", "size", "side", "fee_rate_bps"]].head())
-```
-
-For compressed files pass the decompressed stream to the same unpacking loop (see `read_mpack_zst` above).
-
-### Interpreting prices
-
-Polymarket tokens are priced in USDC between 0.0 and 1.0 (= implied probability):
-
-```python
-df = load("data/polymarket/btc-updown-5m/2026-04-06/")
-
-# Implied probability of Up winning each window
-up = df[df["side"] == "up"].copy()
-up["implied_prob"] = up["mid"]          # mid ≈ market probability
-up["spread_bps"]   = up["spread"] * 10_000
-
-# Check that Up + Down ≈ 1 (minus fees) across matched snapshots
-m = merge_sides("data/polymarket/btc-updown-5m/2026-04-06/")
-print(m["sum_mid"].describe())          # should be near 0.96–1.00
-```
 
 ---
 
@@ -549,69 +339,3 @@ The tool reads every existing CSV under
 `window_start` already on disk, so re-running with overlapping `--from`/`--to`
 is a no-op.
 
-### Reading the Data
-
-```python
-import pandas as pd
-
-df = pd.read_csv("data/price_to_beat/polymarket/btc-updown-15m/2026-04-29.csv")
-df["ts_recorded"]  = pd.to_datetime(df["ts_recorded"],  unit="s", utc=True)
-df["window_start"] = pd.to_datetime(df["window_start"], unit="s", utc=True)
-df["window_end"]   = pd.to_datetime(df["window_end"],   unit="s", utc=True)
-
-print(df[["window_start", "price_to_beat", "final_price", "direction"]].head())
-
-# Up/down hit rate
-print(df["direction"].value_counts(normalize=True))
-
-# Price drift per window (in USD)
-df["return"] = df["final_price"] - df["price_to_beat"]
-print(df["return"].describe())
-```
-
-To load **all** dates for a slug:
-
-```python
-from pathlib import Path
-import pandas as pd
-
-frames = [pd.read_csv(p) for p in
-          sorted(Path("data/price_to_beat/polymarket/btc-updown-15m/").glob("*.csv"))]
-df = pd.concat(frames, ignore_index=True).sort_values("window_start")
-```
-
-### Disk Usage
-
-CSV is text and rarely worth compressing — typical sizes:
-
-| Cadence       | Rows per day | File size per day |
-| ------------- | ------------ | ----------------- |
-| 15-min market | 96           | ~12 KB            |
-| 5-min market  | 288          | ~36 KB            |
-
-A full year of one slug's data is well under 5 MB. No rotation or compression
-needed.
-
----
-
-## Estimating Disk Usage
-
-Each record stores `sequence` (8 bytes), `ts_ns` (8 bytes), and `depth × 2` f64 values for bids and asks. At depth=8 that is ~280 bytes raw per record before msgpack overhead.
-
-**Standard exchanges:**
-
-| Symbols | Update rate | Raw (daily) | zstd-3 (daily) |
-| ------- | ----------- | ----------- | -------------- |
-| 1       | 100ms       | ~700 MB     | ~140 MB        |
-| 4       | 100ms       | ~2.8 GB     | ~560 MB        |
-
-**Polymarket (per slug, Up + Down combined, depth=8):**
-
-Polymarket update rates vary with market activity. During volatile periods updates can arrive hundreds of times per second.
-
-| Slugs | Avg update rate | Raw per day  | zstd-3 per day |
-| ----- | --------------- | ------------ | -------------- |
-| 1     | high-freq       | ~10–30 GB    | ~2–6 GB        |
-| 4     | high-freq       | ~40–120 GB   | ~8–24 GB       |
-
-Orderbooks are highly repetitive between consecutive snapshots, so zstd achieves ~5:1 compression ratios on typical data.
