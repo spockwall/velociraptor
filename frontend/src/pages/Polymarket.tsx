@@ -183,7 +183,7 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
                         <span className="text-text-primary">{fmtUsd(openPrice?.price ?? null)}</span>
                         {openPrice && (
                             <span className={`ml-1 text-[9px] ${classMap.dim}`}>
-                                ({openPrice.source} · approx)
+                                ({openPrice.source})
                             </span>
                         )}
                     </span>
