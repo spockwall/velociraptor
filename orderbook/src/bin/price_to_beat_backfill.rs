@@ -1,4 +1,4 @@
-//! Target price backfill for Polymarket and Kalshi.
+//! Price-to-beat backfill for Polymarket and Kalshi.
 //!
 //! Walks every window between `--from` and `--to` for one base slug (or one
 //! Kalshi series), fetches the upstream public REST API, and appends any
@@ -6,43 +6,22 @@
 //! `{archive_dir}/{exchange}/{base_slug}/{YYYY-MM-DD}.csv`.
 //!
 //! Idempotent — rows already present (matched by `window_start`) are skipped.
-//!
-//! CSV schema:
-//!   ts_recorded, exchange, base_slug, full_slug,
-//!   window_start, window_end, price_to_beat, final_price, direction
-//!
-//! Examples:
-//!   # Polymarket 15-min market, last 24h
-//!   target_price_fetcher polymarket \
-//!     --base-slug btc-updown-15m --interval-secs 900 \
-//!     --from 2026-04-29T00:00:00Z
-//!
-//!   # Polymarket 5-min market
-//!   target_price_fetcher polymarket \
-//!     --base-slug btc-updown-5m --interval-secs 300 \
-//!     --from 2026-04-29T00:00:00Z
-//!
-//!   # Kalshi 15-min series
-//!   target_price_fetcher kalshi \
-//!     --series KXBTC15M --interval-secs 900 \
-//!     --from 2026-04-29T00:00:00Z
 
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use anyhow::Result;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use libs::endpoints::kalshi::kalshi as kalshi_ep;
-use orderbook::exchanges::kalshi::build_market_ticker;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use orderbook::price_to_beat::{
+    REQUEST_SPACING_MS, append_csv, build_row, fetch_kalshi, fetch_polymarket,
+    kalshi_ticker_for_window, known_window_starts,
+};
 use tracing::{debug, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "target_price_fetcher",
+    name = "price_to_beat_backfill",
     about = "Backfill Polymarket / Kalshi target prices into per-day CSV files"
 )]
 struct Args {
@@ -108,249 +87,6 @@ struct KalshiArgs {
     archive_dir: String,
 }
 
-#[derive(Debug, Clone, Default)]
-struct Targets {
-    line: Option<f64>,
-    final_price: Option<f64>,
-    end_iso: Option<String>,
-    state: Option<&'static str>,
-    /// Pre-computed direction. Kalshi binary markets carry the up/down outcome
-    /// in `result` ("yes"/"no") and never publish the resolution price, so the
-    /// fetcher must derive the direction without a `final_price` to compare.
-    /// Polymarket leaves this `None` and lets `direction()` compute from
-    /// `(price_to_beat, final_price)`.
-    direction_override: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CsvRow {
-    ts_recorded: i64,
-    exchange: String,
-    base_slug: String,
-    full_slug: String,
-    window_start: i64,
-    window_end: i64,
-    price_to_beat: String,
-    final_price: String,
-    direction: String,
-}
-
-fn num(v: &Value, key: &str) -> Option<f64> {
-    match v.get(key)? {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse::<f64>().ok(),
-        _ => None,
-    }
-}
-
-fn iso_to_unix(s: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
-}
-
-const REQUEST_SPACING_MS: u64 = 100; // ms
-
-// ── Fetchers ────────────────────────────────────────────────────────────────
-
-async fn fetch_polymarket(http: &reqwest::Client, slug: &str) -> Result<Targets> {
-    let url = format!("https://gamma-api.polymarket.com/markets/slug/{slug}");
-    let resp = http.get(&url).send().await?.error_for_status()?;
-    let body: Value = resp.json().await?;
-
-    let event_md = body
-        .get("events")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .and_then(|e| e.get("eventMetadata"));
-
-    let line = event_md
-        .and_then(|md| num(md, "priceToBeat"))
-        .or_else(|| num(&body, "line"));
-    let final_price = event_md.and_then(|md| num(md, "finalPrice"));
-
-    let closed = body
-        .get("closed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let accepting = body
-        .get("acceptingOrders")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let state = Some(match (closed, final_price.is_some()) {
-        (true, true) => "resolved",
-        (true, false) => "closed",
-        (false, _) if accepting => "open",
-        _ => "pending",
-    });
-
-    Ok(Targets {
-        line,
-        final_price,
-        state,
-        end_iso: body
-            .get("endDate")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        direction_override: None,
-    })
-}
-
-/// Kalshi KX*15M markets are binary "BTC vs strike at close" contracts:
-///   - **`floor_strike`** — used when `strike_type == "greater_or_equal"`.
-///     The target price the close must meet or exceed for "yes". Set on
-///     KX*15M markets.
-///   - **`cap_strike`** — used when `strike_type == "less_or_equal"`. The
-///     target the close must stay at or below for "yes".
-///   - **`expiration_value`** — the actual close price (average of the last
-///     60 seconds of CF Benchmarks BRTI). This **is** Kalshi's `final_price`
-///     analogue. Returned as a string from the API.
-///   - **`result`** — the binary outcome (`"yes"` / `"no"`), derivable from
-///     `expiration_value` vs the strike. We record both: `final_price`
-///     captures the numeric close, `direction` carries the up/down outcome.
-async fn fetch_kalshi(http: &reqwest::Client, ticker: &str) -> Result<Targets> {
-    let url = format!("{}/markets/{}", kalshi_ep::BASE_URL, ticker);
-    let resp = http.get(&url).send().await?.error_for_status()?;
-    let body: Value = resp.json().await?;
-    let market = body.get("market").unwrap_or(&body);
-
-    // Strike. Use whichever side of the strike pair the market populates.
-    let line = num(market, "floor_strike")
-        .or_else(|| num(market, "cap_strike"))
-        .or_else(|| num(market, "strike_value"));
-
-    // Final price = the BRTI 60s-avg snapshotted at expiration.
-    let final_price = num(market, "expiration_value");
-
-    // Binary outcome → up/down. For `greater_or_equal`, "yes" means
-    // expiration_value >= floor_strike → up; "no" → down.
-    let result = market.get("result").and_then(|v| v.as_str());
-    let direction_override = match result {
-        Some("yes") => Some("up"),
-        Some("no") => Some("down"),
-        _ => None,
-    };
-
-    let status = market.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    let state = Some(match status {
-        // `finalized` is Kalshi's terminal state for KX*15M (settled binary).
-        "finalized" | "settled" => "resolved",
-        "closed" => "closed",
-        "open" | "active" => "open",
-        _ => "pending",
-    });
-
-    Ok(Targets {
-        line,
-        final_price,
-        state,
-        end_iso: market
-            .get("close_time")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                market
-                    .get("expected_expiration_time")
-                    .and_then(|v| v.as_str())
-            })
-            .map(|s| s.to_string()),
-        direction_override,
-    })
-}
-
-// ── CSV layer ───────────────────────────────────────────────────────────────
-
-fn csv_path(root: &Path, exchange: &str, base_slug: &str, day: DateTime<Utc>) -> PathBuf {
-    root.join(exchange)
-        .join(base_slug)
-        .join(format!("{}.csv", day.format("%Y-%m-%d")))
-}
-
-fn known_window_starts(root: &Path, exchange: &str, base_slug: &str) -> HashSet<i64> {
-    let dir = root.join(exchange).join(base_slug);
-    let mut seen = HashSet::new();
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return seen;
-    };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("csv") {
-            continue;
-        }
-        let Ok(mut rdr) = csv::Reader::from_path(&p) else {
-            continue;
-        };
-        for row in rdr.deserialize::<CsvRow>().flatten() {
-            seen.insert(row.window_start);
-        }
-    }
-    seen
-}
-
-fn append_csv(root: &Path, row: &CsvRow) -> Result<()> {
-    let day =
-        DateTime::<Utc>::from_timestamp(row.window_start, 0).context("invalid window_start")?;
-    let path = csv_path(root, &row.exchange, &row.base_slug, day);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("mkdir csv parent")?;
-    }
-    let new_file = !path.exists();
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .context("open csv")?;
-    let mut wtr = csv::WriterBuilder::new()
-        .has_headers(new_file)
-        .from_writer(file);
-    wtr.serialize(row).context("serialize row")?;
-    wtr.flush().context("flush csv")?;
-    Ok(())
-}
-
-fn direction(price_to_beat: Option<f64>, final_price: Option<f64>) -> &'static str {
-    match (price_to_beat, final_price) {
-        (Some(start), Some(end)) if end >= start => "up",
-        (Some(_), Some(_)) => "down",
-        _ => "",
-    }
-}
-
-fn build_row(
-    exchange: &str,
-    base_slug: &str,
-    full_slug: &str,
-    window_start: i64,
-    interval_secs: i64,
-    t: &Targets,
-) -> Option<CsvRow> {
-    // For Polymarket: skip if neither price is present (window not resolved yet).
-    // For Kalshi: skip if no strike *and* no resolved direction (i.e. nothing
-    // worth recording — open future market).
-    let kalshi_has_outcome = t.direction_override.is_some();
-    if t.line.is_none() && t.final_price.is_none() && !kalshi_has_outcome {
-        return None;
-    }
-    let window_end = t
-        .end_iso
-        .as_deref()
-        .and_then(iso_to_unix)
-        .unwrap_or(window_start + interval_secs);
-    let direction = t
-        .direction_override
-        .unwrap_or_else(|| direction(t.line, t.final_price));
-    Some(CsvRow {
-        ts_recorded: Utc::now().timestamp(),
-        exchange: exchange.to_string(),
-        base_slug: base_slug.to_string(),
-        full_slug: full_slug.to_string(),
-        window_start,
-        window_end,
-        price_to_beat: t.line.map(|v| v.to_string()).unwrap_or_default(),
-        final_price: t.final_price.map(|v| v.to_string()).unwrap_or_default(),
-        direction: direction.to_string(),
-    })
-}
-
-// ── Backfill drivers ────────────────────────────────────────────────────────
-
 async fn run_polymarket(args: PolyArgs) -> Result<()> {
     let to = args.to.unwrap_or_else(Utc::now);
     if to <= args.from {
@@ -362,7 +98,7 @@ async fn run_polymarket(args: PolyArgs) -> Result<()> {
     let archive_dir = PathBuf::from(&args.archive_dir);
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(args.http_timeout_secs))
-        .user_agent("velociraptor-target-price-fetcher/0.1")
+        .user_agent("velociraptor-price-to-beat-backfill/0.1")
         .build()?;
 
     let already = known_window_starts(&archive_dir, "polymarket", &args.base_slug);
@@ -377,9 +113,7 @@ async fn run_polymarket(args: PolyArgs) -> Result<()> {
     let from_ts = (args.from.timestamp() / interval) * interval;
     let to_ts = (to.timestamp() / interval) * interval;
     let mut window_start = from_ts;
-    let mut fetched = 0usize;
-    let mut wrote = 0usize;
-    let mut skipped = 0usize;
+    let (mut fetched, mut wrote, mut skipped) = (0usize, 0usize, 0usize);
 
     while window_start < to_ts {
         if already.contains(&window_start) {
@@ -410,9 +144,7 @@ async fn run_polymarket(args: PolyArgs) -> Result<()> {
             }
             Err(e) => warn!(slug, "fetch failed: {e}"),
         }
-
         tokio::time::sleep(Duration::from_millis(REQUEST_SPACING_MS)).await;
-
         window_start += interval;
     }
 
@@ -436,7 +168,7 @@ async fn run_kalshi(args: KalshiArgs) -> Result<()> {
     let archive_dir = PathBuf::from(&args.archive_dir);
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(args.http_timeout_secs))
-        .user_agent("velociraptor-target-price-fetcher/0.1")
+        .user_agent("velociraptor-price-to-beat-backfill/0.1")
         .build()?;
 
     let already = known_window_starts(&archive_dir, "kalshi", &args.series);
@@ -451,9 +183,7 @@ async fn run_kalshi(args: KalshiArgs) -> Result<()> {
     let from_ts = (args.from.timestamp() / interval) * interval;
     let to_ts = (to.timestamp() / interval) * interval;
     let mut window_start = from_ts;
-    let mut fetched = 0usize;
-    let mut wrote = 0usize;
-    let mut skipped = 0usize;
+    let (mut fetched, mut wrote, mut skipped) = (0usize, 0usize, 0usize);
 
     while window_start < to_ts {
         if already.contains(&window_start) {
@@ -461,13 +191,7 @@ async fn run_kalshi(args: KalshiArgs) -> Result<()> {
             window_start += interval;
             continue;
         }
-        // Kalshi tickers are derived from the *close* time, not the start.
-        let close = Utc
-            .timestamp_opt(window_start + interval, 0)
-            .single()
-            .context("bad window_start")?;
-        let ticker = build_market_ticker(&args.series, close);
-
+        let ticker = kalshi_ticker_for_window(&args.series, window_start, interval)?;
         match fetch_kalshi(&http, &ticker).await {
             Ok(t) => {
                 fetched += 1;
@@ -485,7 +209,6 @@ async fn run_kalshi(args: KalshiArgs) -> Result<()> {
             }
             Err(e) => warn!(ticker, "fetch failed: {e}"),
         }
-
         tokio::time::sleep(Duration::from_millis(REQUEST_SPACING_MS)).await;
         window_start += interval;
     }

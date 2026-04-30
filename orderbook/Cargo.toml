@@ -64,8 +64,12 @@ redis     = { workspace = true }
 csv       = "1.3"
 
 [[bin]]
-name = "target_price_fetcher"
-path = "src/bin/target_price_fetcher.rs"
+name = "price_to_beat_backfill"
+path = "src/bin/price_to_beat_backfill.rs"
+
+[[bin]]
+name = "price_to_beat_fetcher"
+path = "src/bin/price_to_beat_fetcher.rs"
 
 [[bin]]
 name = "live_price_streamer"
