@@ -220,11 +220,21 @@ Rule of thumb: use `3` for live servers, `15` for nightly archival jobs.
 
 ## Price-to-Beat Archive (Polymarket / Kalshi)
 
-The `price_to_beat_backfill` binary walks a historical date range and archives
-each resolved window's `priceToBeat` (start-of-window oracle price) and
-`finalPrice` (end-of-window oracle price) to a daily **CSV** file. This is
-purely a backfill tool — it is not a long-running daemon. Run it on demand to
-fill gaps or seed history from cold start.
+Two binaries archive each resolved window's `priceToBeat` (start-of-window
+oracle price) and `finalPrice` (end-of-window oracle price) to daily **CSV**
+files:
+
+- **`price_to_beat_fetcher`** — long-running daemon. Reads
+  `configs/example.yaml`, drives one task per enabled market, **auto-backfills
+  on startup** from the latest CSV row (or `--seed-from` if the archive is
+  empty), then polls every interval boundary forever.
+- **`price_to_beat_backfill`** — one-shot. Walks a single market over a
+  user-specified `--from` / `--to` range. Useful for filling gaps in a single
+  market without restarting the daemon.
+
+Both share the same CSV format and dedup behaviour — they're safe to run
+side-by-side, and the daemon's auto-backfill subsumes most ad-hoc backfill use
+cases.
 
 ### Why CSV (not mpack)
 
@@ -282,28 +292,58 @@ ts_recorded,exchange,base_slug,full_slug,window_start,window_end,price_to_beat,f
 1777479719,polymarket,btc-updown-15m,btc-updown-15m-1777470300,1777470300,1777471200,76549.62177890803,76768.27,up
 ```
 
-### Why Backfill (Not Real-Time)
+### Why the One-Hour Lookback
 
 **Polymarket**: `priceToBeat` is **not** populated when a window first opens —
 Polymarket resolves the field via the [Chainlink BTC/USD data stream](https://data.chain.link/streams/btc-usd)
 only after the start tick has been observed and confirmed. Likewise,
-`finalPrice` only appears after the close tick has been observed. By running
-this tool against windows that closed at least an hour ago, both fields are
-reliably present.
+`finalPrice` only appears after the close tick has been observed.
 
 **Kalshi**: the strike (`floor_strike` / `cap_strike`) is fixed at market
 creation, but `expiration_value` (the 60-second BRTI average at close) and
 the `result` field (`"yes"` / `"no"`) only land once the market reaches
 `status: "finalized"` — typically a few seconds after the close timestamp.
-Backfilling against windows that closed at least an hour ago guarantees both
-fields are present.
+
+Both binaries target windows that **closed at least 1 hour ago** by default
+(`--lookback-secs 3600` for the fetcher; pick `--to` accordingly for the
+backfill). By that point all the fields above are reliably present.
 
 For KX*15M markets the `floor_strike` of one window is the `expiration_value`
 of the *previous* window — i.e. each market's strike is the previous window's
 close. This means the CSV self-checks: `row[i].price_to_beat ==
 row[i-1].final_price` for consecutive resolved windows.
 
-### Usage
+### Live Daemon: `price_to_beat_fetcher`
+
+```bash
+cargo run --release --bin price_to_beat_fetcher -- \
+    --config configs/example.yaml \
+    --lookback-secs 3600 \
+    --seed-from 2026-04-10T00:00:00Z \
+    --archive-dir ./data/price_to_beat
+```
+
+Behaviour:
+
+1. **Startup** — for each enabled market, scans the existing archive and
+   resumes from `latest_window_start + interval`. If the market has no
+   history on disk, it instead seeds from `--seed-from` (default
+   `2026-04-10T00:00:00Z`). It then walks forward window-by-window up to
+   `now - lookback_secs`, fetching any missing rows.
+2. **Live loop** — sleeps until the next interval boundary, then fetches the
+   window that closed `lookback_secs` ago. The CSV is the source of truth;
+   if a row is already present (e.g. backfill caught up), the tick is a no-op.
+3. **Per-market task** — every enabled Polymarket slug and Kalshi series in
+   the config gets its own tokio task, so a slow upstream on one market
+   doesn't block another.
+
+The daemon is idempotent: restarting picks up exactly where it left off, and
+two instances pointed at the same archive will simply skip each other's writes
+(rows already on disk are matched by `window_start`).
+
+### One-Shot Backfill: `price_to_beat_backfill`
+
+For ad-hoc gap-filling on a single market over a fixed range:
 
 ```bash
 # Polymarket 15-min market
@@ -311,7 +351,7 @@ cargo run --release --bin price_to_beat_backfill -- polymarket \
     --base-slug btc-updown-15m \
     --interval-secs 900 \
     --from 2026-04-25T00:00:00Z \
-    --to 2026-04-29T00:00:00Z] \
+    --to 2026-04-29T00:00:00Z \
     --archive-dir ./data/price_to_beat \
     --http-timeout-secs 8
 
