@@ -1,9 +1,63 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, AlertCircle } from "lucide-react";
-import { api, type OrderbookSnapshot, type BbaPayload, type PolymarketMarket } from "../lib/api";
+import {
+    api,
+    type OrderbookSnapshot,
+    type BbaPayload,
+    type PolymarketMarket,
+} from "../lib/api";
 import { fmtPrice, fmtQty, fmtTs } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
 import Card from "../components/Card";
+
+/// Spot price snapshotted at the window's open and frozen for the lifetime
+/// of that window. Backend caches in redis (24h TTL), so the value survives
+/// page reloads and is consistent across panels / browsers.
+///
+/// We still keep an in-memory map as a per-tab dedupe so the BTC-UP and
+/// BTC-DOWN panels of the same window make one request instead of two.
+type OpenPrice = { price: number; source: string };
+const openPriceCache = new Map<string, OpenPrice>();
+const inFlight = new Map<string, Promise<OpenPrice | null>>();
+
+function useOpenPrice(
+    product: string,
+    intervalSecs: number,
+    windowStart: number
+): OpenPrice | null {
+    const key = `${product}:${intervalSecs}:${windowStart}`;
+    const [val, setVal] = useState<OpenPrice | null>(() => openPriceCache.get(key) ?? null);
+
+    useEffect(() => {
+        const cached = openPriceCache.get(key);
+        if (cached) {
+            setVal(cached);
+            return;
+        }
+        let cancelled = false;
+        const existing = inFlight.get(key);
+        const promise =
+            existing ??
+            api
+                .windowOpenPrice(product, intervalSecs, windowStart, "binance")
+                .then((r) => {
+                    const v = { price: r.price, source: r.source };
+                    openPriceCache.set(key, v);
+                    return v;
+                })
+                .catch(() => null)
+                .finally(() => inFlight.delete(key));
+        if (!existing) inFlight.set(key, promise);
+        promise.then((v) => {
+            if (!cancelled && v) setVal(v);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [key, product, intervalSecs, windowStart]);
+
+    return val;
+}
 
 const classMap = {
     bidText: "text-accent-green",
@@ -49,9 +103,19 @@ function DepthBar({ side, levels }: { side: "bid" | "ask"; levels: [number, numb
     );
 }
 
+function fmtUsd(n: number | null | undefined): string {
+    if (n == null) return "—";
+    return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
 function MarketPanel({ market }: { market: PolymarketMarket }) {
     const snapFetcher = useCallback(() => api.orderbook("polymarket", market.asset_id), [market.asset_id]);
     const bbaFetcher = useCallback(() => api.bba("polymarket", market.asset_id), [market.asset_id]);
+    // CEX spot price snapshotted *once* at window-open time and frozen for
+    // the rest of the window. Shared across all panels of the same window.
+    // Not byte-exact vs Polymarket's Chainlink-derived value, just a UI hint.
+    const product = market.base_slug.startsWith("eth-") ? "ETH-USD" : "BTC-USD";
+    const openPrice = useOpenPrice(product, market.interval_secs, market.window_start);
 
     const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 1000);
     const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 600);
@@ -108,6 +172,24 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
                 ))}
             </div>
 
+            {/* Price-to-beat hint — CEX spot, clearly labelled as approximate. */}
+            <div className="flex items-center justify-between px-3 py-2 border-t border-border-strong bg-bg-surface/30 text-[11px] font-mono">
+                <span className={`uppercase tracking-wider ${classMap.dim}`}>
+                    Open · {new Date(market.window_start * 1000).toISOString().slice(11, 16)}Z
+                </span>
+                <div className="flex items-center gap-3">
+                    <span>
+                        <span className={`mr-1 ${classMap.dim}`}>price-to-beat</span>
+                        <span className="text-text-primary">{fmtUsd(openPrice?.price ?? null)}</span>
+                        {openPrice && (
+                            <span className={`ml-1 text-[9px] ${classMap.dim}`}>
+                                ({openPrice.source} · approx)
+                            </span>
+                        )}
+                    </span>
+                </div>
+            </div>
+
             {snap ? (
                 <div className="grid grid-cols-2 gap-px px-2 pb-2 pt-2 bg-border-strong">
                     <div className="bg-bg-surface p-0.5 rounded-l-md overflow-hidden">
@@ -132,7 +214,7 @@ export default function PolymarketPage() {
 
     return (
         <div className="p-4 w-full max-w-[1600px] mx-auto">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-4">
                 <h1 className="text-sm font-mono text-text-primary">
                     Polymarket · live windows
                     {markets && (

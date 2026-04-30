@@ -49,7 +49,11 @@ async fn run(config_path: &str) -> Result<()> {
     let redis = RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await?;
     info!("Redis connected: {}", cfg.redis.url);
 
-    let state = Arc::new(AppState { redis });
+    let gamma = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("velociraptor-backend/0.1")
+        .build()?;
+    let state = Arc::new(AppState { redis, gamma });
     let app = router(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());

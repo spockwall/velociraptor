@@ -59,6 +59,7 @@ export interface PolymarketMarket {
     full_slug: string;
     side: string;
     window_start: number;
+    interval_secs: number;
     title: string;
 }
 
@@ -86,4 +87,32 @@ export const api = {
     polymarketMarkets: () => get<PolymarketMarket[]>(`${BASE}/polymarket/markets`),
 
     kalshiMarkets: () => get<KalshiMarket[]>(`${BASE}/kalshi/markets`),
+
+    /// Latest spot price from a CEX, used as a temporary priceToBeat while
+    /// Polymarket's official one hasn't been published yet. Always fresh.
+    spotPrice: (product: string, source: "coinbase" | "kraken" | "binance" = "kraken") =>
+        get<{ product: string; price: number; source: string; ts: number }>(
+            `${BASE}/spot_price/${product}?source=${source}`
+        ),
+
+    /// Spot price *snapshotted at window-open time* — the backend caches the
+    /// first fetch for each `(product, interval_secs, window_start)` in redis
+    /// (24h TTL). Including `interval_secs` keeps 5m and 15m windows
+    /// independent even when their boundaries coincide.
+    windowOpenPrice: (
+        product: string,
+        intervalSecs: number,
+        windowStart: number,
+        source: "coinbase" | "kraken" | "binance" = "kraken"
+    ) =>
+        get<{
+            product: string;
+            interval_secs: number;
+            window_start: number;
+            price: number;
+            source: string;
+            ts: number;
+        }>(
+            `${BASE}/window_open_price/${product}/${intervalSecs}/${windowStart}?source=${source}`
+        ),
 };
