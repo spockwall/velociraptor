@@ -12,8 +12,8 @@
 //! does that (credentials, subscription message, hooks, etc.). The scheduler
 //! only owns the timing and the lifecycle of `WindowTask` handles.
 
-use crate::exchanges::kalshi::utils::{build_market_ticker, current_window_close};
 use crate::connection::SystemControl;
+use crate::exchanges::kalshi::utils::{build_market_ticker, current_window_close};
 use chrono::{Duration, Utc};
 use std::future::Future;
 use std::time::Duration as StdDuration;
@@ -31,7 +31,11 @@ pub struct WindowTask {
 
 impl WindowTask {
     pub fn new(ticker: String, control: SystemControl, handle: JoinHandle<()>) -> Self {
-        Self { ticker, control, handle }
+        Self {
+            ticker,
+            control,
+            handle,
+        }
     }
 
     pub fn stop(self) {

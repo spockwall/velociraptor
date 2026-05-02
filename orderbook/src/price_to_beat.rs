@@ -245,7 +245,11 @@ pub fn build_row(
 
 /// Build the Kalshi market ticker for a window starting at `window_start`
 /// (Kalshi tickers encode the *close* time, not the start).
-pub fn kalshi_ticker_for_window(series: &str, window_start: i64, interval_secs: i64) -> Result<String> {
+pub fn kalshi_ticker_for_window(
+    series: &str,
+    window_start: i64,
+    interval_secs: i64,
+) -> Result<String> {
     let close = Utc
         .timestamp_opt(window_start + interval_secs, 0)
         .single()

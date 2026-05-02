@@ -36,11 +36,30 @@ impl WindowTask {
         }
     }
 
-    /// Gracefully stop the task.
+    /// Request shutdown and give the task a moment to flush/cleanup before
+    /// forcing cancellation.
     pub fn stop(self) {
-        eprintln!("[scheduler] stopping task for {}", self.full_slug);
-        self.control.shutdown();
-        self.handle.abort();
+        let full_slug = self.full_slug;
+        let control = self.control;
+        let mut handle = self.handle;
+
+        eprintln!("[scheduler] stopping task for {full_slug}");
+        control.shutdown();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                result = &mut handle => {
+                    if let Err(err) = result {
+                        eprintln!("[scheduler] task join error for {full_slug}: {err}");
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                    eprintln!("[scheduler] force-aborting task for {full_slug}");
+                    handle.abort();
+                    let _ = handle.await;
+                }
+            }
+        });
     }
 }
 
@@ -64,11 +83,8 @@ pub fn current_window(base_slug: &str, interval_secs: u64) -> (u64, u64, String)
 ///
 /// Runs forever; returns only if `spawn_fn` panics or the future is dropped.
 /// Spawn it with `tokio::spawn(run_rolling_scheduler(...))`.
-pub async fn run_rolling_scheduler<F, Fut>(
-    base_slug: String,
-    interval_secs: u64,
-    mut spawn_fn: F,
-) where
+pub async fn run_rolling_scheduler<F, Fut>(base_slug: String, interval_secs: u64, mut spawn_fn: F)
+where
     F: FnMut(String) -> Fut + Send,
     Fut: Future<Output = Option<WindowTask>> + Send,
 {

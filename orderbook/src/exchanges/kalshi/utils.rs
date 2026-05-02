@@ -57,10 +57,5 @@ pub fn build_event_ticker(series: &str, close_utc: DateTime<Utc>) -> String {
 /// computed locally without hitting Kalshi's REST API.
 pub fn build_market_ticker(series: &str, close_utc: DateTime<Utc>) -> String {
     let minute = close_utc.with_timezone(&Eastern).minute();
-    format!(
-        "{}-{}-{:02}",
-        series,
-        format_ticker_dt(close_utc),
-        minute
-    )
+    format!("{}-{}-{:02}", series, format_ticker_dt(close_utc), minute)
 }

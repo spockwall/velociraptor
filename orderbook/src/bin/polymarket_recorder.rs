@@ -241,6 +241,8 @@ struct SpawnArgs {
     store: SnapStore,
 }
 
+type SharedWindowWriters = Arc<Mutex<Option<WindowWriters>>>;
+
 async fn spawn_window(
     args: Arc<SpawnArgs>,
     full_slug: String,
@@ -304,7 +306,7 @@ async fn spawn_window(
         }
     }
 
-    let writers = Arc::new(Mutex::new(ww));
+    let writers: SharedWindowWriters = Arc::new(Mutex::new(Some(ww)));
 
     // asset_id → (full_slug, is_up)
     let label_map: HashMap<String, (String, bool)> = labeled
@@ -333,8 +335,11 @@ async fn spawn_window(
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
             ticker.tick().await;
-            if let Ok(mut ww) = writers_flush.lock() {
-                ww.flush_all();
+            if let Ok(mut guard) = writers_flush.lock() {
+                match guard.as_mut() {
+                    Some(ww) => ww.flush_all(),
+                    None => break,
+                }
             }
         }
     });
@@ -356,11 +361,13 @@ async fn spawn_window(
             let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
             let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
 
-            if let Ok(mut ww) = writers.lock() {
-                if let Some(w) = ww.get_mut(&sk) {
-                    let rec = SnapshotRecord::from_snapshot(snap, depth);
-                    if let Err(e) = w.write(&rec) {
-                        error!("Snapshot write failed for {sk}: {e}");
+            if let Ok(mut guard) = writers.lock() {
+                if let Some(ww) = guard.as_mut() {
+                    if let Some(w) = ww.get_mut(&sk) {
+                        let rec = SnapshotRecord::from_snapshot(snap, depth);
+                        if let Err(e) = w.write(&rec) {
+                            error!("Snapshot write failed for {sk}: {e}");
+                        }
                     }
                 }
             }
@@ -398,11 +405,13 @@ async fn spawn_window(
                 None => return,
             };
             let tk = trade_key(&full_slug_hook, is_up);
-            if let Ok(mut ww) = writers.lock() {
-                if let Some(w) = ww.get_mut(&tk) {
-                    let rec = TradeRecord::from_trade(trade);
-                    if let Err(e) = w.write(&rec) {
-                        error!("Trade write failed for {tk}: {e}");
+            if let Ok(mut guard) = writers.lock() {
+                if let Some(ww) = guard.as_mut() {
+                    if let Some(w) = ww.get_mut(&tk) {
+                        let rec = TradeRecord::from_trade(trade);
+                        if let Err(e) = w.write(&rec) {
+                            error!("Trade write failed for {tk}: {e}");
+                        }
                     }
                 }
             }
@@ -416,12 +425,11 @@ async fn spawn_window(
             error!("Polymarket recorder system error: {e}");
         }
         ctrl.shutdown();
+        let writers = writers.lock().ok().and_then(|mut guard| guard.take());
         flush_handle.abort();
-        // Drain and compress all open files.
-        if let Ok(ww) = Arc::try_unwrap(writers).map(|m| m.into_inner()) {
-            if let Ok(ww) = ww {
-                ww.close_all();
-            }
+        let _ = flush_handle.await;
+        if let Some(ww) = writers {
+            ww.close_all();
         }
     });
 
@@ -453,19 +461,22 @@ fn spawn_market_scheduler(
         zstd_level,
         store,
     });
+    let bounds_base_slug = base_slug.clone();
 
     tokio::spawn(async move {
         run_rolling_scheduler(base_slug, interval_secs, move |full_slug| {
             let args = args.clone();
+            let bounds_base_slug = bounds_base_slug.clone();
             async move {
                 // For static markets (interval_secs == 0), win_start/end are 0.
-                // For windowed markets the scheduler itself controls timing;
-                // we derive the current window bounds here.
+                // For windowed markets derive the file interval from the
+                // scheduler's target slug, not from `now`, so early-started
+                // tasks write into the correct future window.
                 let (win_start, win_end) = if interval_secs == 0 {
                     (0u64, 0u64)
                 } else {
-                    let now = libs::time::now_secs();
-                    let ws = (now / interval_secs) * interval_secs;
+                    let prefix = format!("{bounds_base_slug}-");
+                    let ws = full_slug.strip_prefix(&prefix)?.parse::<u64>().ok()?;
                     (ws, ws + interval_secs)
                 };
                 spawn_window(args, full_slug, win_start, win_end).await
