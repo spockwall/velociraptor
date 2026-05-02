@@ -28,7 +28,7 @@ use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
-    run_rolling_scheduler, resolve_assets_with_labels, PolymarketSubMsgBuilder, WindowTask,
+    PolymarketSubMsgBuilder, WindowTask, resolve_assets_with_labels, run_rolling_scheduler,
 };
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use recorder::format::{SnapshotRecord, TradeRecord};
@@ -266,9 +266,17 @@ async fn spawn_window(
     }
 
     // Build the writers map for this window.
+    //
+    // We only persist the YES (up) token; the DOWN side still flows through
+    // the engine and updates the terminal UI, but the writer for it is never
+    // created so the snapshot/trade hooks find no entry and silently skip
+    // their disk writes for that side.
     let mut ww = WindowWriters::new();
 
     for (_, _, _, is_up) in &labeled {
+        if !*is_up {
+            continue; // skip DOWN — UI only, no disk
+        }
         if let Some(path) = snapshot_path(
             &args.base_path,
             &args.base_slug,
