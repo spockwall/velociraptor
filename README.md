@@ -53,6 +53,14 @@ cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yam
 # Disk recorder (Binance, Binance Spot, Okx, yperliquid)
 cargo run --bin orderbook_recorder --release -- --config configs/server.yaml
 
+# Price-to-beat archive (Polymarket + Kalshi target prices → CSV)
+cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml
+cargo run --bin price_to_beat_backfill --release -- polymarket \
+    --base-slug btc-updown-15m --interval-secs 900 --from 2026-04-25T00:00:00Z
+
+# Asset-id archive (Polymarket market_id + yes/no token IDs → CSV)
+cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml
+
 # Python subscriber
 python3 zmq_server/examples/orderbook_subscriber.py
 
@@ -415,14 +423,33 @@ See [`docs/kalshi.md`](docs/kalshi.md) for ticker format and scheduler details.
 
 ---
 
-## Price-to-Beat Backfill
+## Price-to-Beat Archive
 
-`price_to_beat_backfill` walks a date range and archives Polymarket / Kalshi
-target prices (`priceToBeat` / `finalPrice`) to per-day CSV files at
-`data/price_to_beat/{exchange}/{base_slug_or_series}/{YYYY-MM-DD}.csv`.
+Two binaries archive Polymarket / Kalshi target prices (`priceToBeat` /
+`finalPrice`, or Kalshi `floor_strike` / `expiration_value`) to per-day CSV
+files at `data/price_to_beat/{exchange}/{base_slug_or_series}/{YYYY-MM-DD}.csv`.
 
-It is purely a **backfill** tool — runs to completion, not a daemon. Idempotent
-(dedup by `window_start`), so safe to re-run with overlapping ranges.
+### `price_to_beat_fetcher` — long-running daemon
+
+Reads `configs/example.yaml`, drives one task per enabled market.
+**Auto-backfills on startup** from the latest CSV row (or `--seed-from` if the
+archive is empty), then polls every interval boundary forever. The CSV is the
+source of truth; restarting fills any gaps automatically.
+
+```bash
+cargo run --release --bin price_to_beat_fetcher -- \
+    --config configs/example.yaml
+```
+
+Defaults: `--lookback-secs 3600` (target windows that closed ≥1h ago, so the
+oracle has reported), `--seed-from 2026-04-10T00:00:00Z` (only used when the
+archive is empty), `--archive-dir ./data/price_to_beat`.
+
+### `price_to_beat_backfill` — one-shot
+
+Walks one market over a user-specified `--from` / `--to` range. Useful for
+filling gaps in a single market without restarting the daemon. Idempotent
+(dedup by `window_start`).
 
 ```bash
 # Polymarket 15-min
@@ -443,14 +470,62 @@ cargo run --release --bin price_to_beat_backfill -- kalshi \
 
 Defaults: `--to` is now, `--archive-dir` is `./data/price_to_beat`,
 `--interval-secs` is `900`. Inter-request spacing is a compile-time const
-(`REQUEST_SPACING_MS = 100`) — edit the source to tune.
+(`REQUEST_SPACING_MS = 100` in `orderbook/src/price_to_beat.rs`).
 
 CSV columns: `ts_recorded, exchange, base_slug, full_slug, window_start,
 window_end, price_to_beat, final_price, direction`.
 
 See [`docs/storage.md`](docs/storage.md#price-to-beat-archive-polymarket--kalshi)
-for the full schema, why backfill (the oracle reports late), and Python read
-recipes.
+for the full schema, why the 1-hour lookback (the oracle reports late), and
+Python read recipes.
+
+---
+
+## Asset-ID Archive
+
+`asset_id_fetcher` is a long-running daemon that records Polymarket market
+identifiers — `market_id`, `yes_asset_id`, `no_asset_id` — for every rolling
+window. Useful for joining historical orderbook / price-to-beat data with the
+exact asset IDs the engine traded on. Kalshi markets are skipped (single
+ticker, no yes/no token pair).
+
+**Auto-backfills on startup** from the latest CSV row (or `--seed-from` if the
+archive is empty), then polls every interval boundary forever. The CSV is the
+source of truth; restarting fills any gaps automatically.
+
+```bash
+cargo run --bin asset_id_fetcher --release -- \
+    --config configs/example.yaml \
+    --seed-from 2026-04-10T00:00:00Z \
+    --archive-dir ./data/asset_ids
+```
+
+Defaults: `--seed-from 2026-04-10T00:00:00Z` (only used when the archive is
+empty for a market), `--archive-dir ./data/asset_ids`,
+`--http-timeout-secs 8`. Inter-request spacing is a 100ms compile-time
+constant in `orderbook/src/bin/asset_id_fetcher.rs`.
+
+Output layout — one CSV per UTC day per `base_slug`:
+
+```
+data/asset_ids/polymarket/{base_slug}/{YYYY-MM-DD}.csv
+```
+
+CSV columns:
+
+```
+ts_recorded, base_slug, full_slug, window_start, window_end,
+market_id, yes_asset_id, no_asset_id
+```
+
+`market_id` is the integer Polymarket market id (stringified for CSV);
+`yes_asset_id` and `no_asset_id` are the two `clobTokenIds` entries
+(index 0 = yes/up, index 1 = no/down per Polymarket's `outcomes` ordering).
+Each rolling window is a fresh Polymarket market with a fresh ID and fresh
+token pair, so a new row lands on every interval boundary.
+
+The fetcher is idempotent: existing `window_start` rows are skipped on
+re-runs, and the live loop checks the CSV before fetching.
 
 ---
 

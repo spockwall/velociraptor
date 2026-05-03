@@ -71,5 +71,9 @@ path = "src/bin/price_to_beat_backfill.rs"
 name = "price_to_beat_fetcher"
 path = "src/bin/price_to_beat_fetcher.rs"
 
+[[bin]]
+name = "asset_id_fetcher"
+path = "src/bin/asset_id_fetcher.rs"
+
 [dev-dependencies]
 tempfile = "3.8"
