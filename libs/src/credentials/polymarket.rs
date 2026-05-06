@@ -2,6 +2,16 @@ use super::{exit_if_empty, load_section_or_exit};
 use serde::Deserialize;
 use std::path::Path;
 
+/// Polymarket CLOB v2 credentials.
+///
+/// `api_key` / `secret` / `passphrase` — derived L2 API trio used to sign every
+/// REST request via HMAC-SHA256 (`secret` is base64-encoded).
+///
+/// `address` — the Polygon address that owns the API key (sent as `POLY_ADDRESS`).
+///
+/// `eth_priv_key` — hex-encoded secp256k1 private key for the maker. Used to
+/// EIP-712-sign the `Order` struct on every Place. Optional only because some
+/// read-only setups don't need it; trading flows require it.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PolymarketCredentials {
     #[serde(default)]
@@ -10,6 +20,12 @@ pub struct PolymarketCredentials {
     pub secret: String,
     #[serde(default)]
     pub passphrase: Option<String>,
+    /// Maker EOA address (0x-prefixed, 20 bytes). Empty for read-only setups.
+    #[serde(default)]
+    pub address: String,
+    /// Maker secp256k1 private key, hex-encoded. Optional for read-only setups.
+    #[serde(default)]
+    pub eth_priv_key: Option<String>,
 }
 
 impl PolymarketCredentials {
