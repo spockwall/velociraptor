@@ -26,6 +26,17 @@ pub struct PolymarketCredentials {
     /// Maker secp256k1 private key, hex-encoded. Optional for read-only setups.
     #[serde(default)]
     pub eth_priv_key: Option<String>,
+    /// Funder / proxy / deposit-wallet address (0x-prefixed). Required when
+    /// the account is configured for the Polymarket "deposit wallet" flow —
+    /// the EOA is only the signer, the proxy contract is the actual order
+    /// `maker`. Leave unset for raw-EOA accounts.
+    #[serde(default)]
+    pub funder: Option<String>,
+    /// Signature flavour Polymarket should expect. One of `eoa` (default,
+    /// raw EOA orders), `proxy` (Polymarket proxy wallet), or `gnosis_safe`
+    /// (Gnosis Safe deposit wallet). Case-insensitive.
+    #[serde(default)]
+    pub signature_type: Option<String>,
 }
 
 impl PolymarketCredentials {

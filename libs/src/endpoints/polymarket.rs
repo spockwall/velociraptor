@@ -3,8 +3,6 @@ pub mod polymarket {
     pub const BASE_URL: &str = "https://clob.polymarket.com";
     /// Testnet / preprod CLOB v2 host.
     pub const TESTNET_BASE_URL: &str = "https://clob-v2.polymarket.com";
-    
-
 
     pub mod endpoints {
         // Order endpoints
@@ -30,5 +28,13 @@ pub mod polymarket {
     pub mod ws {
         pub const PUBLIC_STREAM: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
         pub const USER_STREAM: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
+    }
+
+    /// Polymarket Gamma host — public, unauthenticated market metadata
+    /// (slug → `clobTokenIds`, strike `line`, etc.).
+    pub mod gamma {
+        pub const BASE_URL: &str = "https://gamma-api.polymarket.com";
+        /// Prefix — append `{slug}` to fetch a single market.
+        pub const MARKET_BY_SLUG: &str = "/markets/slug/";
     }
 }

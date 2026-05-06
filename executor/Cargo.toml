@@ -13,18 +13,41 @@ integration_tests = []
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true }
+dashmap = { workspace = true }
+governor = { workspace = true }
+hex = { workspace = true }
+# Hand-rolled signing path (hmac/sha2/tiny-keccak) was deleted with
+# `eip712.rs` in favour of the SDK. `k256` stays only because we spell the
+# concrete signer type `LocalSigner<k256::ecdsa::SigningKey>` in
+# `polymarket.rs`.
+k256 = { workspace = true }
 libs = { path = "../libs", features = ["redis"] }
+lru = { workspace = true }
+polymarket_client_sdk_v2 = { version = "0.6.0-canary.1", features = ["clob", "gamma"] }
+prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 rmp-serde = { workspace = true }
+rsa = { workspace = true }
+secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+zeroize = { workspace = true }
 zmq = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "executor"
