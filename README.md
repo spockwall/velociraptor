@@ -65,18 +65,40 @@ cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml
 python3 zmq_server/examples/orderbook_subscriber.py
 
 # Run the system via docker
-# !/usr/bin/env bash
-# Boot the full stack in production mode (everything in containers).
+#
+# Container layout:
 #   redis            -> 127.0.0.1:6379
 #   backend          -> 127.0.0.1:3000
 #   orderbook_server -> 127.0.0.1:5555 (PUB) / :5556 (ROUTER)
+#   executor         -> 127.0.0.1:5557 (ROUTER) / :5558 (metrics)
 #   frontend (nginx) -> 127.0.0.1:8080
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Build pattern:
+#   The three Rust services (backend, orderbook_server, executor) share a
+#   single builder image (`Dockerfile.builder`) that compiles the workspace
+#   once via cargo-chef + BuildKit cache mounts. Each runtime Dockerfile is
+#   a thin debian-slim layer that COPYs its binary from the builder.
+#
+#   The builder is gated behind the `build-only` profile so it doesn't try
+#   to start as a long-running container. Use the Makefile targets:
+make build         # builds builder image, then all runtime images
+make up            # docker compose up -d
+make logs          # tail all service logs
+make down
 
-# Run the system via command line
+# After a Rust source edit:
+make builder       # rebuild shared builder image (deps stay cached)
+make build         # also rebuilds the thin runtime layers — cheap
+
+# Force a clean rebuild (no cache):
+make rebuild
+
+# Run the system via command line (no docker)
 docker compose up -d redis
 cargo run --bin orderbook_server --release -- --config configs/example.yaml
 cargo run --bin backend --release -- --config configs/example.yaml
+cargo run --bin executor --release -- --config configs/example.yaml \
+    --credentials credentials/polymarket.yaml --skip-chmod-check
 cd frontend && npm run dev
 ```
 

@@ -1,4 +1,28 @@
 services:
+  # ── Shared Rust builder ────────────────────────────────────────────────────
+  # Compiles every workspace binary once via cargo-chef + BuildKit cache
+  # mounts, tags the result `velociraptor/builder:latest`. Each runtime
+  # service Dockerfile (executor / orderbook_server / backend) then does
+  # `FROM velociraptor/builder` and copies its binary into a thin
+  # debian-slim layer — one workspace compile, three runtime images.
+  #
+  # The `build-only` profile keeps this from running on `docker compose up`.
+  # ALWAYS rebuild the builder first when source changes:
+  #
+  #   docker compose --profile build-only build builder
+  #   docker compose build executor orderbook_server backend
+  #   docker compose up -d
+  #
+  # Or in one step (rebuilds everything):
+  #
+  #   docker compose --profile build-only build && docker compose build && docker compose up -d
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile.builder
+    image: velociraptor/builder:latest
+    profiles: ["build-only"]
+
   redis:
     image: redis:7-alpine
     container_name: velociraptor-redis
