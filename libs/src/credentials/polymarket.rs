@@ -1,4 +1,4 @@
-use super::{exit_if_empty, load_section_or_exit};
+use super::{exit_if_empty, load_section_or_exit, try_load_section};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -45,6 +45,15 @@ impl PolymarketCredentials {
         exit_if_empty("api_key", "polymarket", &creds.api_key);
         exit_if_empty("secret", "polymarket", &creds.secret);
         creds
+    }
+
+    /// Same as `load`, but returns `None` if the file or `polymarket` section
+    /// is absent. Still validates required fields when the section is present.
+    pub fn try_load<P: AsRef<Path>>(path: P) -> Option<Self> {
+        let creds: Self = try_load_section(path, "polymarket")?;
+        exit_if_empty("api_key", "polymarket", &creds.api_key);
+        exit_if_empty("secret", "polymarket", &creds.secret);
+        Some(creds)
     }
 }
 

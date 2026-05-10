@@ -23,10 +23,12 @@ use tracing::error;
 use zmq_server::setup::{
     add_binance, add_binance_spot, add_hyperliquid, add_okx, attach_redis, attach_zmq,
     build_system, spawn_kalshi_schedulers, spawn_polymarket_schedulers,
+    spawn_polymarket_user_channel,
 };
 use zmq_server::StreamSystemConfig;
 
 const KALSHI_CREDENTIALS_PATH: &str = "credentials/kalshi.yaml";
+const POLYMARKET_CREDENTIALS_PATH: &str = "credentials/polymarket.yaml";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -113,6 +115,21 @@ async fn run(config_path: &str) -> Result<()> {
         cfg.redis.snapshot_cap,
         cfg.redis.trade_cap,
     );
+
+    // Polymarket user channel — single persistent WS, account-scoped (no
+    // condition-id filter), forwards UserEvents onto the main engine bus so
+    // the ZmqServer user PUB publishes them as `user.polymarket.{kind}`.
+    let _pm_user = libs::credentials::PolymarketCredentials::try_load(
+        POLYMARKET_CREDENTIALS_PATH,
+    )
+    .and_then(|c| spawn_polymarket_user_channel(c, system.message_sender()));
+    if _pm_user.is_none() {
+        tracing::info!(
+            path = POLYMARKET_CREDENTIALS_PATH,
+            "Polymarket user channel: credentials missing or empty — skipping"
+        );
+    }
+
     let _kal = spawn_kalshi_schedulers(
         &cfg.kalshi.market,
         cfg.storage.depth,

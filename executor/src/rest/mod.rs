@@ -1,13 +1,12 @@
 //! Per-exchange REST order client trait + factory.
 //!
-//! Concrete implementations live in `kalshi.rs` and `polymarket.rs`. The
+//! The only concrete implementation today is `polymarket.rs`. The
 //! `RestOrderClient` trait is the single surface the ZMQ gateway dispatches
 //! against — every `OrderAction` variant maps to exactly one trait method.
 
 use async_trait::async_trait;
 use libs::protocol::orders::{HeartbeatAck, OrderAck, OrderError, OrderStatus, PlaceOne};
 
-pub mod kalshi;
 pub mod polymarket;
 pub mod retry;
 

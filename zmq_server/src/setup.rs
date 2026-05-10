@@ -14,7 +14,7 @@ use libs::redis_client::{
     keys::{Events, RedisKey},
     RedisHandle,
 };
-use orderbook::connection::{ClientConfig, SystemControl};
+use orderbook::connection::{ClientConfig, ClientTrait, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::kalshi::{
@@ -23,11 +23,17 @@ use orderbook::exchanges::kalshi::{
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::exchanges::polymarket::{
     resolve_assets_with_labels, run_rolling_scheduler as polymarket_rolling,
-    PolymarketSubMsgBuilder, WindowTask as PolymarketWindowTask,
+    PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder,
+    WindowTask as PolymarketWindowTask,
 };
-use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
+use orderbook::types::endpoints::polymarket as poly_endpoints;
+use orderbook::types::orderbook::StreamMessage;
+use orderbook::{PolymarketClient, StreamEngine, StreamSystem, StreamSystemConfig};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+
+use libs::credentials::PolymarketCredentials;
 
 use crate::ZmqServer;
 
@@ -375,6 +381,84 @@ async fn spawn_polymarket_window(
 
     info!(full_slug = %full_slug, "Polymarket window started");
     Some(PolymarketWindowTask::new(full_slug, control, handle))
+}
+
+// ── Polymarket user channel ───────────────────────────────────────────────────
+
+/// Spawn a single persistent connection to the Polymarket private user
+/// channel (`wss://.../ws/user`). The subscription is account-scoped — with
+/// no condition-id filter the server delivers fills, order_updates, balance,
+/// and position events for every market this account trades on.
+///
+/// Each `StreamMessage::UserEvent` is forwarded onto `engine_tx` so the main
+/// `StreamEngine` re-broadcasts it as `StreamEvent::User`, which the
+/// `ZmqServer` user PUB then publishes on `user.polymarket.{kind}` topics.
+///
+/// `engine_tx` should be `system.message_sender()` from the main `StreamSystem`.
+/// Returns the spawned task handle, or `None` if credentials are missing.
+pub fn spawn_polymarket_user_channel(
+    creds: PolymarketCredentials,
+    engine_tx: mpsc::UnboundedSender<StreamMessage>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if creds.api_key.is_empty() || creds.secret.is_empty() {
+        warn!("Polymarket user channel: api_key/secret missing — skipping");
+        return None;
+    }
+
+    let passphrase = creds.passphrase.clone().unwrap_or_default();
+    // No `with_condition(...)` — server sends events for every market on the
+    // account.
+    let sub_json = PolymarketUserSubMsgBuilder::new()
+        .with_auth(&creds.api_key, &creds.secret, &passphrase)
+        .build();
+
+    let cfg = ClientConfig::new(ExchangeName::Polymarket)
+        .set_ws_url(poly_endpoints::ws::USER_STREAM)
+        .set_subscription_message(sub_json)
+        .set_api_credentials(
+            creds.api_key.clone(),
+            creds.secret.clone(),
+            creds.passphrase.clone(),
+        );
+
+    // Connection writes into a private mpsc. A forwarder drains it and pushes
+    // only `UserEvent` messages onto the main engine mpsc.
+    let (tx, mut rx) = mpsc::unbounded_channel::<StreamMessage>();
+    let control = SystemControl::new();
+
+    let mut conn = PolymarketClient::new(cfg, tx, control.clone());
+    let conn_ctrl = control.clone();
+    let conn_task = tokio::spawn(async move {
+        if let Err(e) = conn.run().await {
+            error!("Polymarket user channel exited: {e:?}");
+        }
+        conn_ctrl.shutdown();
+    });
+
+    let forwarder_engine_tx = engine_tx.clone();
+    let forwarder = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            match &msg {
+                StreamMessage::UserEvent(_) => {
+                    if let Err(e) = forwarder_engine_tx.send(msg) {
+                        warn!("user channel: engine tx closed, stopping forwarder: {e}");
+                        break;
+                    }
+                }
+                StreamMessage::Base(_) => {}
+                _ => {} // user channel shouldn't emit orderbook frames; drop defensively
+            }
+        }
+        debug!("Polymarket user-channel forwarder exiting");
+    });
+
+    info!("Polymarket user channel: subscribed (account-wide, no market filter)");
+
+    // Combined supervisor: when the connection ends, cancel the forwarder.
+    Some(tokio::spawn(async move {
+        let _ = conn_task.await;
+        forwarder.abort();
+    }))
 }
 
 // ── Kalshi scheduler ──────────────────────────────────────────────────────────

@@ -72,6 +72,14 @@ polymarket:
       interval_secs: 300
 
     ## example of static market
-    #- enabled: false 
+    #- enabled: false
     #  slug: "will-btc-reach-100k-in-2025"
     #  interval_secs: 0
+
+# ── Executor (Polymarket REST client + ZMQ ROUTER gateway) ───────────────────
+executor:
+  router_endpoint: "tcp://*:5557"
+  metrics_addr: "127.0.0.1:5558"
+  audit_dir: "./data/executor"
+  audit_stream_cap: 100000
+  polymarket_env: "prod"    # "prod" | "testnet"

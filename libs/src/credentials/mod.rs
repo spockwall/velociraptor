@@ -39,6 +39,28 @@ where
     })
 }
 
+/// Like `load_section_or_exit`, but returns `None` if the file is missing or
+/// the named section is absent. Still exits on parse errors so a malformed
+/// section is not silently ignored.
+pub(crate) fn try_load_section<T, P>(path: P, section: &str) -> Option<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+    P: AsRef<std::path::Path>,
+{
+    let path = path.as_ref();
+    let contents = std::fs::read_to_string(path).ok()?;
+    let mut root: serde_yaml::Mapping =
+        serde_yaml::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("failed to parse '{}': {e}", path.display());
+            std::process::exit(1);
+        });
+    let value = root.remove(section)?;
+    Some(serde_yaml::from_value(value).unwrap_or_else(|e| {
+        eprintln!("failed to parse '{section}' in '{}': {e}", path.display());
+        std::process::exit(1);
+    }))
+}
+
 pub(crate) fn exit_if_empty(field: &str, exchange: &str, value: &str) {
     if value.is_empty() {
         eprintln!("{exchange} credentials: {field} is empty");

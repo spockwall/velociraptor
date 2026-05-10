@@ -80,6 +80,39 @@ impl Risk {
     pub const KILL_SWITCH: &'static str = "risk:kill_switch";
 }
 
+/// Last-known target/strike price per market, written by `target_price_fetcher`.
+/// Stored as a Redis hash with fields: `line`, `lower`, `upper`, `ts`, `slug_or_ticker`.
+pub struct TargetPrice;
+impl TargetPrice {
+    pub fn polymarket(slug: &str) -> String {
+        format!("target_price:polymarket:{slug}")
+    }
+    pub fn kalshi(ticker: &str) -> String {
+        format!("target_price:kalshi:{ticker}")
+    }
+}
+
+/// Executor control plane + audit stream keys.
+pub struct Executor;
+impl Executor {
+    /// Append-only audit stream of `{request, response, synthetic}` entries.
+    pub const LOG_STREAM: &'static str = "executor:log";
+    /// Global kill-switch; when `"1"`, only Cancel actions are allowed.
+    pub const KILL_SWITCH: &'static str = "executor:kill_switch";
+    /// Pub/sub channel for sub-ms kill-switch propagation.
+    pub const KILL_SWITCH_CHAN: &'static str = "executor:kill_switch_chan";
+    /// One-shot trigger: executor calls cancel_all on every client and DELs the key.
+    pub const CANCEL_ALL: &'static str = "executor:cancel_all";
+    /// Backend writes this every 5s; executor auto-engages local kill-switch
+    /// if no update for 30s.
+    pub const BACKEND_HEARTBEAT: &'static str = "executor:backend_heartbeat";
+
+    /// Per-exchange kill-switch (e.g. `executor:kill_switch:kalshi`).
+    pub fn kill_switch_exchange(exchange: &str) -> String {
+        format!("executor:kill_switch:{exchange}")
+    }
+}
+
 /// Redis pub/sub channel used for config hot-reload notifications.
 pub const CONFIG_UPDATES_CHANNEL: &str = crate::constants::REDIS_CONFIG_UPDATES_CHANNEL;
 

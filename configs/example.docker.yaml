@@ -68,3 +68,12 @@ polymarket:
     - enabled: true
       slug: "eth-updown-5m"
       interval_secs: 300
+
+# ── Executor (Polymarket REST client + ZMQ ROUTER gateway) ───────────────────
+# Use 0.0.0.0 for metrics inside the container so docker port mapping reaches it.
+executor:
+  router_endpoint: "tcp://*:5557"
+  metrics_addr: "0.0.0.0:5558"
+  audit_dir: "/app/data/executor"
+  audit_stream_cap: 100000
+  polymarket_env: "prod"

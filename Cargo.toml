@@ -62,6 +62,23 @@ redis = { version = "0.27", default-features = false, features = ["tokio-comp", 
 axum = "0.7"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Secrets / hashing
+secrecy = "0.10"
+zeroize = "1.8"
+blake3 = "1.5"
+
+# Caching / rate limiting / metrics
+lru = "0.18"
+governor = "0.10"
+prometheus = "0.14"
+
+# EIP-712 signing primitives for Polymarket order signing
+k256 = { version = "0.13", features = ["ecdsa"] }
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

@@ -54,6 +54,32 @@ services:
       - "127.0.0.1:5556:5556"
     restart: unless-stopped
 
+  executor:
+    build:
+      context: .
+      dockerfile: executor/Dockerfile
+    image: velociraptor/executor:latest
+    container_name: velociraptor-executor
+    # All endpoints / dirs come from the executor: section of the config.
+    # --skip-chmod-check is needed because docker bind-mounts host files with
+    # whatever perms they have on the host.
+    command:
+      - "--config"
+      - "/app/configs/example.docker.yaml"
+      - "--credentials"
+      - "/app/credentials/polymarket.yaml"
+      - "--skip-chmod-check"
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./credentials:/app/credentials:ro
+      - ./data:/app/data
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:5557:5557"
+      - "127.0.0.1:5558:5558"
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

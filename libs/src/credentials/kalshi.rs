@@ -1,4 +1,4 @@
-use super::{exit_if_empty, load_section_or_exit};
+use super::{exit_if_empty, load_section_or_exit, try_load_section};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
@@ -44,6 +44,15 @@ impl KalshiCredentials {
         exit_if_empty("api_key", "kalshi", &creds.api_key);
         exit_if_empty("secret", "kalshi", &creds.secret);
         creds
+    }
+
+    /// Same as `load`, but returns `None` if the file or `kalshi` section is
+    /// absent. Still validates required fields when the section is present.
+    pub fn try_load<P: AsRef<Path>>(path: P) -> Option<Self> {
+        let creds: Self = try_load_section(path, "kalshi")?;
+        exit_if_empty("api_key", "kalshi", &creds.api_key);
+        exit_if_empty("secret", "kalshi", &creds.secret);
+        Some(creds)
     }
 
     /// Parse the PEM secret into an RSA-PSS signing key. Call once at startup
