@@ -20,6 +20,10 @@ pub mod kalshi {
         /// Suffix appended after the order id to shrink an existing order.
         pub const PORTFOLIO_ORDER_DECREASE_SUFFIX: &str = "/decrease";
 
+        // Markets (public — strike/cap/floor lookup)
+        /// Prefix — append `{ticker}` to fetch a single market.
+        pub const MARKET_BY_TICKER: &str = "/markets/";
+
         // Heartbeat
         pub const EXCHANGE_HEARTBEAT: &str = "/exchange/heartbeat";
 

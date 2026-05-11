@@ -16,9 +16,6 @@ pub struct ExecutorConfig {
     pub audit_stream_cap: usize,
     /// Polymarket env tag — `"prod"` or `"testnet"`.
     pub polymarket_env: String,
-    /// Risk gate config — typed inside the executor crate to avoid pulling
-    /// gate-specific types into `libs`. Empty/missing means no gates run.
-    pub risk: serde_yaml::Value,
 }
 
 impl Default for ExecutorConfig {
@@ -29,7 +26,6 @@ impl Default for ExecutorConfig {
             audit_dir: "./data/executor".into(),
             audit_stream_cap: 100_000,
             polymarket_env: "prod".into(),
-            risk: serde_yaml::Value::Null,
         }
     }
 }

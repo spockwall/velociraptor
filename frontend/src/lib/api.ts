@@ -71,6 +71,51 @@ export interface KalshiMarket {
     title: string;
 }
 
+// UserEvent — internally tagged on the wire. Discriminator is `type`.
+// See libs/src/protocol/events.rs.
+export type UserEvent =
+    | {
+          type: "fill";
+          exchange: string;
+          client_oid: string;
+          exchange_oid: string;
+          symbol: string;
+          side: "buy" | "sell";
+          px: number;
+          qty: number;
+          fee: number;
+          ts_ns: number;
+      }
+    | {
+          type: "order_update";
+          exchange: string;
+          client_oid: string;
+          exchange_oid: string;
+          symbol: string;
+          side: "buy" | "sell";
+          px: number;
+          qty: number;
+          filled: number;
+          status: "new" | "partially_filled" | "filled" | "canceled" | "rejected" | "expired";
+          ts_ns: number;
+      }
+    | {
+          type: "balance";
+          exchange: string;
+          asset: string;
+          free: number;
+          locked: number;
+          ts_ns: number;
+      }
+    | {
+          type: "position";
+          exchange: string;
+          symbol: string;
+          size: number;
+          avg_px: number;
+          ts_ns: number;
+      };
+
 export const api = {
     health: () => get<{ ok: boolean }>("/health"),
 
@@ -88,11 +133,15 @@ export const api = {
 
     kalshiMarkets: () => get<KalshiMarket[]>(`${BASE}/kalshi/markets`),
 
+    fills: (limit = 50) => get<UserEvent[]>(`${BASE}/events/fills?limit=${limit}`),
+
+    orders: (limit = 50) => get<UserEvent[]>(`${BASE}/events/orders?limit=${limit}`),
+
     /// Latest spot price from a CEX, used as a temporary priceToBeat while
     /// Polymarket's official one hasn't been published yet. Always fresh.
     spotPrice: (product: string, source: "coinbase" | "kraken" | "binance" = "kraken") =>
         get<{ product: string; price: number; source: string; ts: number }>(
-            `${BASE}/spot_price/${product}?source=${source}`
+            `${BASE}/spot_price/${product}?source=${source}`,
         ),
 
     /// Spot price *snapshotted at window-open time* — the backend caches the
@@ -103,7 +152,7 @@ export const api = {
         product: string,
         intervalSecs: number,
         windowStart: number,
-        source: "coinbase" | "kraken" | "binance" = "kraken"
+        source: "coinbase" | "kraken" | "binance" = "kraken",
     ) =>
         get<{
             product: string;
@@ -112,7 +161,5 @@ export const api = {
             price: number;
             source: string;
             ts: number;
-        }>(
-            `${BASE}/window_open_price/${product}/${intervalSecs}/${windowStart}?source=${source}`
-        ),
+        }>(`${BASE}/window_open_price/${product}/${intervalSecs}/${windowStart}?source=${source}`),
 };

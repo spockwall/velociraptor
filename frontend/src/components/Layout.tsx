@@ -41,7 +41,7 @@ export default function Layout() {
             </header>
 
             {/* Page content */}
-            <main className="flex-1 w-full max-w-[1600px] mx-auto overflow-y-auto flex flex-col">
+            <main className="flex-1 w-full overflow-y-auto flex flex-col">
                 <Outlet />
             </main>
         </div>

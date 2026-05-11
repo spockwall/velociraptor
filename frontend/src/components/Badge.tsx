@@ -1,4 +1,4 @@
-type Variant = "green" | "red" | "gray";
+type Variant = "green" | "red" | "gray" | "yellow";
 
 interface Props {
     label: string;
@@ -10,6 +10,7 @@ export default function Badge({ label, variant = "gray" }: Props) {
         green: "bg-accent-green/15 text-accent-green border-accent-green/20",
         red: "bg-accent-red/15 text-accent-red border-accent-red/20",
         gray: "bg-bg-secondary text-text-muted border-border-strong",
+        yellow: "bg-amber-400/15 text-amber-300 border-amber-400/30",
     };
 
     return (

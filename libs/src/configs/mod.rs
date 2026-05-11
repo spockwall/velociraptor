@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod binance;
+pub mod executor;
 pub mod hyperliquid;
 pub mod kalshi;
 pub mod okx;
@@ -10,6 +11,7 @@ pub mod storage;
 
 pub use backend::BackendConfig;
 pub use binance::{BinanceConfig, BinanceSpotConfig};
+pub use executor::ExecutorConfig;
 pub use hyperliquid::HyperliquidConfig;
 pub use kalshi::{KalshiConfig, KalshiMarketConfig};
 pub use okx::OkxConfig;
@@ -36,6 +38,7 @@ pub struct Config {
     pub hyperliquid: HyperliquidConfig,
     pub kalshi: KalshiConfig,
     pub polymarket: PolymarketConfig,
+    pub executor: ExecutorConfig,
 }
 
 impl Config {

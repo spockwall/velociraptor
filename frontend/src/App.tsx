@@ -1,12 +1,13 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import Landing from "./pages/Landing";
 import Orderbook from "./pages/Orderbook";
 import Polymarket from "./pages/Polymarket";
 import Kalshi from "./pages/Kalshi";
 import Trades from "./pages/Trades";
-import Account from "./pages/Account";
+import AccountFills from "./pages/account/Fills";
+import AccountOrders from "./pages/account/Orders";
 import Control from "./pages/Control";
 import themeConfig from "./theme.json";
 
@@ -28,7 +29,9 @@ export default function App() {
                     <Route path="/polymarket" element={<Polymarket />} />
                     <Route path="/kalshi" element={<Kalshi />} />
                     <Route path="/trades" element={<Trades />} />
-                    <Route path="/account" element={<Account />} />
+                    <Route path="/account" element={<Navigate to="/account/fills" replace />} />
+                    <Route path="/account/fills" element={<AccountFills />} />
+                    <Route path="/account/orders" element={<AccountOrders />} />
                     <Route path="/control" element={<Control />} />
                 </Route>
             </Routes>
