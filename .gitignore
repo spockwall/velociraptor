@@ -30,3 +30,5 @@ credentials/*
 CLAUDE.md
 
 /data
+
+__pycache__

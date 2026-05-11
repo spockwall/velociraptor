@@ -31,6 +31,7 @@ cargo build --release
 cargo check --workspace
 
 # Run the system via docker
+make builder
 make build         # builds shared builder + thin runtime images
 make up            # docker compose up -d
 make logs
