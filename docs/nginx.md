@@ -1,166 +1,32 @@
 # Nginx Setup
 
-This document describes how to expose the Velociraptor frontend over HTTP using a host-installed nginx as a reverse proxy in front of the Docker Compose stack.
-
-## Overview
+Host-installed nginx as reverse proxy in front of the Docker Compose stack.
 
 ```
-Internet  →  host nginx (:80)  →  127.0.0.1:8080  →  frontend container (:80)
-                                                       │
-                                                       └──  /api/, /health  →  backend:3000  (Docker network)
+Internet → host nginx (:80) → 127.0.0.1:8080 → frontend container (:80)
+                                                 └── /api/, /health → backend:3000
 ```
 
-- **Host nginx** terminates external traffic on port 80.
-- **Frontend container** is published only on `127.0.0.1:8080`, so it is not reachable from the internet directly.
-- **Backend** and **Redis** are bound to `127.0.0.1` and are only reached through the Docker network.
-- The frontend container's internal nginx already proxies `/api/` and `/health` to `backend:3000`, so the host nginx only needs to forward all traffic to the frontend.
+Frontend container is published only on `127.0.0.1:8080`. Backend + Redis bound to `127.0.0.1`, reachable only through the Docker network. Host nginx forwards everything to the frontend; the container's internal nginx already proxies `/api/` to `backend:3000`.
 
-## Prerequisites
+## Steps
 
-- Docker and Docker Compose installed on the server.
-- nginx installed on the host (`sudo apt install nginx` on Debian/Ubuntu).
-- The Velociraptor stack defined in `docker-compose.yml` at the repo root.
+1. `docker compose up -d --build` and verify `curl -I http://127.0.0.1:8080`.
+2. Create `/etc/nginx/sites-available/velociraptor` with a `listen 80 default_server` block that `proxy_pass http://127.0.0.1:8080` (include `Upgrade` / `Connection: "upgrade"` for WebSockets, `proxy_read_timeout 3600s`).
+3. `sudo ln -sf ... sites-enabled/`, `sudo rm -f sites-enabled/default`, `sudo nginx -t`, `sudo systemctl reload nginx`.
+4. Verify from server and externally.
 
-## 1. Start the stack
-
-```bash
-docker compose up -d --build
-```
-
-This brings up `redis`, `backend`, `orderbook_server`, and `frontend`. The frontend listens on `127.0.0.1:8080`.
-
-Verify:
-
-```bash
-curl -I http://127.0.0.1:8080
-```
-
-You should see `HTTP/1.1 200 OK` from the frontend container's nginx.
-
-## 2. Create the host nginx site
-
-Create `/etc/nginx/sites-available/velociraptor`:
-
-```nginx
-server {
-    listen 80 default_server;
-    server_name _;
-
-    client_max_body_size 10m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # WebSocket / long-lived connections
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-    }
-}
-```
-
-One-liner equivalent:
-
-```bash
-sudo tee /etc/nginx/sites-available/velociraptor > /dev/null <<'EOF'
-server {
-    listen 80 default_server;
-    server_name _;
-
-    client_max_body_size 10m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-    }
-}
-EOF
-```
-
-If you have a domain, replace `server_name _;` with `server_name your.domain.com;` and drop `default_server` so it does not conflict with other sites.
-
-## 3. Enable the site
-
-```bash
-sudo ln -sf /etc/nginx/sites-available/velociraptor /etc/nginx/sites-enabled/velociraptor
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-`nginx -t` must pass before reloading. If `default` is not removed, both sites will fight over `default_server` on port 80.
-
-## 4. Verify
-
-From the server:
-
-```bash
-curl -I http://127.0.0.1
-```
-
-From another machine:
-
-```bash
-curl -I http://<server-ip>
-```
-
-Both should return `200 OK`. Open `http://<server-ip>/` in a browser to confirm the frontend loads and `/api/` requests succeed.
-
-## Updating
-
-For application changes:
-
-```bash
-docker compose up -d --build
-```
-
-The host nginx config does not need to change — it always proxies to `127.0.0.1:8080`.
-
-For nginx config changes:
-
-```bash
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-## Adding HTTPS later
-
-Use certbot's nginx plugin; it will edit `/etc/nginx/sites-available/velociraptor` in place and add a `listen 443 ssl` block plus an HTTP→HTTPS redirect.
-
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your.domain.com
-```
-
-Renewals are handled by the certbot systemd timer automatically.
+For HTTPS: `sudo certbot --nginx -d your.domain.com` edits the site in place and adds an HTTP→HTTPS redirect; certbot's systemd timer handles renewals.
 
 ## Troubleshooting
 
-**`bind: address already in use` when running a containerized nginx**
-The host nginx already owns port 80. Either use the host nginx (this guide) or stop it with `sudo systemctl disable --now nginx` before running an nginx container.
+| Symptom | Likely cause |
+|---|---|
+| `bind: address already in use` | Host nginx owns :80 — don't also run a containerised nginx on :80 |
+| `502 Bad Gateway` from host nginx | Frontend container not on `127.0.0.1:8080` — `docker compose ps`, `logs frontend` |
+| `/api/` 404/502 | Frontend's internal nginx proxies to `backend:3000` — `docker compose logs backend` |
+| External blocked | `sudo ufw allow 80/tcp && sudo ufw allow 443/tcp` |
 
-**`502 Bad Gateway` from host nginx**
-The frontend container is not listening on `127.0.0.1:8080`. Check `docker compose ps` and `docker compose logs frontend`.
+## Deep reference
 
-**`/api/` returns 404 or 502**
-The frontend container's internal nginx proxies `/api/` to `backend:3000`. Confirm the backend container is healthy with `docker compose logs backend`. The host nginx is not involved in the `/api/` routing decision.
-
-**Firewall blocks external access**
-Open port 80 (and 443 once HTTPS is enabled):
-
-```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-```
+Full site config (with all `proxy_set_header` directives), one-liner `tee` install, certbot install command, and update workflow are in the project skill **`velociraptor-nginx`** at `.claude/skills/velociraptor-nginx/SKILL.md`.
