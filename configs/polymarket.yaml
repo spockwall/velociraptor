@@ -6,8 +6,8 @@ server:
 
 storage:
   enabled: false
-  base_path: "./data/polymarket"
-  depth: 8 # depth levels to store (bids + asks)
+  base_path: "/data/polymarket_2"
+  depth: 20 # depth levels to store (bids + asks)
   flush_interval: 500 # ms between BufWriter flushes
   rotation: "none" # "daily" | "none"
   zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
