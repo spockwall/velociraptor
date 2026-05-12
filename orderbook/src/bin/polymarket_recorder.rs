@@ -25,7 +25,6 @@ use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
 use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
-use libs::terminal::PolymarketUi;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
     PolymarketSubMsgBuilder, WindowTask, resolve_assets_with_labels, run_rolling_scheduler,
@@ -50,21 +49,6 @@ struct Args {
     #[clap(long, default_value = DEFAULT_CONFIG)]
     config: String,
 }
-
-// ── Shared snap store (for terminal UI) ──────────────────────────────────────
-
-#[derive(Clone)]
-struct SideSnap {
-    full_slug: String,
-    is_up: bool,
-    sequence: u64,
-    bids: Vec<(f64, f64)>,
-    asks: Vec<(f64, f64)>,
-    spread: Option<f64>,
-    mid: Option<f64>,
-}
-
-type SnapStore = Arc<Mutex<HashMap<String, SideSnap>>>;
 
 // ── On-disk writer ────────────────────────────────────────────────────────────
 
@@ -238,7 +222,6 @@ struct SpawnArgs {
     base_path: PathBuf,
     depth: usize,
     zstd_level: Option<i32>,
-    store: SnapStore,
 }
 
 type SharedWindowWriters = Arc<Mutex<Option<WindowWriters>>>;
@@ -348,8 +331,6 @@ async fn spawn_window(
     {
         let writers = writers.clone();
         let label_map = label_map.clone();
-        let store = args.store.clone();
-        let base_slug = args.base_slug.clone();
         let full_slug_hook = full_slug.clone();
         let depth = args.depth;
         engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
@@ -358,8 +339,6 @@ async fn spawn_window(
                 None => return,
             };
             let sk = snap_key(&full_slug_hook, *is_up);
-            let bids: Vec<(f64, f64)> = snap.bids.iter().take(depth).copied().collect();
-            let asks: Vec<(f64, f64)> = snap.asks.iter().take(depth).copied().collect();
 
             if let Ok(mut guard) = writers.lock() {
                 if let Some(ww) = guard.as_mut() {
@@ -370,26 +349,6 @@ async fn spawn_window(
                         }
                     }
                 }
-            }
-
-            let store_key = if *is_up {
-                format!("{base_slug}-Up")
-            } else {
-                format!("{base_slug}-Down")
-            };
-            if let Ok(mut map) = store.lock() {
-                map.insert(
-                    store_key,
-                    SideSnap {
-                        full_slug: full_slug_hook.clone(),
-                        is_up: *is_up,
-                        sequence: snap.sequence,
-                        bids,
-                        asks,
-                        spread: snap.spread,
-                        mid: snap.mid,
-                    },
-                );
             }
         });
     }
@@ -444,22 +403,15 @@ fn spawn_market_scheduler(
     base_path: PathBuf,
     depth: usize,
     zstd_level: Option<i32>,
-    store: SnapStore,
-    ui: Arc<Mutex<PolymarketUi>>,
 ) -> tokio::task::JoinHandle<()> {
     let base_slug = market.slug.clone();
     let interval_secs = market.interval_secs;
-
-    if let Ok(mut ui) = ui.lock() {
-        ui.ensure(&base_slug);
-    }
 
     let args = Arc::new(SpawnArgs {
         base_slug: base_slug.clone(),
         base_path,
         depth,
         zstd_level,
-        store,
     });
     let bounds_base_slug = base_slug.clone();
 
@@ -486,47 +438,16 @@ fn spawn_market_scheduler(
     })
 }
 
-// ── Render loop ───────────────────────────────────────────────────────────────
-
-fn spawn_render_loop(
-    store: SnapStore,
-    ui: Arc<Mutex<PolymarketUi>>,
-    render_interval: Duration,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(render_interval);
-        loop {
-            ticker.tick().await;
-            let snaps: Vec<(String, SideSnap)> = {
-                let Ok(map) = store.lock() else { continue };
-                map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-            };
-            let Ok(mut ui) = ui.lock() else { continue };
-            for (key, s) in snaps {
-                let base_slug = key
-                    .strip_suffix("-Up")
-                    .or_else(|| key.strip_suffix("-Down"))
-                    .unwrap_or(&key);
-                ui.update(
-                    base_slug,
-                    &s.full_slug,
-                    s.is_up,
-                    s.sequence,
-                    s.bids,
-                    s.asks,
-                    s.spread,
-                    s.mid,
-                );
-            }
-        }
-    })
-}
-
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _ = tracing_subscriber::fmt().with_env_filter("off").try_init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let args = Args::parse();
     let cfg = PolymarketFileConfig::load(&args.config);
@@ -544,30 +465,16 @@ async fn main() -> Result<()> {
     }
 
     let depth = cfg.storage.depth;
-    let render_interval = Duration::from_millis(cfg.server.render_interval);
     let base_path = PathBuf::from(&cfg.storage.base_path);
     let zstd_level = match cfg.storage.zstd_level {
         0 => None,
         l => Some(l as i32),
     };
-    let store: SnapStore = Arc::new(Mutex::new(HashMap::new()));
-    let ui = Arc::new(Mutex::new(PolymarketUi::new(depth)));
 
     let _schedulers: Vec<_> = markets
         .into_iter()
-        .map(|market| {
-            spawn_market_scheduler(
-                market,
-                base_path.clone(),
-                depth,
-                zstd_level,
-                store.clone(),
-                ui.clone(),
-            )
-        })
+        .map(|market| spawn_market_scheduler(market, base_path.clone(), depth, zstd_level))
         .collect();
-
-    let _render = spawn_render_loop(store, ui, render_interval);
 
     tokio::signal::ctrl_c().await?;
     Ok(())
