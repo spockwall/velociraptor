@@ -3,20 +3,17 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use executor::audit::AuditSink;
-use executor::control::{ControlState, run_watcher};
-use executor::idempotency::IdempotencyCache;
-use executor::metrics::Metrics;
-use executor::rest::RestOrderClient;
+use executor::control::{drain, run_watcher, ControlState, ShutdownState};
+use executor::gateway::idempotency::IdempotencyCache;
+use executor::gateway::{ClientMap, Gateway, GatewayConfig};
+use executor::ops::{ensure_owner_only, AuditSink, Metrics};
 use executor::rest::polymarket::PolymarketRestClient;
-use executor::secrets::ensure_owner_only;
-use executor::shutdown::{ShutdownState, drain};
-use executor::zmq_gateway::{ClientMap, Gateway, GatewayConfig};
+use executor::rest::RestOrderClient;
 use libs::configs::Config;
 use libs::credentials::PolymarketCredentials;
 use libs::endpoints::polymarket::polymarket as poly_ep;
@@ -70,9 +67,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .init();
+    let env_filter = EnvFilter::new("info");
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let args = Args::parse();
 
@@ -87,9 +83,7 @@ async fn main() -> anyhow::Result<()> {
         .audit_dir
         .clone()
         .unwrap_or_else(|| exec_cfg.audit_dir.clone());
-    let audit_stream_cap = args
-        .audit_stream_cap
-        .unwrap_or(exec_cfg.audit_stream_cap);
+    let audit_stream_cap = args.audit_stream_cap.unwrap_or(exec_cfg.audit_stream_cap);
     let metrics_addr_str = args
         .metrics_addr
         .clone()
@@ -98,7 +92,10 @@ async fn main() -> anyhow::Result<()> {
         .polymarket_env
         .clone()
         .unwrap_or_else(|| exec_cfg.polymarket_env.clone());
-    let redis_url = args.redis_url.clone().unwrap_or_else(|| cfg.redis.url.clone());
+    let redis_url = args
+        .redis_url
+        .clone()
+        .unwrap_or_else(|| cfg.redis.url.clone());
 
     info!(
         config = %args.config,
@@ -148,12 +145,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Audit ────────────────────────────────────────────────────────────
     let audit = Arc::new(
-        AuditSink::open(
-            PathBuf::from(&audit_dir),
-            redis.clone(),
-            audit_stream_cap,
-        )
-        .await?,
+        AuditSink::open(PathBuf::from(&audit_dir), redis.clone(), audit_stream_cap).await?,
     );
 
     // ── Metrics ──────────────────────────────────────────────────────────
@@ -161,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let metrics_addr: std::net::SocketAddr = metrics_addr_str.parse()?;
     let metrics_clone = metrics.clone();
     tokio::spawn(async move {
-        if let Err(e) = executor::metrics::serve(metrics_clone, metrics_addr).await {
+        if let Err(e) = executor::ops::metrics::serve(metrics_clone, metrics_addr).await {
             warn!("metrics: server error: {e}");
         }
     });

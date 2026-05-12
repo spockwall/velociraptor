@@ -7,7 +7,7 @@ FROM ${BUILDER_IMAGE} AS bins
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libzmq5 ca-certificates \
+ && apt-get install -y --no-install-recommends libzmq5 ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=bins /src/target/release/executor /usr/local/bin/executor
