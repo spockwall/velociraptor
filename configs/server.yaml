@@ -8,7 +8,7 @@ server:
 
 storage:
   enabled: true
-  base_path: "/data"
+  base_path: "/data/orderbook_2"
   depth: 20 # depth levels to store (bids + asks)
   flush_interval: 1000 # ms between BufWriter flushes
   rotation: "daily" # "daily" | "none"
@@ -30,7 +30,7 @@ okx:
   enabled: true
   symbols:
     - "BTC-USDT"
-    - "ETH-USDT-SWAP"
+    - "ETH-USDT"
 
 hyperliquid:
   enabled: true
