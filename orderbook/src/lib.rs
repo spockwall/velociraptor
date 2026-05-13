@@ -3,7 +3,6 @@ pub mod connection;
 pub mod exchanges;
 pub mod heartbeat;
 pub mod orderbook;
-pub mod price_to_beat;
 pub mod types;
 pub mod utils;
 
