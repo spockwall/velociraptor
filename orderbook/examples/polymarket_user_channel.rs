@@ -141,7 +141,7 @@ fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
         }
         StreamMessage::UserEvent(UserEvent::Fill {
             exchange_oid,
-            client_oid,
+            taker_oid,
             symbol,
             side,
             px,
@@ -149,24 +149,8 @@ fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
             ..
         }) => {
             eprintln!(
-                "[{tag}] FILL {side:?} px={px:.4} qty={qty:.4} trade={exchange_oid} taker={client_oid} asset={symbol}"
+                "[{tag}] FILL {side:?} px={px:.4} qty={qty:.4} trade={exchange_oid} taker={taker_oid:?} asset={symbol}"
             );
-        }
-        StreamMessage::UserEvent(UserEvent::Balance {
-            asset,
-            free,
-            locked,
-            ..
-        }) => {
-            eprintln!("[{tag}] BALANCE {asset} free={free} locked={locked}");
-        }
-        StreamMessage::UserEvent(UserEvent::Position {
-            symbol,
-            size,
-            avg_px,
-            ..
-        }) => {
-            eprintln!("[{tag}] POSITION {symbol} size={size} avg_px={avg_px}");
         }
         StreamMessage::OrderbookUpdate(u) => {
             eprintln!(

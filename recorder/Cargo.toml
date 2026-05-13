@@ -6,11 +6,11 @@ authors = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-anyhow    = { workspace = true }
-chrono    = { workspace = true }
-rmp-serde = { workspace = true }
-serde     = { workspace = true }
-tokio     = { workspace = true }
-tracing   = { workspace = true }
-zstd      = { workspace = true }
-libs      = { path = "../libs" }
+anyhow      = { workspace = true }
+chrono      = { workspace = true }
+csv         = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+libs        = { path = "../libs" }

@@ -132,8 +132,11 @@ export function FillsTable({
                                 <td className="py-1 pr-3 text-text-muted truncate max-w-[28ch]" title={ev.exchange_oid}>
                                     {ev.exchange_oid}
                                 </td>
-                                <td className="py-1 text-text-muted truncate max-w-[24ch]" title={ev.client_oid}>
-                                    {ev.client_oid}
+                                <td
+                                    className="py-1 text-text-muted truncate max-w-[24ch]"
+                                    title={ev.client_oid ?? ""}
+                                >
+                                    {ev.client_oid ?? ""}
                                 </td>
                             </tr>
                         ) : null,
@@ -194,8 +197,11 @@ export function OrdersTable({
                                 <td className="py-1 pr-3 text-text-muted truncate max-w-[28ch]" title={ev.exchange_oid}>
                                     {ev.exchange_oid}
                                 </td>
-                                <td className="py-1 text-text-muted truncate max-w-[24ch]" title={ev.client_oid}>
-                                    {ev.client_oid}
+                                <td
+                                    className="py-1 text-text-muted truncate max-w-[24ch]"
+                                    title={ev.client_oid ?? ""}
+                                >
+                                    {ev.client_oid ?? ""}
                                 </td>
                             </tr>
                         ) : null,

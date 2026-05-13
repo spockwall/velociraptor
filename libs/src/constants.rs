@@ -20,8 +20,14 @@ pub const CONTROL_SOCKET: &str = "ipc:///tmp/trading/control.sock";
 /// Default ZMQ WebSocket orders socket path
 pub const WS_ORDERS_SOCKET: &str = "ipc:///tmp/trading/ws_orders.sock";
 
-/// Default ZMQ WebSocket status socket path
-pub const WS_STATUS_SOCKET: &str = "ipc:///tmp/trading/ws_status.sock";
+/// Default ZMQ user-event PUB endpoint.
+///
+/// TCP (not IPC) because consumers can run outside the same host filesystem
+/// — the trading engine on the host needs to subscribe to events published
+/// by the orderbook_server inside the Docker container. IPC inside Docker
+/// is invisible to the host. 127.0.0.1-only bind keeps user data off the
+/// network; expose the port via docker-compose to the host only.
+pub const WS_STATUS_SOCKET: &str = "tcp://*:5559";
 
 /// Default ZMQ engine metrics socket path
 pub const ENGINE_METRICS_SOCKET: &str = "ipc:///tmp/trading/engine_metrics.sock";
@@ -157,7 +163,9 @@ mod tests {
         assert_eq!(MARKET_DATA_SOCKET, "ipc:///tmp/trading/market_data.sock");
         assert_eq!(CONTROL_SOCKET, "ipc:///tmp/trading/control.sock");
         assert_eq!(WS_ORDERS_SOCKET, "ipc:///tmp/trading/ws_orders.sock");
-        assert_eq!(WS_STATUS_SOCKET, "ipc:///tmp/trading/ws_status.sock");
+        // WS_STATUS_SOCKET is TCP (cross-process boundary — host engine
+        // consumes events published by the dockerised orderbook_server).
+        assert_eq!(WS_STATUS_SOCKET, "tcp://*:5559");
         assert_eq!(
             ENGINE_METRICS_SOCKET,
             "ipc:///tmp/trading/engine_metrics.sock"
@@ -169,11 +177,12 @@ mod tests {
     }
 
     #[test]
-    fn test_zmq_sockets_are_ipc() {
+    fn test_zmq_sockets_are_ipc_or_tcp() {
         assert!(MARKET_DATA_SOCKET.starts_with("ipc://"));
         assert!(CONTROL_SOCKET.starts_with("ipc://"));
         assert!(WS_ORDERS_SOCKET.starts_with("ipc://"));
-        assert!(WS_STATUS_SOCKET.starts_with("ipc://"));
+        // WS_STATUS_SOCKET is TCP by design — see constant docs.
+        assert!(WS_STATUS_SOCKET.starts_with("tcp://"));
         assert!(ENGINE_METRICS_SOCKET.starts_with("ipc://"));
         assert!(EXECUTOR_ORDER_SOCKET.starts_with("ipc://"));
     }
@@ -183,7 +192,7 @@ mod tests {
         assert!(MARKET_DATA_SOCKET.contains("/tmp/trading/"));
         assert!(CONTROL_SOCKET.contains("/tmp/trading/"));
         assert!(WS_ORDERS_SOCKET.contains("/tmp/trading/"));
-        assert!(WS_STATUS_SOCKET.contains("/tmp/trading/"));
+        // WS_STATUS_SOCKET is TCP, doesn't sit under /tmp/trading/.
         assert!(ENGINE_METRICS_SOCKET.contains("/tmp/trading/"));
         assert!(EXECUTOR_ORDER_SOCKET.contains("/tmp/trading/"));
     }

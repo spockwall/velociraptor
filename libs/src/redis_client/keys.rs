@@ -18,14 +18,6 @@ impl RedisKey {
         format!("trades:{exchange}:{symbol}")
     }
 
-    pub fn position(exchange: &str, symbol: &str) -> String {
-        format!("position:{exchange}:{symbol}")
-    }
-
-    pub fn balance(exchange: &str, asset: &str) -> String {
-        format!("balance:{exchange}:{asset}")
-    }
-
     pub fn orders_open(exchange: &str) -> String {
         format!("orders:open:{exchange}")
     }

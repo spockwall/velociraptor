@@ -10,7 +10,7 @@ const features = [
     },
     {
         title: "Redis-backed state",
-        desc: "Latest snapshots, BBA, trades, positions and balances persisted with capped history.",
+        desc: "Latest snapshots, BBA, trades, fills, and order updates persisted with capped history.",
     },
     { title: "Disk archival", desc: "Append-only MessagePack files, daily rotation, optional zstd compression." },
     { title: "ZMQ transport", desc: "PUB/SUB for market data, ROUTER/DEALER for subscriptions, REQ/REP for orders." },

@@ -72,49 +72,53 @@ export interface KalshiMarket {
 }
 
 // UserEvent — internally tagged on the wire. Discriminator is `type`.
-// See libs/src/protocol/events.rs.
-export type UserEvent =
-    | {
-          type: "fill";
-          exchange: string;
-          client_oid: string;
-          exchange_oid: string;
-          symbol: string;
-          side: "buy" | "sell";
-          px: number;
-          qty: number;
-          fee: number;
-          ts_ns: number;
-      }
-    | {
-          type: "order_update";
-          exchange: string;
-          client_oid: string;
-          exchange_oid: string;
-          symbol: string;
-          side: "buy" | "sell";
-          px: number;
-          qty: number;
-          filled: number;
-          status: "new" | "partially_filled" | "filled" | "canceled" | "rejected" | "expired";
-          ts_ns: number;
-      }
-    | {
-          type: "balance";
-          exchange: string;
-          asset: string;
-          free: number;
-          locked: number;
-          ts_ns: number;
-      }
-    | {
-          type: "position";
-          exchange: string;
-          symbol: string;
-          size: number;
-          avg_px: number;
-          ts_ns: number;
-      };
+// See libs/src/protocol/events.rs. Mirrors the Rust enum 1:1.
+
+export type Side = "buy" | "sell";
+
+export type OrderStatus =
+    | "new"
+    | "partially_filled"
+    | "filled"
+    | "canceled"
+    | "rejected"
+    | "expired";
+
+/// One fill — a single trade matched against (potentially several) makers.
+/// `taker_oid` is the taker's order id; `client_oid` is whatever client_oid
+/// the taker passed at place time, when known. `maker_orders` is the raw
+/// exchange-specific maker-list payload (Polymarket today).
+export interface UserFill {
+    type: "fill";
+    exchange: string;
+    taker_oid: string | null;
+    client_oid: string | null;
+    exchange_oid: string;
+    symbol: string;
+    side: Side;
+    px: number;
+    qty: number;
+    fee: number;
+    ts_ns: number;
+    maker_orders: unknown | null;
+}
+
+/// One order-lifecycle event (new / partially_filled / filled / canceled / …).
+export interface UserOrderUpdate {
+    type: "order_update";
+    exchange: string;
+    client_oid: string;
+    exchange_oid: string;
+    symbol: string;
+    side: Side;
+    px: number;
+    qty: number;
+    filled: number;
+    status: OrderStatus;
+    ts_ns: number;
+}
+
+export type UserEvent = UserFill | UserOrderUpdate;
 
 export const api = {
     health: () => get<{ ok: boolean }>("/health"),

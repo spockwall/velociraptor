@@ -23,12 +23,14 @@ use orderbook::exchanges::kalshi::{
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::exchanges::polymarket::{
     resolve_assets_with_labels, run_rolling_scheduler as polymarket_rolling,
-    PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder,
-    WindowTask as PolymarketWindowTask,
+    PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder, WindowTask as PolymarketWindowTask,
 };
 use orderbook::types::endpoints::polymarket as poly_endpoints;
 use orderbook::types::orderbook::StreamMessage;
-use orderbook::{PolymarketClient, StreamEngine, StreamSystem, StreamSystemConfig};
+use orderbook::{
+    PolymarketClient, StreamEngine, StreamEngineBus, StreamEvent, StreamEventSource, StreamSystem,
+    StreamSystemConfig,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -139,6 +141,62 @@ pub fn attach_zmq(system: &mut StreamSystem, server_pub: &str, server_router: &s
     info!("ZMQ ROUTER {}", server_router);
 }
 
+// ── Recorder (durable archive) ────────────────────────────────────────────────
+
+/// Wire a `recorder::StorageWriter` to the running `StreamSystem`. Snapshots,
+/// last-trades, and user events flow into daily CSV files under
+/// `cfg.base_path`. The recorder runs as a separate broadcast subscriber, so
+/// it cannot block the engine or other consumers.
+///
+/// Layout produced on disk:
+///
+///   {base}/{exchange}/{symbol}/{YYYY-MM-DD}.csv          — orderbook snapshots
+///   {base}/{exchange}/{symbol}/{YYYY-MM-DD}-trades.csv   — last-trade events
+///   {base}/events/{YYYY-MM-DD}.csv                       — user events
+///
+/// Each `UserEvent` row has a `type` column ∈ {`fill`, `order_update`}.
+///
+/// `cfg` is the executor-/server-side `recorder::StorageConfig`. Pass `None`
+/// to disable; the function is a no-op in that case.
+pub fn attach_recorder(system: &mut StreamSystem, cfg: Option<recorder::StorageConfig>) {
+    let Some(cfg) = cfg else { return };
+
+    // Bridge `StreamEvent` (engine bus) → `RecorderEvent` (recorder bus).
+    // A small bounded broadcast is enough; the writer consumes via tokio mpsc
+    // semantics under the hood, but uses broadcast::Receiver so we can fan
+    // out further later without changing the writer API.
+    let (rec_tx, rec_rx) = tokio::sync::broadcast::channel::<recorder::RecorderEvent>(1024);
+    let mut engine_rx = system.engine_bus().subscribe();
+
+    let bridge = tokio::spawn(async move {
+        loop {
+            match engine_rx.recv().await {
+                Ok(StreamEvent::OrderbookSnapshot(snap)) => {
+                    let _ = rec_tx.send(recorder::RecorderEvent::Snapshot(snap));
+                }
+                Ok(StreamEvent::LastTradePrice(trade)) => {
+                    let _ = rec_tx.send(recorder::RecorderEvent::Trade(trade));
+                }
+                Ok(StreamEvent::User(ev)) => {
+                    let _ = rec_tx.send(recorder::RecorderEvent::UserEvent(ev));
+                }
+                Ok(StreamEvent::OrderbookRaw(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("recorder bridge lagged, skipped {n} events");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+        debug!("recorder bridge exiting");
+    });
+    system.attach_handle(bridge);
+
+    let base_path = cfg.base_path.display().to_string();
+    let writer_handle = recorder::StorageWriter::new(cfg).start(rec_rx);
+    system.attach_handle(writer_handle);
+    info!("recorder: archive writer attached, base={base_path}");
+}
+
 // ── Polymarket scheduler ──────────────────────────────────────────────────────
 
 /// Spawn one rolling-window scheduler per enabled Polymarket market.
@@ -152,6 +210,7 @@ pub fn spawn_polymarket_schedulers(
     redis: Option<RedisHandle>,
     snapshot_cap: usize,
     trade_cap: usize,
+    main_bus: Option<StreamEngineBus>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     markets
         .iter()
@@ -159,6 +218,7 @@ pub fn spawn_polymarket_schedulers(
         .map(|market| {
             let market = market.clone();
             let redis = redis.clone();
+            let main_bus = main_bus.clone();
             info!(slug = %market.slug, interval_secs = market.interval_secs, "Polymarket enabled");
             tokio::spawn(async move {
                 let base_slug = market.slug.clone();
@@ -166,6 +226,7 @@ pub fn spawn_polymarket_schedulers(
                 polymarket_rolling(base_slug.clone(), interval_secs, move |full_slug| {
                     let base_slug = base_slug.clone();
                     let redis = redis.clone();
+                    let main_bus = main_bus.clone();
                     async move {
                         spawn_polymarket_window(
                             base_slug,
@@ -175,6 +236,7 @@ pub fn spawn_polymarket_schedulers(
                             redis,
                             snapshot_cap,
                             trade_cap,
+                            main_bus,
                         )
                         .await
                     }
@@ -193,6 +255,7 @@ async fn spawn_polymarket_window(
     redis: Option<RedisHandle>,
     snapshot_cap: usize,
     trade_cap: usize,
+    main_bus: Option<StreamEngineBus>,
 ) -> Option<PolymarketWindowTask> {
     use libs::configs::PolymarketMarketConfig;
 
@@ -332,6 +395,23 @@ async fn spawn_polymarket_window(
             );
         });
 
+    // Forward this per-window engine's snapshots + trades onto the main
+    // engine bus so ZmqServer (which is attached to the main engine only)
+    // publishes them. Without this, Polymarket frames never reach the SUB.
+    if let Some(bus) = main_bus.clone() {
+        let bus_snap = bus.clone();
+        engine
+            .hooks_mut()
+            .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+                bus_snap.publish(StreamEvent::OrderbookSnapshot(snap.clone()));
+            });
+        engine
+            .hooks_mut()
+            .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
+                bus.publish(StreamEvent::LastTradePrice(trade.clone()));
+            });
+    }
+
     // Attach Redis snapshot/trade writers to the per-window engine so its
     // data flows into Redis (the main engine's hook only sees static exchanges).
     if let Some(r) = redis.clone() {
@@ -405,6 +485,54 @@ pub fn spawn_polymarket_user_channel(
         return None;
     }
 
+    info!("Polymarket user channel: supervisor starting (account-wide, no market filter)");
+
+    // Outer supervisor — reconnects forever with exponential backoff.
+    //
+    // `PolymarketClient::run` has its own internal reconnect loop capped at
+    // ~10 attempts; when that loop is exhausted (long network outage,
+    // Polymarket-side hiccup) it returns an error and the task ends. The
+    // user channel is supposed to live for the whole process lifetime, so
+    // we wrap it in an outer retry that spins up a fresh client whenever
+    // the inner one gives up. Backoff is capped at `MAX_BACKOFF_SECS` so
+    // we keep retrying forever but don't hammer Polymarket if it's down.
+    //
+    // Combined with the application-level "PING" keepalive fix in
+    // `PolymarketMessageParser::build_ping`, this should keep the user
+    // channel up across multi-day runs.
+    const INITIAL_BACKOFF_SECS: u64 = 1;
+    const MAX_BACKOFF_SECS: u64 = 60;
+    const HEALTHY_RESET_SECS: u64 = 120;
+
+    Some(tokio::spawn(async move {
+        let mut backoff = INITIAL_BACKOFF_SECS;
+        loop {
+            let attempt_start = std::time::Instant::now();
+            match run_user_channel_once(&creds, engine_tx.clone()).await {
+                Ok(()) => info!("Polymarket user channel: inner client returned cleanly"),
+                Err(e) => error!("Polymarket user channel: inner client exited: {e:?}"),
+            }
+            // If the prior attempt was healthy for a while, reset the backoff.
+            // Protects against the case where the WS dies quickly N times
+            // then later runs fine for hours.
+            if attempt_start.elapsed().as_secs() > HEALTHY_RESET_SECS {
+                backoff = INITIAL_BACKOFF_SECS;
+            } else {
+                backoff = (backoff * 2).min(MAX_BACKOFF_SECS);
+            }
+            warn!("Polymarket user channel: reconnecting in {}s", backoff);
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+        }
+    }))
+}
+
+/// One full attempt at running the user channel until the inner
+/// `PolymarketClient` gives up. The forwarder task is aborted before
+/// returning, so the next attempt starts with a fresh mpsc pair.
+async fn run_user_channel_once(
+    creds: &PolymarketCredentials,
+    engine_tx: mpsc::UnboundedSender<StreamMessage>,
+) -> anyhow::Result<()> {
     let passphrase = creds.passphrase.clone().unwrap_or_default();
     // No `with_condition(...)` — server sends events for every market on the
     // account.
@@ -421,18 +549,15 @@ pub fn spawn_polymarket_user_channel(
             creds.passphrase.clone(),
         );
 
-    // Connection writes into a private mpsc. A forwarder drains it and pushes
-    // only `UserEvent` messages onto the main engine mpsc.
     let (tx, mut rx) = mpsc::unbounded_channel::<StreamMessage>();
     let control = SystemControl::new();
 
     let mut conn = PolymarketClient::new(cfg, tx, control.clone());
     let conn_ctrl = control.clone();
     let conn_task = tokio::spawn(async move {
-        if let Err(e) = conn.run().await {
-            error!("Polymarket user channel exited: {e:?}");
-        }
+        let res = conn.run().await;
         conn_ctrl.shutdown();
+        res
     });
 
     let forwarder_engine_tx = engine_tx.clone();
@@ -454,11 +579,12 @@ pub fn spawn_polymarket_user_channel(
 
     info!("Polymarket user channel: subscribed (account-wide, no market filter)");
 
-    // Combined supervisor: when the connection ends, cancel the forwarder.
-    Some(tokio::spawn(async move {
-        let _ = conn_task.await;
-        forwarder.abort();
-    }))
+    let result: anyhow::Result<()> = match conn_task.await {
+        Ok(inner) => inner.map_err(|e| anyhow::anyhow!("{e:?}")),
+        Err(join_err) => Err(anyhow::anyhow!("user-channel task panicked: {join_err}")),
+    };
+    forwarder.abort();
+    result
 }
 
 // ── Kalshi scheduler ──────────────────────────────────────────────────────────
@@ -476,6 +602,7 @@ pub fn spawn_kalshi_schedulers(
     redis: Option<RedisHandle>,
     snapshot_cap: usize,
     trade_cap: usize,
+    main_bus: Option<StreamEngineBus>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let enabled: Vec<_> = markets.iter().filter(|m| m.enable).cloned().collect();
     if enabled.is_empty() {
@@ -501,6 +628,7 @@ pub fn spawn_kalshi_schedulers(
         .map(|market| {
             let creds = creds.clone();
             let redis = redis.clone();
+            let main_bus = main_bus.clone();
             info!(series = %market.series, "Kalshi enabled");
             tokio::spawn(async move {
                 let series = market.series.clone();
@@ -508,6 +636,7 @@ pub fn spawn_kalshi_schedulers(
                     let series = series.clone();
                     let creds = creds.clone();
                     let redis = redis.clone();
+                    let main_bus = main_bus.clone();
                     async move {
                         spawn_kalshi_window(
                             series,
@@ -518,6 +647,7 @@ pub fn spawn_kalshi_schedulers(
                             snapshot_cap,
                             trade_cap,
                             KALSHI_INTERVAL_SECS,
+                            main_bus,
                         )
                         .await
                     }
@@ -537,6 +667,7 @@ async fn spawn_kalshi_window(
     snapshot_cap: usize,
     trade_cap: usize,
     interval_secs: u64,
+    main_bus: Option<StreamEngineBus>,
 ) -> Option<KalshiWindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
         .set_ws_url(kalshi::ws::PUBLIC_STREAM)
@@ -626,6 +757,22 @@ async fn spawn_kalshi_window(
                 "kalshi snapshot"
             );
         });
+
+    // Forward per-window snapshots + trades onto the main engine bus so
+    // ZmqServer publishes them (the per-window engine is invisible to it).
+    if let Some(bus) = main_bus.clone() {
+        let bus_snap = bus.clone();
+        engine
+            .hooks_mut()
+            .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+                bus_snap.publish(StreamEvent::OrderbookSnapshot(snap.clone()));
+            });
+        engine
+            .hooks_mut()
+            .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
+                bus.publish(StreamEvent::LastTradePrice(trade.clone()));
+            });
+    }
 
     if let Some(r) = redis.clone() {
         attach_redis(&mut engine, r, snapshot_cap, trade_cap);
@@ -749,16 +896,6 @@ pub fn attach_redis(
             let ev = ev.clone();
             tokio::spawn(async move {
                 match &ev {
-                    UserEvent::Position {
-                        exchange, symbol, ..
-                    } => {
-                        h2.set_position(exchange, symbol, &payload).await;
-                    }
-                    UserEvent::Balance {
-                        exchange, asset, ..
-                    } => {
-                        h2.set_balance(exchange, asset, &payload).await;
-                    }
                     UserEvent::Fill { .. } => {
                         h2.lpush_capped(Events::FILLS, &payload, h2.event_list_cap)
                             .await;

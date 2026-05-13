@@ -21,8 +21,8 @@ use orderbook::connection::SystemControl;
 use orderbook::StreamEngine;
 use tracing::error;
 use zmq_server::setup::{
-    add_binance, add_binance_spot, add_hyperliquid, add_okx, attach_redis, attach_zmq,
-    build_system, spawn_kalshi_schedulers, spawn_polymarket_schedulers,
+    add_binance, add_binance_spot, add_hyperliquid, add_okx, attach_recorder, attach_redis,
+    attach_zmq, build_system, spawn_kalshi_schedulers, spawn_polymarket_schedulers,
     spawn_polymarket_user_channel,
 };
 use zmq_server::StreamSystemConfig;
@@ -106,6 +106,16 @@ async fn run(config_path: &str) -> Result<()> {
 
     attach_zmq(&mut system, &cfg.server.pub_endpoint, &cfg.server.router_endpoint);
 
+    // ── Archive recorder ─────────────────────────────────────────────────────
+    // Writes orderbook snapshots, trades, and user events to daily mpack[.zst]
+    // files under `cfg.storage.base_path`. Only attached when storage.enabled.
+
+    if cfg.storage.enabled {
+        attach_recorder(&mut system, Some(build_recorder_config(&cfg.storage)));
+    } else {
+        tracing::info!("recorder: storage.enabled=false in config — archive writer skipped");
+    }
+
     // ── Rolling-window schedulers (Polymarket + Kalshi) ───────────────────────
 
     let _pm  = spawn_polymarket_schedulers(
@@ -114,6 +124,7 @@ async fn run(config_path: &str) -> Result<()> {
         redis_handle.clone(),
         cfg.redis.snapshot_cap,
         cfg.redis.trade_cap,
+        Some(system.engine_bus()),
     );
 
     // Polymarket user channel — single persistent WS, account-scoped (no
@@ -137,6 +148,7 @@ async fn run(config_path: &str) -> Result<()> {
         redis_handle.clone(),
         cfg.redis.snapshot_cap,
         cfg.redis.trade_cap,
+        Some(system.engine_bus()),
     );
 
     // ── Run until Ctrl-C or engine error ─────────────────────────────────────
@@ -150,4 +162,27 @@ async fn run(config_path: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Translate the YAML-level `libs::configs::StorageConfig` into the
+/// crate-level `recorder::StorageConfig`. Kept here rather than in `libs`
+/// or `recorder` so `libs` doesn't need to know about `recorder`'s types.
+fn build_recorder_config(s: &libs::configs::StorageConfig) -> recorder::StorageConfig {
+    use std::path::PathBuf;
+    let rotation = match s.rotation.as_str() {
+        "none" | "off" => recorder::RotationPolicy::None,
+        _ => recorder::RotationPolicy::Daily,
+    };
+    let zstd_level: Option<i32> = if s.zstd_level == 0 {
+        None
+    } else {
+        Some(s.zstd_level as i32)
+    };
+    recorder::StorageConfig {
+        base_path: PathBuf::from(&s.base_path),
+        depth: s.depth,
+        flush_interval_ms: s.flush_interval,
+        rotation,
+        zstd_level,
+    }
 }

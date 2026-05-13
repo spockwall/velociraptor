@@ -1,6 +1,6 @@
 use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
-use crate::exchanges::polymarket::PolymarketMessageParser;
+use crate::exchanges::polymarket::{PolymarketChannel, PolymarketMessageParser};
 use crate::types::orderbook::StreamMessage;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,7 +16,16 @@ impl PolymarketClient {
         message_tx: UnboundedSender<StreamMessage>,
         system_control: SystemControl,
     ) -> Self {
-        let message_parser = PolymarketMessageParser::new();
+        // Pick the right parser channel based on the WS URL the caller set.
+        // The user channel needs application-level "PING" keepalive; the
+        // market channel doesn't. Getting this wrong is what caused the
+        // user-channel disconnect-loop bug.
+        let channel = if config.ws_url.contains("/ws/user") {
+            PolymarketChannel::User
+        } else {
+            PolymarketChannel::Market
+        };
+        let message_parser = PolymarketMessageParser::for_channel(channel);
 
         let inner = ClientBase::new(
             config,

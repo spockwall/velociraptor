@@ -1,10 +1,20 @@
+//! Daily-rotation CSV writer.
+//!
+//! Three streams produced from the `RecorderEvent` bus:
+//!
+//!   {base}/{exchange}/{symbol}/{date}.csv          — orderbook snapshots
+//!   {base}/{exchange}/{symbol}/{date}-trades.csv   — last-trade events
+//!   {base}/events/{date}.csv                       — user events (all variants)
+//!
+//! Each file has a header row first, then one row per event. Format is
+//! human-readable: open in Excel, `less`, or `pandas.read_csv` directly.
+
 use crate::config::{RotationPolicy, StorageConfig};
 use crate::event::RecorderEvent;
-use crate::format::{SnapshotRecord, TradeRecord};
+use crate::format::{SnapshotRecord, TradeRecord, UserEventRecord};
 use libs::time::current_date;
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use tokio::time::{interval, Duration};
@@ -12,6 +22,12 @@ use tracing::{error, info, warn};
 
 pub struct StorageWriter {
     config: StorageConfig,
+}
+
+/// What's currently open for one (exchange:symbol:kind or events::) key.
+struct OpenFile {
+    writer: csv::Writer<std::fs::File>,
+    date: String,
 }
 
 impl StorageWriter {
@@ -26,17 +42,13 @@ impl StorageWriter {
         let config = self.config;
 
         tokio::spawn(async move {
-            // key: "exchange:symbol:" (snapshots) or "exchange:symbol:trades"
-            //   → {base_path}/{exchange}/{symbol}/{date}.mpack
-            //   → {base_path}/{exchange}/{symbol}/{date}-trades.mpack
-            let mut handles: HashMap<String, (BufWriter<File>, String)> = HashMap::new();
+            let mut handles: HashMap<String, OpenFile> = HashMap::new();
             let mut flush_tick = interval(Duration::from_millis(config.flush_interval_ms));
 
             info!(
                 base_path = %config.base_path.display(),
                 depth = config.depth,
-                zstd_level = ?config.zstd_level,
-                "StorageWriter started"
+                "StorageWriter (CSV) started"
             );
 
             loop {
@@ -44,34 +56,42 @@ impl StorageWriter {
                     event = event_rx.recv() => match event {
                         Ok(RecorderEvent::Snapshot(snap)) => {
                             let record = SnapshotRecord::from_snapshot(&snap, config.depth);
-                            // 3-part key: "exchange:symbol:" — empty 3rd part = snapshots
-                            // → {base_path}/{exchange}/{symbol}/{date}.mpack
                             let key = format!("{}:{}:", snap.exchange, snap.symbol);
                             let today = current_date();
+                            let header = SnapshotRecord::header(config.depth);
 
-                            let writer = match get_or_open(&mut handles, &key, &today, &config) {
-                                Some(w) => w,
-                                None => continue,
+                            let Some(file) = get_or_open(&mut handles, &key, &today, &config, &header) else {
+                                continue;
                             };
-
-                            if let Err(e) = write_record(writer, &record) {
-                                error!("StorageWriter: write failed for {key}: {e}");
+                            if let Err(e) = file.writer.write_record(record.row()) {
+                                error!("StorageWriter: snapshot write failed for {key}: {e}");
                             }
                         }
                         Ok(RecorderEvent::Trade(trade)) => {
                             let record = TradeRecord::from_trade(&trade);
-                            // 3-part key: "exchange:symbol:trades"
-                            // → {base_path}/{exchange}/{symbol}/{date}-trades.mpack
                             let key = format!("{}:{}:trades", trade.exchange, trade.symbol);
                             let today = current_date();
+                            // Header derived from struct field names via `serialize`.
+                            let header: Vec<String> = trade_header();
 
-                            let writer = match get_or_open(&mut handles, &key, &today, &config) {
-                                Some(w) => w,
-                                None => continue,
+                            let Some(file) = get_or_open(&mut handles, &key, &today, &config, &header) else {
+                                continue;
                             };
-
-                            if let Err(e) = write_record(writer, &record) {
+                            if let Err(e) = file.writer.serialize(&record) {
                                 error!("StorageWriter: trade write failed for {key}: {e}");
+                            }
+                        }
+                        Ok(RecorderEvent::UserEvent(ev)) => {
+                            let record = UserEventRecord::from_event(&ev);
+                            let key = "events::".to_string();
+                            let today = current_date();
+                            let header: Vec<String> = user_event_header();
+
+                            let Some(file) = get_or_open(&mut handles, &key, &today, &config, &header) else {
+                                continue;
+                            };
+                            if let Err(e) = file.writer.serialize(&record) {
+                                error!("StorageWriter: user-event write failed for {key}: {e}");
                             }
                         }
                         Ok(RecorderEvent::RawUpdate) => {}
@@ -85,8 +105,8 @@ impl StorageWriter {
                     },
 
                     _ = flush_tick.tick() => {
-                        for (key, (writer, _)) in &mut handles {
-                            if let Err(e) = writer.flush() {
+                        for (key, file) in &mut handles {
+                            if let Err(e) = file.writer.flush() {
                                 error!("StorageWriter: flush failed for {key}: {e}");
                             }
                         }
@@ -94,22 +114,10 @@ impl StorageWriter {
                 }
             }
 
-            // Final flush on shutdown
-            for (key, (ref mut writer, date)) in &mut handles {
-                if let Err(e) = writer.flush() {
+            // Final flush on shutdown.
+            for (key, file) in &mut handles {
+                if let Err(e) = file.writer.flush() {
                     error!("StorageWriter: final flush failed for {key}: {e}");
-                }
-                // Compress if daily rotation and zstd enabled
-                if matches!(config.rotation, RotationPolicy::Daily) {
-                    if let Some(level) = config.zstd_level {
-                        let (exchange, symbol, kind) = parse_key(key);
-                        let path = config
-                            .base_path
-                            .join(exchange)
-                            .join(symbol)
-                            .join(filename_for(date, kind, RotationPolicy::Daily));
-                        spawn_compress(path, level);
-                    }
                 }
             }
 
@@ -118,98 +126,106 @@ impl StorageWriter {
     }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Spawn a blocking task to compress `path` with zstd, then delete the original.
-/// Produces `{path}.zst` alongside the original.
-fn spawn_compress(path: PathBuf, level: i32) {
-    tokio::task::spawn_blocking(move || {
-        let zst_path = path.with_extension("mpack.zst");
-        let result = (|| -> anyhow::Result<()> {
-            let input = File::open(&path)?;
-            let output = File::create(&zst_path)?;
-            let mut encoder = zstd::Encoder::new(output, level)?;
-            let mut reader = std::io::BufReader::new(input);
-            std::io::copy(&mut reader, &mut encoder)?;
-            encoder.finish()?;
-            fs::remove_file(&path)?;
-            Ok(())
-        })();
-
-        match result {
-            Ok(()) => info!(
-                "StorageWriter: compressed {} → {}",
-                path.display(),
-                zst_path.display()
-            ),
-            Err(e) => error!(
-                "StorageWriter: compression failed for {}: {e}",
-                path.display()
-            ),
-        }
-    });
-}
-
+/// Open (or reuse) the CSV writer for `key` on `today`. Writes header
+/// when creating a new file; appends when re-opening an existing file
+/// (`csv::Writer` does not auto-write headers when wrapping a non-empty
+/// file, which is what we want for resume-on-restart).
 fn get_or_open<'a>(
-    handles: &'a mut HashMap<String, (BufWriter<File>, String)>,
+    handles: &'a mut HashMap<String, OpenFile>,
     key: &str,
     today: &str,
     config: &StorageConfig,
-) -> Option<&'a mut BufWriter<File>> {
-    let stale = matches!(handles.get(key), Some((_, date))
-        if matches!(config.rotation, RotationPolicy::Daily) && date.as_str() != today);
-
+    header: &[String],
+) -> Option<&'a mut OpenFile> {
+    // Rotate if date changed.
+    let stale = matches!(handles.get(key), Some(of)
+        if matches!(config.rotation, RotationPolicy::Daily) && of.date.as_str() != today);
     if stale {
-        // Flush and close the old writer before opening a new one.
-        if let Some((mut old_writer, old_date)) = handles.remove(key) {
-            if let Err(e) = old_writer.flush() {
+        if let Some(mut old) = handles.remove(key) {
+            if let Err(e) = old.writer.flush() {
                 error!("StorageWriter: flush on rotate failed for {key}: {e}");
             }
-            // old_writer dropped here — file handle closed before compress reads it
-            if let Some(level) = config.zstd_level {
-                let (exchange, symbol, kind) = parse_key(key);
-                let path = config
-                    .base_path
-                    .join(exchange)
-                    .join(symbol)
-                    .join(filename_for(&old_date, kind, RotationPolicy::Daily));
-                info!("StorageWriter: rotated {key} ({old_date} → {today})");
-                spawn_compress(path, level);
-            }
+            // old dropped → file closed
+            info!("StorageWriter: rotated {key} ({} → {today})", old.date);
         }
     }
 
     if !handles.contains_key(key) {
-        let (exchange, symbol, kind) = parse_key(key);
-
-        let dir = config.base_path.join(exchange).join(symbol);
+        let dir = output_dir(&config.base_path, key);
         if let Err(e) = fs::create_dir_all(&dir) {
             error!("StorageWriter: failed to create dir {}: {e}", dir.display());
             return None;
         }
 
-        let filename = filename_for(today, kind, config.rotation);
+        let filename = filename_for_key(today, key, config.rotation);
         let path = dir.join(&filename);
+        let preexisting = path.exists() && path.metadata().map(|m| m.len() > 0).unwrap_or(false);
 
-        let file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let file = match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => f,
             Err(e) => {
                 error!("StorageWriter: failed to open {}: {e}", path.display());
                 return None;
             }
         };
+        let mut writer = csv::WriterBuilder::new()
+            .has_headers(false) // we control header writing ourselves
+            .from_writer(file);
 
-        handles.insert(key.to_string(), (BufWriter::new(file), today.to_string()));
+        if !preexisting {
+            if let Err(e) = writer.write_record(header) {
+                error!("StorageWriter: header write failed for {key}: {e}");
+                return None;
+            }
+        }
+
+        handles.insert(
+            key.to_string(),
+            OpenFile {
+                writer,
+                date: today.to_string(),
+            },
+        );
         info!("StorageWriter: opened {}", path.display());
     }
 
-    handles.get_mut(key).map(|(w, _)| w)
+    handles.get_mut(key)
 }
 
-/// Split a 3-part key `"exchange:symbol:kind"` into its components.
-/// `kind` is empty for snapshots (default file) or e.g. `"trades"` for the
-/// `-trades` suffix variant. Older 2-part keys (no trailing colon) treat
-/// `kind` as empty.
+/// Output dir for a key.
+/// - Market data: `{base}/{exchange}/{symbol}/`
+/// - User events: `{base}/events/`
+fn output_dir(base: &PathBuf, key: &str) -> PathBuf {
+    if key.starts_with("events::") {
+        base.join("events")
+    } else {
+        let (exchange, symbol, _) = parse_key(key);
+        base.join(exchange).join(symbol)
+    }
+}
+
+/// Filename for a key on a given date.
+/// - Market-data snapshots: `{date}.csv` / `data.csv`
+/// - Market-data trades:    `{date}-trades.csv` / `trades.csv`
+/// - User events:           `{date}.csv` / `data.csv`
+fn filename_for_key(date: &str, key: &str, rotation: RotationPolicy) -> String {
+    if key.starts_with("events::") {
+        return match rotation {
+            RotationPolicy::Daily => format!("{date}.csv"),
+            RotationPolicy::None => "data.csv".to_string(),
+        };
+    }
+    let (_, _, kind) = parse_key(key);
+    match (rotation, kind) {
+        (RotationPolicy::Daily, "") => format!("{date}.csv"),
+        (RotationPolicy::Daily, k) => format!("{date}-{k}.csv"),
+        (RotationPolicy::None, "") => "data.csv".to_string(),
+        (RotationPolicy::None, k) => format!("{k}.csv"),
+    }
+}
+
 fn parse_key(key: &str) -> (&str, &str, &str) {
     let mut parts = key.splitn(3, ':');
     let exchange = parts.next().unwrap_or("unknown");
@@ -218,25 +234,34 @@ fn parse_key(key: &str) -> (&str, &str, &str) {
     (exchange, symbol, kind)
 }
 
-/// Build the on-disk filename for a given date / kind / rotation policy.
-/// - snapshots (kind == ""): `{date}.mpack` or `data.mpack`
-/// - other (kind == "trades"): `{date}-trades.mpack` or `trades.mpack`
-fn filename_for(date: &str, kind: &str, rotation: RotationPolicy) -> String {
-    match (rotation, kind) {
-        (RotationPolicy::Daily, "") => format!("{date}.mpack"),
-        (RotationPolicy::Daily, k) => format!("{date}-{k}.mpack"),
-        (RotationPolicy::None, "") => "data.mpack".to_string(),
-        (RotationPolicy::None, k) => format!("{k}.mpack"),
-    }
+fn trade_header() -> Vec<String> {
+    vec![
+        "ts_ns".into(),
+        "price".into(),
+        "size".into(),
+        "side".into(),
+        "fee_rate_bps".into(),
+        "trade_id".into(),
+    ]
 }
 
-fn write_record<T: serde::Serialize>(
-    writer: &mut BufWriter<File>,
-    record: &T,
-) -> anyhow::Result<()> {
-    let payload = rmp_serde::to_vec_named(record)?;
-    let len = payload.len() as u32;
-    writer.write_all(&len.to_le_bytes())?;
-    writer.write_all(&payload)?;
-    Ok(())
+fn user_event_header() -> Vec<String> {
+    // Must match `UserEventRecord` field order, since the CSV writer is
+    // header-less and `serialize()` emits fields in declaration order.
+    vec![
+        "ts_ns".into(),
+        "type".into(),
+        "exchange".into(),
+        "symbol".into(),
+        "side".into(),
+        "px".into(),
+        "qty".into(),
+        "filled".into(),
+        "status".into(),
+        "fee".into(),
+        "taker_oid".into(),
+        "client_oid".into(),
+        "exchange_oid".into(),
+        "maker_orders".into(),
+    ]
 }

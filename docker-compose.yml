@@ -74,8 +74,9 @@ services:
     depends_on:
       - redis
     ports:
-      - "127.0.0.1:5555:5555"
-      - "127.0.0.1:5556:5556"
+      - "127.0.0.1:5555:5555"  # market PUB
+      - "127.0.0.1:5556:5556"  # control ROUTER (subscribe handshake)
+      - "127.0.0.1:5559:5559"  # user-event PUB (consumed by trading_engine)
     restart: unless-stopped
 
   executor:

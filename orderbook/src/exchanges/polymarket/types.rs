@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Market channel wire types
@@ -124,7 +124,11 @@ pub struct PolyTradeEvent {
 }
 
 /// One maker order entry nested inside a `PolyTradeEvent`.
-#[derive(Debug, Deserialize)]
+///
+/// `Serialize` is implemented so the trade-parser can JSON-encode the list
+/// of maker orders into `UserEvent::Fill::maker_orders` for downstream
+/// research / recorder consumption.
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PolyMakerOrder {
     pub order_id: String,
     pub asset_id: String,

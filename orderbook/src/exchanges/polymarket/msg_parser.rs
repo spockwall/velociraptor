@@ -12,6 +12,24 @@ use libs::time::now_ns;
 use libs::time::parse_timestamp_ms;
 use tracing::{error, info, warn};
 
+/// Which Polymarket WS channel this parser instance is bound to.
+///
+/// Two channels exist (`/ws/market` vs `/ws/user`) and they have *different*
+/// keepalive expectations:
+///
+///   - **Market channel**: no application-level pings required. The server
+///     happily holds the connection open between messages.
+///   - **User channel**: client must send the literal text `"PING"` every
+///     ~50s as a text frame. Server replies with text `"PONG"`. Without
+///     this the server idle-disconnects after a few minutes.
+///
+/// `build_ping` keys off this so each WS gets the right keepalive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolymarketChannel {
+    Market,
+    User,
+}
+
 /// Parses all Polymarket WebSocket messages — both public market-channel events
 /// and private user-channel events — into [`StreamMessage`].
 ///
@@ -25,12 +43,24 @@ use tracing::{error, info, warn};
 /// - `"trade"` → `StreamMessage::UserEvent(UserEvent::Fill)`
 pub struct PolymarketMessageParser {
     exchange_name: ExchangeName,
+    channel: PolymarketChannel,
 }
 
 impl PolymarketMessageParser {
+    /// Build a parser for the public market channel. Default for back-compat.
     pub fn new() -> Self {
+        Self::for_channel(PolymarketChannel::Market)
+    }
+
+    /// Build a parser for the private user channel.
+    pub fn for_user() -> Self {
+        Self::for_channel(PolymarketChannel::User)
+    }
+
+    pub fn for_channel(channel: PolymarketChannel) -> Self {
         Self {
             exchange_name: ExchangeName::Polymarket,
+            channel,
         }
     }
 }
@@ -95,10 +125,16 @@ impl MsgParserTrait<StreamMessage> for PolymarketMessageParser {
         Ok(messages)
     }
 
-    /// Client sends `"PING"` every ~50s on the user channel; server replies `"PONG"`.
-    /// The market channel does not require application-level pings.
+    /// Client sends `"PING"` every ~50s **on the user channel only**;
+    /// server replies `"PONG"`. The market channel doesn't require
+    /// application-level pings — return `None` so the connection falls
+    /// back to a WS-protocol ping frame (auto-pong by tungstenite handles
+    /// it for free).
     fn build_ping(&self) -> Option<String> {
-        Some("PING".to_string())
+        match self.channel {
+            PolymarketChannel::User => Some("PING".to_string()),
+            PolymarketChannel::Market => None,
+        }
     }
 
     fn is_pong(&self, text: &str) -> bool {
@@ -274,9 +310,26 @@ impl PolymarketMessageParser {
         let px: f64 = t.price.parse().unwrap_or(0.0);
         let qty: f64 = t.size.parse().unwrap_or(0.0);
 
+        // Empty taker_order_id (Polymarket sometimes omits it for self-trades
+        // or batched fills) → `None`. Same approach for the maker_orders blob.
+        let taker_oid = if t.taker_order_id.is_empty() {
+            None
+        } else {
+            Some(t.taker_order_id)
+        };
+        let maker_orders = if t.maker_orders.is_empty() {
+            None
+        } else {
+            serde_json::to_value(&t.maker_orders).ok()
+        };
+
         Some(StreamMessage::UserEvent(UserEvent::Fill {
             exchange: "polymarket".into(),
-            client_oid: t.taker_order_id,
+            taker_oid,
+            // Polymarket trade events don't carry a client_oid distinct from
+            // the taker_oid; downstream consumers can match by exchange_oid
+            // against the corresponding `OrderUpdate`.
+            client_oid: None,
             exchange_oid: t.id,
             symbol: t.asset_id,
             side,
@@ -284,6 +337,7 @@ impl PolymarketMessageParser {
             qty,
             fee: 0.0, // Polymarket does not include fee in the trade event
             ts_ns: now_ns(),
+            maker_orders,
         }))
     }
 
@@ -483,7 +537,7 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         let StreamMessage::UserEvent(UserEvent::Fill {
             exchange_oid,
-            client_oid,
+            taker_oid,
             symbol,
             side,
             px,
@@ -496,8 +550,8 @@ mod tests {
 
         assert_eq!(exchange_oid, "28c4d2eb-bbea-40e7-a9f0-b2fdb56b2c2e");
         assert_eq!(
-            client_oid,
-            "0x06bc63e346ed4ceddce9efd6b3af37c8f8f440c92fe7da6b2d0f9e4ccbc50c42"
+            taker_oid.as_deref(),
+            Some("0x06bc63e346ed4ceddce9efd6b3af37c8f8f440c92fe7da6b2d0f9e4ccbc50c42"),
         ); // taker_order_id
         assert_eq!(
             symbol,
@@ -509,11 +563,24 @@ mod tests {
     }
 
     #[test]
-    fn ping_pong() {
+    fn ping_pong_market_channel_silent() {
+        // Market channel: no application-level keepalive — relies on
+        // WS-protocol pings, so `build_ping` returns `None` and the
+        // generic heartbeat code sends a WS `Ping` frame instead.
         let p = parser();
-        assert_eq!(p.build_ping(), Some("PING".to_string()));
+        assert_eq!(p.build_ping(), None);
+        // pong recogniser still works for completeness.
         assert!(p.is_pong("PONG"));
         assert!(p.is_pong("pong"));
         assert!(!p.is_ping("PING"));
+    }
+
+    #[test]
+    fn ping_pong_user_channel_sends_text_ping() {
+        // User channel: must send literal text "PING" every ~50s.
+        let p = PolymarketMessageParser::for_user();
+        assert_eq!(p.build_ping(), Some("PING".to_string()));
+        assert!(p.is_pong("PONG"));
+        assert!(p.is_pong("pong"));
     }
 }

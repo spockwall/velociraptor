@@ -20,10 +20,16 @@ impl<'a, M: BasicClientMsgTrait> HearthbeatProtocol<'a, M> {
         self.exchange_name
     }
 
-    /// Build ping message for this exchange
+    /// Build ping message for this exchange.
+    ///
+    /// Convention: when the parser returns `Some(text)`, the exchange uses
+    /// **application-level** ping/pong over WS text frames (OKX, Hyperliquid,
+    /// Polymarket user channel). When `None`, fall back to a WS-protocol
+    /// ping frame, which suffices for exchanges that don't define their own
+    /// keepalive (Binance, Kalshi, Polymarket market channel).
     pub fn build_ping(&self) -> Message {
         match self.parser.build_ping() {
-            Some(text) => Message::Ping(text.into()),
+            Some(text) => Message::Text(text.into()),
             None => Message::Ping(vec![].into()),
         }
     }

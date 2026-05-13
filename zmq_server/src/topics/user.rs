@@ -18,8 +18,6 @@ impl Topic for UserEventTopic<'_> {
         match self.0 {
             UserEvent::Fill { exchange, .. } => format!("user.{exchange}.fill"),
             UserEvent::OrderUpdate { exchange, .. } => format!("user.{exchange}.order_update"),
-            UserEvent::Balance { exchange, .. } => format!("user.{exchange}.balance"),
-            UserEvent::Position { exchange, .. } => format!("user.{exchange}.position"),
         }
     }
 
@@ -44,7 +42,8 @@ mod tests {
     fn fill() -> UserEvent {
         UserEvent::Fill {
             exchange: "polymarket".into(),
-            client_oid: "c1".into(),
+            taker_oid: Some("c1".into()),
+            client_oid: None,
             exchange_oid: "x1".into(),
             symbol: "TOK".into(),
             side: Side::Buy,
@@ -52,6 +51,7 @@ mod tests {
             qty: 10.0,
             fee: 0.01,
             ts_ns: 0,
+            maker_orders: None,
         }
     }
 
@@ -66,7 +66,12 @@ mod tests {
         let t = UserEventTopic(&ev);
         let bytes = t.encode().unwrap();
         let decoded: UserEvent = super::super::decode(&bytes).unwrap();
-        let UserEvent::Fill { px, qty, symbol, .. } = decoded else { panic!() };
+        let UserEvent::Fill {
+            px, qty, symbol, ..
+        } = decoded
+        else {
+            panic!()
+        };
         assert!((px - 0.5).abs() < 1e-9);
         assert_eq!(qty, 10.0);
         assert_eq!(symbol, "TOK");

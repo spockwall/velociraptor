@@ -104,6 +104,15 @@ impl StreamSystem {
         self.engine_bus.clone()
     }
 
+    /// Sender that pushes `StreamMessage`s into the running engine.
+    /// Per-window tasks (e.g. Polymarket user-channel scheduler) use this to
+    /// forward private events onto the main bus so transport layers see them.
+    pub fn message_sender(
+        &self,
+    ) -> mpsc::UnboundedSender<crate::types::orderbook::StreamMessage> {
+        self.message_tx.clone()
+    }
+
     pub fn orderbooks(&self) -> Arc<dashmap::DashMap<String, Arc<Orderbook>>> {
         self.orderbooks.clone()
     }

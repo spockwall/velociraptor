@@ -47,6 +47,20 @@ impl StreamEventSource for StreamEngineBus {
     }
 }
 
+impl StreamEngineBus {
+    /// Publish a fully-formed `StreamEvent` directly onto the broadcast bus.
+    ///
+    /// Used by per-window schedulers (Polymarket/Kalshi) to forward
+    /// snapshots from their isolated engines onto the main engine's bus so
+    /// transport layers (ZMQ PUB) see them.
+    ///
+    /// Returns the receiver count after sending, or 0 when no subscribers
+    /// are connected (the send is dropped — not an error).
+    pub fn publish(&self, event: StreamEvent) -> usize {
+        self.event_broadcast_tx.send(event).unwrap_or(0)
+    }
+}
+
 impl StreamEngine {
     pub fn new(event_broadcast_capacity: usize, snapshot_depth: usize) -> Self {
         let (message_tx, message_rx) = mpsc::unbounded_channel();

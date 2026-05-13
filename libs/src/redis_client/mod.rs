@@ -53,24 +53,6 @@ impl RedisHandle {
         }
     }
 
-    // ── Account state ─────────────────────────────────────────────────────────
-
-    /// Overwrite the position for `(exchange, symbol)`. Payload is msgpack bytes.
-    pub async fn set_position(&self, exchange: &str, symbol: &str, payload: &[u8]) {
-        let key = keys::RedisKey::position(exchange, symbol);
-        if let Err(e) = self.conn.clone().set::<_, _, ()>(&key, payload).await {
-            error!("Redis SET {key} failed: {e}");
-        }
-    }
-
-    /// Overwrite the balance for `(exchange, asset)`. Payload is msgpack bytes.
-    pub async fn set_balance(&self, exchange: &str, asset: &str, payload: &[u8]) {
-        let key = keys::RedisKey::balance(exchange, asset);
-        if let Err(e) = self.conn.clone().set::<_, _, ()>(&key, payload).await {
-            error!("Redis SET {key} failed: {e}");
-        }
-    }
-
     // ── Read helpers ──────────────────────────────────────────────────────────
 
     /// GET a raw msgpack blob from `key`. Returns `None` if the key is absent.
