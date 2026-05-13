@@ -2920,6 +2920,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "zstd",
 ]
 

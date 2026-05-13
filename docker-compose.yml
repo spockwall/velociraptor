@@ -71,6 +71,7 @@ services:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
       - ./data:/app/data
+      - ./data/syslog:/app/syslog
     depends_on:
       - redis
     ports:
@@ -98,6 +99,7 @@ services:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
       - ./data:/app/data
+      - ./data/syslog:/app/syslog
     depends_on:
       - redis
     ports:

@@ -23,7 +23,7 @@ hex = { workspace = true }
 # `k256` stays only because we spell the concrete signer type
 # `LocalSigner<k256::ecdsa::SigningKey>` in `polymarket.rs`.
 k256 = { workspace = true }
-libs = { path = "../libs", features = ["redis"] }
+libs = { path = "../libs", features = ["redis", "logging"] }
 lru = { workspace = true }
 polymarket_client_sdk_v2 = { version = "0.6.0-canary.1", features = ["clob", "gamma"] }
 prometheus = { workspace = true }

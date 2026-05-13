@@ -16,7 +16,7 @@ use anyhow::Result;
 use clap::Parser;
 use libs;
 use libs::configs::Config;
-use orderbook::configs::init_logging;
+use libs::logging::init_logging;
 use orderbook::connection::SystemControl;
 use orderbook::StreamEngine;
 use tracing::error;
@@ -38,29 +38,29 @@ const POLYMARKET_CREDENTIALS_PATH: &str = "credentials/polymarket.yaml";
 struct Args {
     #[arg(long, env = "CONFIG_FILE", default_value = "configs/server.yaml")]
     config: String,
-
-    #[arg(long, env = "LOG_LEVEL", default_value = "info")]
-    log_level: String,
-
-    #[arg(long, env = "LOG_JSON", default_value_t = false)]
-    log_json: bool,
 }
 
 #[tokio::main]
 async fn main() {
     let _ = dotenvy::dotenv();
     let args = Args::parse();
-    init_logging(&args.log_level, args.log_json);
 
-    if let Err(e) = run(&args.config).await {
+    // Load config first so `logging:` settings can drive tracing setup.
+    let cfg = Config::load(&args.config);
+    let _guards = init_logging(
+        "server",
+        std::path::Path::new(&cfg.logging.dir),
+        &cfg.logging.level,
+        cfg.logging.json,
+    );
+
+    if let Err(e) = run(cfg).await {
         error!("Fatal: {e:#}");
         std::process::exit(1);
     }
 }
 
-async fn run(config_path: &str) -> Result<()> {
-    let cfg = Config::load(config_path);
-
+async fn run(cfg: Config) -> Result<()> {
     // ── Static exchange config ─────────────────────────────────────────────────
 
     let mut system_cfg = StreamSystemConfig::new();
@@ -79,7 +79,7 @@ async fn run(config_path: &str) -> Result<()> {
     let has_kalshi     = cfg.kalshi.market.iter().any(|m| m.enable);
 
     if !has_static && !has_polymarket && !has_kalshi {
-        anyhow::bail!("No exchanges enabled in {config_path}");
+        anyhow::bail!("No exchanges enabled in config");
     }
 
     // ── Engine + optional Redis hooks ─────────────────────────────────────────

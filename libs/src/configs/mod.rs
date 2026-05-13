@@ -3,6 +3,7 @@ pub mod binance;
 pub mod executor;
 pub mod hyperliquid;
 pub mod kalshi;
+pub mod logging;
 pub mod okx;
 pub mod polymarket;
 pub mod redis;
@@ -14,6 +15,7 @@ pub use binance::{BinanceConfig, BinanceSpotConfig};
 pub use executor::ExecutorConfig;
 pub use hyperliquid::HyperliquidConfig;
 pub use kalshi::{KalshiConfig, KalshiMarketConfig};
+pub use logging::LoggingConfig;
 pub use okx::OkxConfig;
 pub use polymarket::{PolymarketConfig, PolymarketFileConfig, PolymarketMarketConfig};
 pub use redis::RedisConfig;
@@ -31,6 +33,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub redis: RedisConfig,
+    pub logging: LoggingConfig,
     pub backend: BackendConfig,
     pub binance: BinanceConfig,
     pub binance_spot: BinanceSpotConfig,

@@ -2,6 +2,8 @@ pub mod configs;
 pub mod constants;
 pub mod credentials;
 pub mod endpoints;
+#[cfg(feature = "logging")]
+pub mod logging;
 pub mod protocol;
 #[cfg(feature = "redis")]
 pub mod redis_client;

@@ -3,6 +3,11 @@ server:
   router_endpoint: "tcp://*:5556"
   render_interval: 300
 
+logging:
+  level: "info"
+  json: false
+  dir: "/app/syslog"     # files: {dir}/{service}/log.YYYY-MM-DD and …/error.log.YYYY-MM-DD
+
 redis:
   enabled: true
   url: "redis://redis:6379"
@@ -37,7 +42,7 @@ okx:
   enabled: true
   symbols:
     - "BTC-USDT"
-    - "ETH-USDT-SWAP"
+    - "ETH-USDT"
 
 hyperliquid:
   enabled: true

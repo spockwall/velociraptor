@@ -18,47 +18,23 @@ use libs::configs::Config;
 use libs::credentials::PolymarketCredentials;
 use libs::endpoints::polymarket::polymarket as poly_ep;
 use libs::protocol::ExchangeName;
+use libs::logging::init_logging;
 use libs::redis_client::RedisHandle;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
-/// Executor CLI. Most settings come from `--config` (the `executor:` section
-/// of a Velociraptor YAML config). The flags below either point at that file
-/// or override individual settings for ad-hoc runs.
+/// Executor CLI. All runtime settings come from `--config` (the `executor:`
+/// and `redis:` sections of a Velociraptor YAML config). Only path-to-config
+/// and credentials path remain as CLI flags.
 #[derive(Parser, Debug)]
 #[command(name = "executor", about = "Velociraptor order executor")]
 struct Args {
-    /// Path to the unified YAML config (e.g. `configs/example.yaml`). The
-    /// `executor:` section drives every default below.
+    /// Path to the unified YAML config (e.g. `configs/example.yaml`).
     #[arg(long, env = "CONFIG_FILE", default_value = "configs/example.yaml")]
     config: String,
 
     /// Path to the credentials file (must contain a `polymarket:` section).
     #[arg(long, default_value = "credentials/polymarket.yaml")]
     credentials: String,
-
-    #[arg(long, env = "REDIS_URL")]
-    redis_url: Option<String>,
-
-    /// Override the executor section's `router_endpoint`.
-    #[arg(long)]
-    router_endpoint: Option<String>,
-
-    /// Override the executor section's `audit_dir`.
-    #[arg(long)]
-    audit_dir: Option<String>,
-
-    /// Override the executor section's `audit_stream_cap`.
-    #[arg(long)]
-    audit_stream_cap: Option<usize>,
-
-    /// Override the executor section's `metrics_addr`.
-    #[arg(long)]
-    metrics_addr: Option<String>,
-
-    /// Override the executor section's `polymarket_env`.
-    #[arg(long)]
-    polymarket_env: Option<String>,
 
     /// Skip the credentials file-mode check (useful in dev / docker).
     #[arg(long)]
@@ -67,35 +43,25 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let env_filter = EnvFilter::new("info");
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
     let args = Args::parse();
 
-    // ── Resolve effective settings: file → CLI override ──────────────────
+    // Load config first so `logging:` settings can drive tracing setup.
     let cfg = Config::load(&args.config);
+    let _guards = init_logging(
+        "executor",
+        std::path::Path::new(&cfg.logging.dir),
+        &cfg.logging.level,
+        cfg.logging.json,
+    );
+
+    // ── Effective settings (all from config) ─────────────────────────────
     let exec_cfg = &cfg.executor;
-    let router_endpoint = args
-        .router_endpoint
-        .clone()
-        .unwrap_or_else(|| exec_cfg.router_endpoint.clone());
-    let audit_dir = args
-        .audit_dir
-        .clone()
-        .unwrap_or_else(|| exec_cfg.audit_dir.clone());
-    let audit_stream_cap = args.audit_stream_cap.unwrap_or(exec_cfg.audit_stream_cap);
-    let metrics_addr_str = args
-        .metrics_addr
-        .clone()
-        .unwrap_or_else(|| exec_cfg.metrics_addr.clone());
-    let polymarket_env = args
-        .polymarket_env
-        .clone()
-        .unwrap_or_else(|| exec_cfg.polymarket_env.clone());
-    let redis_url = args
-        .redis_url
-        .clone()
-        .unwrap_or_else(|| cfg.redis.url.clone());
+    let router_endpoint = exec_cfg.router_endpoint.clone();
+    let audit_dir = exec_cfg.audit_dir.clone();
+    let audit_stream_cap = exec_cfg.audit_stream_cap;
+    let metrics_addr_str = exec_cfg.metrics_addr.clone();
+    let polymarket_env = exec_cfg.polymarket_env.clone();
+    let redis_url = cfg.redis.url.clone();
 
     info!(
         config = %args.config,
