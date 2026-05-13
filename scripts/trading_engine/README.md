@@ -27,7 +27,7 @@ zmq_server PUB ──▶ MarketFeed (SUB :5555)   topic = "{exchange}:{symbol}"
 executor ROUTER (DEALER :5557) ─── OrderRouter
                           ▲
                           │ fills, order_updates
-zmq_server user PUB ──▶ UserFeed (SUB ipc:///tmp/trading/ws_status.sock)
+zmq_server user PUB ──▶ UserFeed (SUB tcp://127.0.0.1:5559)
 ```
 
 ## Prerequisites
@@ -39,7 +39,7 @@ The engine talks to three already-running services. Bring them up first
 |------------------|-----------------------------------------------|---------------------------------|
 | backend          | `http://127.0.0.1:3000`                       | `cargo run --bin backend`       |
 | zmq_server       | `tcp://127.0.0.1:5555` (market PUB)           | `cargo run --bin orderbook_server` |
-| zmq_server       | `ipc:///tmp/trading/ws_status.sock` (user PUB)| (same)                          |
+| zmq_server       | `tcp://127.0.0.1:5559` (user PUB)| (same)                          |
 | executor         | `tcp://127.0.0.1:5557` (order ROUTER)         | `cargo run -p executor`         |
 
 Easiest path: `make up` (see repo root README).
@@ -167,7 +167,7 @@ SUBs the `zmq_server` user PUB and pretty-prints every event. Useful as a side-b
 | `--backend-url`          | `http://127.0.0.1:3000`                  | Backend HTTP host                                                             |
 | `--market-pub`           | `tcp://127.0.0.1:5555`                   | `zmq_server` market PUB                                                       |
 | `--market-router`        | `tcp://127.0.0.1:5556`                   | `zmq_server` control-plane ROUTER                                             |
-| `--user-pub`             | `ipc:///tmp/trading/ws_status.sock`      | `zmq_server` user PUB                                                         |
+| `--user-pub`             | `tcp://127.0.0.1:5559`      | `zmq_server` user PUB                                                         |
 | `--router-endpoint`      | `tcp://127.0.0.1:5557`                   | Executor order ROUTER                                                         |
 | `--log-level`            | `info`                                   | `debug` / `info` / `warning` / `error`                                        |
 
@@ -198,9 +198,9 @@ python -m scripts.trading_engine --strategy probe \
     --user-pub tcp://10.0.0.5:5559 \
     --router-endpoint tcp://10.0.0.5:5557
 ```
-> Note: the default user PUB is an IPC socket. To reach it across hosts /
-> containers, configure `zmq_server` to expose a TCP user-PUB endpoint and
-> point `--user-pub` at it.
+> Note: the user PUB binds on `tcp://*:5559` inside the orderbook_server
+> container; docker-compose maps `127.0.0.1:5559` on the host, so the
+> default `--user-pub tcp://127.0.0.1:5559` works out of the box.
 
 ## Safety behaviours built in
 

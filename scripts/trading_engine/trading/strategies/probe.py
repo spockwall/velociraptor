@@ -68,6 +68,7 @@ class ProbeStrategy(Strategy):
         target_qty = max(round(1.0 / target_px, 2), 1.0)
         client_oid = f"te-probe-{self.window.full_slug[:18]}-{side_name}-{int(time.time() * 1000)}"
 
+        attribution = self._attribution(side_name)
         try:
             ack = self.router.place_limit(
                 symbol=side.asset_id,
@@ -75,6 +76,7 @@ class ProbeStrategy(Strategy):
                 px=target_px,
                 qty=target_qty,
                 client_oid=client_oid,
+                **attribution,
             )
         except Exception as e:  # noqa: BLE001
             log.warning("[%s/%s] probe place failed: %s", self.label, side_name, e)
@@ -93,7 +95,7 @@ class ProbeStrategy(Strategy):
         # Immediate cancel — no wait, no other tick in between.
         if oid:
             try:
-                self.router.cancel(oid)
+                self.router.cancel(oid, **attribution)
                 log.info(
                     "[%s/%s] PROBE cancel ok oid=%s",
                     self.label,

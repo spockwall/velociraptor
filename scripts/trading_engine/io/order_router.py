@@ -7,6 +7,10 @@ Adds a single helper class with stable semantics for the strategy loop:
 - `cancel_all()` → for clean shutdown
 - `heartbeat()` → diagnostic round-trip; returns the inner Ack dict
 
+If an `EventLog` is supplied, every successful (and failed) call is recorded
+to disk for research. Strategies pass their own `strategy=` / `label=` so the
+log row carries attribution.
+
 This module also doubles as the heartbeat CLI when run as a module:
 
     python -m scripts.trading_engine.io.order_router            # 3 heartbeats
@@ -22,6 +26,7 @@ import logging
 import time
 from typing import Optional
 
+from .event_log import EventLog
 from .executor_client import (
     ExecutorClient,
     cancel as _cancel_req,
@@ -41,10 +46,12 @@ class OrderRouter:
         endpoint: str = "tcp://127.0.0.1:5557",
         exchange: str = "polymarket",
         timeout_ms: int = 10_000,
+        event_log: Optional[EventLog] = None,
     ):
         self._endpoint = endpoint
         self._exchange = exchange
         self._cli = ExecutorClient(endpoint, timeout_ms=timeout_ms)
+        self._event_log = event_log
 
     # ── lifecycle ──
 
@@ -65,6 +72,9 @@ class OrderRouter:
         qty: float,
         client_oid: Optional[str] = None,
         tif: str = "GTC",
+        # Attribution for the event log; ignored when no EventLog attached.
+        strategy: Optional[str] = None,
+        label: Optional[str] = None,
     ) -> dict:
         """Place a GTC limit. Returns the inner OrderAck dict on success.
         Raises RuntimeError on Err."""
@@ -81,29 +91,75 @@ class OrderRouter:
             tif=tif,
         )
         resp = self._cli.send(req)
+        latency_ms = resp.get("_meta", {}).get("latency_ms")
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
+            self._record(
+                "place", strategy=strategy, label=label, side=side, symbol=symbol,
+                px=px, qty=qty, client_oid=client_oid, ok=False,
+                latency_ms=latency_ms, error=str(err),
+            )
             raise RuntimeError(f"place failed: {err}")
-        return unwrap(resp)
+        ack = unwrap(resp)
+        self._record(
+            "place", strategy=strategy, label=label, side=side, symbol=symbol,
+            px=px, qty=qty, client_oid=client_oid,
+            exchange_oid=ack.get("exchange_oid"),
+            ok=True, latency_ms=latency_ms,
+        )
+        return ack
 
-    def cancel(self, exchange_oid: str) -> dict:
+    def cancel(
+        self,
+        exchange_oid: str,
+        *,
+        strategy: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> dict:
         resp = self._cli.send(_cancel_req(self._exchange, exchange_oid))
+        latency_ms = resp.get("_meta", {}).get("latency_ms")
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
             # NotFound is a soft outcome — the order already terminated.
             if isinstance(err, dict) and err.get("kind") == "not_found":
                 log.debug("cancel %s: already gone", exchange_oid)
+                self._record(
+                    "cancel", strategy=strategy, label=label,
+                    exchange_oid=exchange_oid, ok=True, latency_ms=latency_ms,
+                    extra={"count": 0, "already_gone": True},
+                )
                 return {"result": "cancel_count", "count": 0}
+            self._record(
+                "cancel", strategy=strategy, label=label,
+                exchange_oid=exchange_oid, ok=False, latency_ms=latency_ms,
+                error=str(err),
+            )
             raise RuntimeError(f"cancel failed: {err}")
-        return unwrap(resp)
+        out = unwrap(resp)
+        self._record(
+            "cancel", strategy=strategy, label=label, exchange_oid=exchange_oid,
+            ok=True, latency_ms=latency_ms,
+            extra={"count": int(out.get("count", 0))},
+        )
+        return out
 
-    def cancel_all(self) -> int:
+    def cancel_all(self, *, strategy: Optional[str] = None) -> int:
         resp = self._cli.send(_cancel_all_req(self._exchange))
+        latency_ms = resp.get("_meta", {}).get("latency_ms")
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
+            self._record(
+                "cancel_all", strategy=strategy, ok=False,
+                latency_ms=latency_ms, error=str(err),
+            )
             raise RuntimeError(f"cancel_all failed: {err}")
         inner = unwrap(resp)
-        return int(inner.get("count", 0))
+        count = int(inner.get("count", 0))
+        self._record(
+            "cancel_all", strategy=strategy, ok=True, latency_ms=latency_ms,
+            extra={"count": count},
+        )
+        return count
 
     def heartbeat(self) -> dict:
         """Send one Heartbeat. Returns the raw response dict (with `_meta.latency_ms`)
@@ -113,7 +169,18 @@ class OrderRouter:
         # Attach the original req_id so the CLI / caller can sanity-check
         # the round-trip identity without re-parsing the request.
         resp.setdefault("_meta", {})["req_id"] = req["req_id"]
+        self._record(
+            "heartbeat", ok=is_ok(resp),
+            latency_ms=resp.get("_meta", {}).get("latency_ms"),
+        )
         return resp
+
+    # ── inner ──
+
+    def _record(self, kind: str, **fields) -> None:
+        if self._event_log is None:
+            return
+        self._event_log.record_action(kind=kind, exchange=self._exchange, **fields)
 
 
 # ── CLI entrypoint (replaces scripts/poly_heartbeat.py) ─────────────────────

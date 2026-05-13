@@ -56,6 +56,7 @@ class OneShotStrategy(Strategy):
         target_qty = max(round(1.0 / target_px, 2), 1.0)
         client_oid = f"te-1shot-{self.window.full_slug[:18]}-{side_name}-{int(time.time() * 1000)}"
 
+        attribution = self._attribution(side_name)
         try:
             ack = self.router.place_limit(
                 symbol=side.asset_id,
@@ -63,6 +64,7 @@ class OneShotStrategy(Strategy):
                 px=target_px,
                 qty=target_qty,
                 client_oid=client_oid,
+                **attribution,
             )
         except Exception as e:  # noqa: BLE001
             log.warning("[%s/%s] one_shot place failed: %s", self.label, side_name, e)
@@ -80,7 +82,7 @@ class OneShotStrategy(Strategy):
 
         if oid:
             try:
-                self.router.cancel(oid)
+                self.router.cancel(oid, **attribution)
                 log.info(
                     "[%s/%s] ONE_SHOT cancel ok oid=%s",
                     self.label,

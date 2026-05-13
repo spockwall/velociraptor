@@ -25,6 +25,7 @@ import time
 
 from .cli import parse_args
 from .io import OrderRouter, UserFeed
+from .io.event_log import EventLog
 from .market import MarketFeed, MarketWindow, discover
 from .trading import Observer, Strategy, make_strategy
 
@@ -35,9 +36,15 @@ class Engine:
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.strategies: dict[str, Strategy] = {}  # keyed by full_slug
+        # Engine-side append-only log. `--no-engine-log` makes every record
+        # a no-op (constructor still returns a sentinel object).
+        self.event_log = EventLog(
+            base_dir=None if getattr(args, "no_engine_log", False) else args.engine_log_dir,
+            enabled=not getattr(args, "no_engine_log", False),
+        )
         self.market_feed = MarketFeed(args.market_pub, args.market_router)
         self.user_feed = UserFeed(args.user_pub, on_event=self._on_user_event)
-        self.router = OrderRouter(args.router_endpoint)
+        self.router = OrderRouter(args.router_endpoint, event_log=self.event_log)
         self._stop = threading.Event()
         self._lock = threading.Lock()
 
@@ -64,6 +71,7 @@ class Engine:
                 return obs.run()
             finally:
                 self.market_feed.stop()
+                self.event_log.close()
 
         # Trading strategies (probe / fill_once / one_shot / ...).
         self.user_feed.start()
@@ -87,6 +95,7 @@ class Engine:
                 self._shutdown_orders()
         self.market_feed.stop()
         self.user_feed.stop()
+        self.event_log.close()
         return 0
 
     def _all_strategies_done(self) -> bool:
@@ -162,6 +171,11 @@ class Engine:
     # ── user events ──
 
     def _on_user_event(self, topic: str, ev: dict) -> None:
+        # Record every received event first — even if no strategy claims it,
+        # research wants the full stream. `record_event` is a no-op when
+        # the log is disabled.
+        self.event_log.record_event(topic, ev)
+
         kind = ev.get("type")
         with self._lock:
             strats = list(self.strategies.values())

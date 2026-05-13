@@ -103,6 +103,11 @@ class Strategy(abc.ABC):
     def label(self) -> str:
         return self.window.full_slug
 
+    def _attribution(self, side_name: str) -> dict:
+        """Per-call kwargs passed to OrderRouter.place_limit / cancel so the
+        engine's event log captures which strategy + side fired the action."""
+        return {"strategy": self.name, "label": f"{self.label}/{side_name}"}
+
     # ── lifecycle (engine calls these) ──
 
     def tick(self) -> None:
@@ -112,11 +117,11 @@ class Strategy(abc.ABC):
 
     def cancel_all(self) -> None:
         """Cancel every live order we know about. Best-effort."""
-        for side in (self.yes, self.no):
+        for side_name, side in (("yes", self.yes), ("no", self.no)):
             if side.live_oid is None:
                 continue
             try:
-                self.router.cancel(side.live_oid)
+                self.router.cancel(side.live_oid, **self._attribution(side_name))
             except Exception as e:  # noqa: BLE001
                 log.warning("[%s] cancel %s failed: %s", self.label, side.live_oid, e)
             side.reset()
@@ -227,6 +232,7 @@ class Strategy(abc.ABC):
                 px=target_px,
                 qty=target_qty,
                 client_oid=client_oid,
+                **self._attribution(side_name),
             )
         except Exception as e:  # noqa: BLE001
             log.warning("[%s/%s] place failed: %s", self.label, side_name, e)
@@ -254,7 +260,7 @@ class Strategy(abc.ABC):
         if side.live_oid is None:
             return
         try:
-            self.router.cancel(side.live_oid)
+            self.router.cancel(side.live_oid, **self._attribution(side_name))
         except Exception as e:  # noqa: BLE001
             log.warning(
                 "[%s/%s] stale cancel failed (will overwrite anyway): %s",

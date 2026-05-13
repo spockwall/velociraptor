@@ -1,6 +1,6 @@
 """SUB on the user PUB. Surfaces fills + order_updates to a callback.
 
-Topics: `user.polymarket.{fill,order_update,balance,position}`.
+Topics: `user.polymarket.{fill,order_update}`.
 
 This module also doubles as the listener CLI when run as a module:
 
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 EventHandler = Callable[[str, dict], None]
 
-DEFAULT_ENDPOINT = "ipc:///tmp/trading/ws_status.sock"
+DEFAULT_ENDPOINT = "tcp://127.0.0.1:5559"
 DEFAULT_TOPIC_PREFIX = "user."
 
 
@@ -109,16 +109,6 @@ def _fmt_event(topic: str, ev: dict[str, Any]) -> str:
             f"[{ts}] {topic}  status={ev.get('status')}  side={ev.get('side')}  "
             f"px={ev.get('px')}  qty={ev.get('qty')}  filled={ev.get('filled')}  "
             f"oid={ev.get('exchange_oid')}"
-        )
-    if kind == "balance":
-        return (
-            f"[{ts}] {topic}  asset={ev.get('asset')}  "
-            f"free={ev.get('free')}  locked={ev.get('locked')}"
-        )
-    if kind == "position":
-        return (
-            f"[{ts}] {topic}  symbol={ev.get('symbol')}  "
-            f"size={ev.get('size')}  avg_px={ev.get('avg_px')}"
         )
     return f"[{ts}] {topic}  {json.dumps(ev, default=str)}"
 

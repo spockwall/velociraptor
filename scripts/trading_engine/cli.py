@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
         default="tcp://127.0.0.1:5556",
         help="zmq_server control-plane ROUTER for snapshot/bba subscribe handshake",
     )
-    p.add_argument("--user-pub", default="ipc:///tmp/trading/ws_status.sock")
+    p.add_argument("--user-pub", default="tcp://127.0.0.1:5559")
     p.add_argument("--router-endpoint", default="tcp://127.0.0.1:5557")
 
     # ── Strategy params ──
@@ -107,6 +107,22 @@ def parse_args() -> argparse.Namespace:
     )
 
     p.add_argument("--log-level", default="info")
+
+    # ── Engine event log (durable record of actions + received events) ──
+    p.add_argument(
+        "--engine-log-dir",
+        default="./data/engine_log",
+        help=(
+            "Directory for the engine's append-only action + event log "
+            "(daily-rotated JSONL). Two files per day under this dir: "
+            "actions/<date>.jsonl, events/<date>.jsonl."
+        ),
+    )
+    p.add_argument(
+        "--no-engine-log",
+        action="store_true",
+        help="Disable the engine event log entirely (no disk writes).",
+    )
     args = p.parse_args()
 
     # Resolve --strategy from --step if needed, then drop --step.
