@@ -15,7 +15,6 @@ use libs::redis_client::RedisHandle;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -54,9 +53,9 @@ async fn run(cfg: Config) -> Result<()> {
         .user_agent("velociraptor-backend/0.1")
         .build()?;
     let state = Arc::new(AppState { redis, gamma });
-    let app = router(state)
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+    // Per-route-group HTTP tracing is configured in `router()` (orderbook
+    // reads at DEBUG, everything else at INFO; 5xx always ERROR).
+    let app = router(state).layer(CorsLayer::permissive());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.backend.port));
     info!("Backend listening on http://{addr}");
