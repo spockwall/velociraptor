@@ -47,6 +47,13 @@ class Engine:
         self.router = OrderRouter(args.router_endpoint, event_log=self.event_log)
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        # Set when a tracked window has passed its end but no successor window
+        # has been discovered yet. Holds the wall-clock time the gap began so
+        # we can report how long the engine went dark. None = no open gap.
+        self._rollover_gap_since: float | None = None
+        # Fast-retry cadence (seconds) used while a rollover gap is open, so
+        # we don't wait a full --rediscover-secs to pick the new window up.
+        self._rollover_retry_secs = 2.0
 
     def run(self) -> int:
         self._handle_signals()
@@ -81,7 +88,21 @@ class Engine:
             try:
                 while not self._stop.is_set():
                     now = time.monotonic()
-                    if now - last_rediscover >= self.args.rediscover_secs:
+                    # Rediscover when either:
+                    #   (a) the periodic interval elapsed, or
+                    #   (b) a tracked window has rolled past its end (boundary
+                    #       crossed) — pick the new window up immediately
+                    #       instead of waiting up to --rediscover-secs, and
+                    #       keep retrying fast while the successor is still
+                    #       unresolved (zmq_server may not have registered its
+                    #       labels yet).
+                    interval_due = now - last_rediscover >= self.args.rediscover_secs
+                    rolled = self._has_window_rolled()
+                    gap_open = self._rollover_gap_since is not None
+                    retry_due = gap_open and (
+                        now - last_rediscover >= self._rollover_retry_secs
+                    )
+                    if interval_due or rolled or retry_due:
                         self._rediscover()
                         last_rediscover = now
                     self._tick()
@@ -110,6 +131,18 @@ class Engine:
 
     # ── discovery + lifecycle ──
 
+    def _has_window_rolled(self) -> bool:
+        """True if any currently-tracked window has passed its end time.
+
+        Window end is `window_start + interval_secs` (the engine already has
+        both on every `MarketWindow`), so this is a pure clock check — it does
+        not depend on the backend/Redis having registered the next window yet.
+        """
+        now = int(time.time())
+        with self._lock:
+            strats = list(self.strategies.values())
+        return any(s.window.window_end <= now for s in strats)
+
     def _rediscover(self) -> None:
         try:
             windows = discover(self.args.base_slugs, self.args.backend_url)
@@ -117,22 +150,62 @@ class Engine:
             log.warning("rediscover failed: %s", e)
             return
 
+        now = int(time.time())
+
         seen: set[str] = set()
         for w in windows:
+            # Ignore windows that discovery still lists but whose end has
+            # already passed — spinning a strategy on a dead market would
+            # immediately re-expire it and churn the rollover gap.
+            if w.window_end <= now:
+                continue
             seen.add(w.full_slug)
             if w.full_slug not in self.strategies:
                 self._add_window(w)
 
-        # Drop windows that are no longer in discovery output.
+        # Drop windows that are no longer in discovery output OR have passed
+        # their end time. We tear the expired strategy down even if its
+        # successor isn't discoverable yet (open a rollover gap below) so we
+        # never keep quoting a dead market.
         with self._lock:
-            for stale_slug in list(self.strategies.keys()):
-                if stale_slug not in seen:
-                    log.info("window expired: %s — cancelling orders", stale_slug)
+            tracked = list(self.strategies.items())
+            any_expired = False
+            for stale_slug, strat in tracked:
+                expired_by_clock = strat.window.window_end <= now
+                gone_from_discovery = stale_slug not in seen
+                if expired_by_clock or gone_from_discovery:
+                    log.info(
+                        "window expired: %s (%s) — cancelling orders",
+                        stale_slug,
+                        "clock" if expired_by_clock else "discovery",
+                    )
                     try:
                         self.strategies[stale_slug].cancel_all()
                     except Exception:  # noqa: BLE001
                         log.exception("cancel_all on expiring window")
                     del self.strategies[stale_slug]
+                    any_expired = True
+
+            have_active = len(self.strategies) > 0
+
+        # ── Rollover-gap accounting ──────────────────────────────────────────
+        # A gap is the interval where we have NO active strategy because a
+        # window ended but its successor isn't resolvable yet (zmq_server
+        # hasn't registered the new window's Redis labels). Make it explicit.
+        if not have_active and (any_expired or self._rollover_gap_since is None):
+            if self._rollover_gap_since is None:
+                self._rollover_gap_since = time.monotonic()
+                log.warning(
+                    "window rolled but successor not yet discoverable — "
+                    "engine idle, retrying every %.0fs",
+                    self._rollover_retry_secs,
+                )
+        elif have_active and self._rollover_gap_since is not None:
+            gap = time.monotonic() - self._rollover_gap_since
+            self._rollover_gap_since = None
+            log.info(
+                "new window picked up after %.1fs gap — strategy resumed", gap
+            )
 
     def _add_window(self, w: MarketWindow) -> None:
         log.info(

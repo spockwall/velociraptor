@@ -206,6 +206,23 @@ class Strategy(abc.ABC):
             return
 
         target_px = self._target_px(quote)
+        log.info(
+            "[%s/%s] QUOTE bid=%s ask=%s mid=%s spread=%s safe_mid=[%.2f,%.2f] pin=%.2f "
+            "two_sided=%s -> target_px=%s",
+            self.label,
+            side_name,
+            f"{quote.best_bid:.4f}" if quote.best_bid is not None else "—",
+            f"{quote.best_ask:.4f}" if quote.best_ask is not None else "—",
+            f"{quote.mid:.4f}" if quote.mid is not None else "—",
+            f"{(quote.best_ask - quote.best_bid):.4f}"
+            if quote.best_bid is not None and quote.best_ask is not None
+            else "—",
+            self.safe_mid_low,
+            self.safe_mid_high,
+            self.pin_px,
+            quote.is_two_sided,
+            f"{target_px:.4f}" if target_px is not None else "None",
+        )
         if target_px is None:
             return
         target_qty = qty_for_notional(self.order_notional_usd, target_px)
