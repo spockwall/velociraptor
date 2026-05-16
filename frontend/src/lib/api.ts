@@ -53,6 +53,27 @@ async function get<T>(path: string): Promise<T> {
     return res.json() as Promise<T>;
 }
 
+async function post<T>(path: string, payload: object): Promise<T> {
+    const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body.error ?? res.statusText);
+    }
+    return res.json() as Promise<T>;
+}
+
+export interface ControlStatus {
+    kill_switch: boolean;
+    deadman_engaged: boolean;
+    last_heartbeat_secs: number;
+}
+
+export type ControlAction = { type: "halt" } | { type: "resume" };
+
 export interface PolymarketMarket {
     asset_id: string;
     base_slug: string;
@@ -140,6 +161,10 @@ export const api = {
     fills: (limit = 50) => get<UserEvent[]>(`${BASE}/events/fills?limit=${limit}`),
 
     orders: (limit = 50) => get<UserEvent[]>(`${BASE}/events/orders?limit=${limit}`),
+
+    getControl: () => get<ControlStatus>(`${BASE}/control`),
+
+    postControl: (action: ControlAction) => post<ControlStatus>(`${BASE}/control`, action),
 
     /// Latest spot price from a CEX, used as a temporary priceToBeat while
     /// Polymarket's official one hasn't been published yet. Always fresh.

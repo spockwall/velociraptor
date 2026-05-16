@@ -1,10 +1,11 @@
 //! Unified error type for handlers + its `IntoResponse` impl.
 //!
 //! Each variant maps to a specific HTTP status:
-//!   - `NotFound` → 404
-//!   - `Decode`   → 500 (we got bytes back but couldn't parse them)
-//!   - `Redis`    → 500 (Redis itself errored)
-//!   - `Network`  → 502 (upstream HTTP call failed)
+//!   - `NotFound`   → 404
+//!   - `BadRequest` → 400 (client sent a malformed / unknown request)
+//!   - `Decode`     → 500 (we got bytes back but couldn't parse them)
+//!   - `Redis`      → 500 (Redis itself errored)
+//!   - `Network`    → 502 (upstream HTTP call failed)
 
 use axum::{
     http::StatusCode,
@@ -14,6 +15,7 @@ use serde::Serialize;
 
 pub enum ApiError {
     NotFound(String),
+    BadRequest(String),
     Decode(String),
     Redis(String),
     Network(String),
@@ -28,6 +30,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Decode(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
             ApiError::Redis(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
             ApiError::Network(m) => (StatusCode::BAD_GATEWAY, m),

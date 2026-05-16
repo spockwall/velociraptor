@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Terminal } from "lucide-react";
 import Card from "../components/Card";
+import { api, type ControlStatus } from "../lib/api";
 
 interface LogEntry {
     ts: string;
@@ -8,33 +9,46 @@ interface LogEntry {
     msg: string;
 }
 
-async function sendControl(msg: object): Promise<void> {
-    const res = await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(msg),
-    });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-    }
-}
-
 export default function ControlPage() {
     const [log, setLog] = useState<LogEntry[]>([]);
-    const [params, setParams] = useState("");
     const [busy, setBusy] = useState(false);
+    const [status, setStatus] = useState<ControlStatus | null>(null);
+    const [statusErr, setStatusErr] = useState<string | null>(null);
 
     function pushLog(level: LogEntry["level"], msg: string) {
         const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
         setLog((l) => [{ ts, level, msg }, ...l].slice(0, 60));
     }
 
-    async function send(msg: object, label: string) {
+    // Poll executor control state every 2s (poll-based, matching the rest of
+    // the app — no SSE).
+    useEffect(() => {
+        let alive = true;
+        async function tick() {
+            try {
+                const s = await api.getControl();
+                if (!alive) return;
+                setStatus(s);
+                setStatusErr(null);
+            } catch (e) {
+                if (!alive) return;
+                setStatusErr(e instanceof Error ? e.message : String(e));
+            }
+        }
+        tick();
+        const id = setInterval(tick, 2000);
+        return () => {
+            alive = false;
+            clearInterval(id);
+        };
+    }, []);
+
+    async function sendControl(action: { type: "halt" | "resume" }, label: string) {
         setBusy(true);
         pushLog("info", `→ ${label}`);
         try {
-            await sendControl(msg);
+            const s = await api.postControl(action);
+            setStatus(s);
             pushLog("ok", `✓ ${label}`);
         } catch (e) {
             pushLog("err", `✗ ${e instanceof Error ? e.message : String(e)}`);
@@ -46,74 +60,60 @@ export default function ControlPage() {
     const btnClass =
         "px-4 py-2 rounded-md border border-border-strong bg-bg-surface text-text-muted hover:text-white hover:bg-bg-hover hover:border-border-subtle transition-all cursor-pointer shadow-sm font-mono text-xs flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed";
 
+    // ── Status banner ────────────────────────────────────────────────────────
+    let banner: { text: string; cls: string };
+    if (statusErr) {
+        banner = { text: `status unavailable — ${statusErr}`, cls: "bg-bg-surface border-border-strong text-text-muted" };
+    } else if (status?.kill_switch) {
+        banner = { text: "HALTED — new orders blocked, all open orders cancelled", cls: "bg-accent-red/10 border-accent-red/30 text-accent-red" };
+    } else if (status?.deadman_engaged) {
+        banner = { text: "DEAD-MAN ENGAGED — backend heartbeat stale; executor self-blocked", cls: "bg-accent-blue/10 border-accent-blue/30 text-accent-blue" };
+    } else if (status) {
+        banner = { text: "LIVE — orders flowing normally", cls: "bg-accent-green/10 border-accent-green/30 text-accent-green" };
+    } else {
+        banner = { text: "loading control state…", cls: "bg-bg-surface border-border-strong text-text-muted" };
+    }
+
     return (
         <div className="p-5 w-full max-w-4xl mx-auto space-y-6">
-            {/* Warning */}
-            <p className="text-xs text-text-muted flex flex-wrap items-center gap-1.5 leading-loose">
-                Broadcasts{" "}
+            <p className="text-xs text-text-muted leading-loose">
+                HALT sets{" "}
                 <code className="font-mono px-1.5 py-0.5 rounded-md border border-border-strong bg-bg-surface text-text-primary shadow-sm">
-                    ControlMessage
+                    executor:kill_switch
                 </code>{" "}
-                via{" "}
+                +{" "}
                 <code className="font-mono px-1.5 py-0.5 rounded-md border border-border-strong bg-bg-surface text-text-primary shadow-sm">
-                    CONTROL_SOCKET · ipc:///tmp/trading/control.sock
-                </code>
+                    executor:cancel_all
+                </code>{" "}
+                via the backend. The executor cancels every open order on the wallet and blocks new
+                ones until RESUME.
             </p>
 
+            {/* Live status banner */}
+            <div className={`px-4 py-3 rounded-md border font-mono text-xs font-medium ${banner.cls}`}>
+                {banner.text}
+            </div>
+
             <div className="grid grid-cols-1 gap-4 mb-4">
-                <Card title="system control" subtitle="global state overrides" noPad>
+                <Card title="system control" subtitle="halt = block + cancel all" noPad>
                     <div className="p-4 flex gap-3 h-full items-center">
                         <button
                             disabled={busy}
-                            onClick={() => send({ type: "pause" }, "pause")}
-                            className={`flex-1 py-2.5 ${btnClass}`}
+                            onClick={() => sendControl({ type: "halt" }, "HALT — block + cancel all")}
+                            className="flex-1 py-2.5 rounded-md border text-xs font-mono font-medium transition-all shadow-sm bg-accent-red/10 border-accent-red/20 text-accent-red hover:bg-accent-red/20 disabled:opacity-50 cursor-pointer"
                         >
-                            pause
+                            HALT
                         </button>
                         <button
                             disabled={busy}
-                            onClick={() => send({ type: "resume" }, "resume")}
+                            onClick={() => sendControl({ type: "resume" }, "resume")}
                             className={`flex-1 py-2.5 ${btnClass}`}
                         >
                             resume
                         </button>
-                        <button
-                            disabled={busy}
-                            onClick={() => send({ type: "shutdown" }, "shutdown")}
-                            className="flex-1 py-2.5 rounded-md border text-xs font-mono font-medium transition-all shadow-sm bg-accent-red/10 border-accent-red/20 text-accent-red hover:bg-accent-red/20 disabled:opacity-50 cursor-pointer"
-                        >
-                            shutdown
-                        </button>
                     </div>
                 </Card>
             </div>
-
-            {/* Strategy params */}
-            <Card title="strategy params" subtitle="hot-reload engine parameters">
-                <div className="flex gap-3">
-                    <textarea
-                        rows={3}
-                        value={params}
-                        onChange={(e) => setParams(e.target.value)}
-                        placeholder='{"max_pos": 1000, "threshold": 0.01}'
-                        className="flex-1 px-4 py-3 rounded-md border border-border-strong bg-bg-surface text-white text-xs font-mono resize-none focus:outline-none focus:border-border-subtle shadow-inner inset-0"
-                    />
-                    <button
-                        disabled={busy}
-                        onClick={() => {
-                            try {
-                                const parsed = JSON.parse(params);
-                                send({ type: "strategy_params", ...parsed }, "strategy_params");
-                            } catch {
-                                pushLog("err", "invalid JSON");
-                            }
-                        }}
-                        className={btnClass}
-                    >
-                        send
-                    </button>
-                </div>
-            </Card>
 
             {/* Log */}
             <Card title="log" noPad>

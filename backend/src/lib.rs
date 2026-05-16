@@ -26,6 +26,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/kalshi/markets", get(routes::markets::get_kalshi_markets))
         .route("/api/events/fills", get(routes::events::get_fills))
         .route("/api/events/orders", get(routes::events::get_orders))
+        .route(
+            "/api/control",
+            get(routes::control::get_control).post(routes::control::post_control),
+        )
         .route("/api/spot_price/:product", get(routes::spot::get_spot_price))
         .route(
             "/api/window_open_price/:product/:interval_secs/:window_start",

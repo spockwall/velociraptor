@@ -11,8 +11,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4.5.27", features = ["derive", "env"] }
 dotenvy = "0.15.7"
-libs = { path = "../libs", features = ["redis"] }
-orderbook = { path = "../orderbook" }
+libs = { path = "../libs", features = ["redis", "logging"] }
 redis = { workspace = true }
 reqwest = { workspace = true }
 rmp-serde = { workspace = true }
