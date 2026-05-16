@@ -54,6 +54,7 @@ services:
     volumes:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
+      - ./data/syslog:/app/syslog
     depends_on:
       - redis
     ports:
