@@ -17,7 +17,7 @@
 use std::path::Path;
 
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -44,10 +44,19 @@ pub fn init_logging(service: &str, base_dir: &Path, filter: &str, json: bool) ->
     let dir = base_dir.join(service);
     std::fs::create_dir_all(&dir).expect("create log directory");
 
-    // Daily-rotating appenders. `rolling::daily(dir, prefix)` writes
-    // `{prefix}.{YYYY-MM-DD}`; pre-add the suffix we want in the name.
-    let info_file = rolling::daily(&dir, "log");
-    let error_file = rolling::daily(&dir, "error.log");
+    // Daily-rotating appenders. With no filename prefix and only a suffix,
+    // `tracing-appender` formats the name as `{date}.{suffix}` — i.e.
+    // `2026-05-16.log` and `2026-05-16.error.log`.
+    let info_file = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_suffix("log")
+        .build(&dir)
+        .expect("build info log appender");
+    let error_file = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_suffix("error.log")
+        .build(&dir)
+        .expect("build error log appender");
 
     let (info_writer, info_guard) = tracing_appender::non_blocking(info_file);
     let (error_writer, error_guard) = tracing_appender::non_blocking(error_file);
