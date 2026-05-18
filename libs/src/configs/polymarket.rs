@@ -1,4 +1,4 @@
-use super::{load_yaml_or_exit, ServerConfig, StorageConfig};
+use super::{load_yaml_or_exit, LoggingConfig, ServerConfig, StorageConfig};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -23,6 +23,7 @@ pub struct PolymarketConfig {
 pub struct PolymarketFileConfig {
     pub server: ServerConfig,
     pub storage: StorageConfig,
+    pub logging: LoggingConfig,
     pub polymarket: PolymarketConfig,
 }
 

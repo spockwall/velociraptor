@@ -7,8 +7,14 @@ repo's dev machine is macOS, which has no systemd).
 |------|---------|
 | `velociraptor-polymarket-recorder.service` | `cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml` |
 | `velociraptor-orderbook-recorder.service`  | `cargo run --bin orderbook_recorder --release -- --config configs/server.yaml` |
-| `velociraptor-price-to-beat-fetcher.service` | `cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml` |
-| `velociraptor-asset-id-fetcher.service` | `cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml` |
+| `velociraptor-price-to-beat-fetcher.service` | `cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml` |
+| `velociraptor-asset-id-fetcher.service` | `cargo run --bin asset_id_fetcher --release -- --config configs/fetcher.yaml` |
+
+The two recorders write rotating log files via `libs::logging` — driven by the
+`logging:` section of their config (`configs/polymarket.yaml` /
+`configs/server.yaml`): `{logging.dir}/{service}/{YYYY-MM-DD}.log` plus a
+`.error.log` for WARN+, mirrored to stdout (so `journalctl` still works). The
+two fetchers log to stdout only (captured by journald).
 
 `velociraptor.target` groups all four so they can be started/stopped together.
 

@@ -1,0 +1,35 @@
+# Shared config for the two long-running fetchers:
+#
+#   cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml
+#   cargo run --bin asset_id_fetcher      --release -- --config configs/fetcher.yaml
+#
+# `price_to_beat_fetcher` reads `polymarket.markets` + `kalshi.market`.
+# `asset_id_fetcher` reads only `polymarket.markets` — the `kalshi:` section
+# below is simply ignored by it (Kalshi binary markets have no yes/no token
+# pair to record). All other config sections fall back to their defaults.
+# Markets with `interval_secs: 0` (static markets) are skipped by both.
+
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300
+
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900

@@ -12,6 +12,11 @@ storage:
   rotation: "none" # "daily" | "none"
   zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
 
+logging:
+  level: "info"          # env-filter string, e.g. "info,libs=debug"
+  json: false            # set true to emit JSON-formatted records
+  dir: "/data/syslog"   # files: {dir}/polymarket_recorder/{YYYY-MM-DD}.log and …/{YYYY-MM-DD}.error.log
+
 # Rolling up/down markets — token IDs resolved automatically from the Gamma API.
 # interval_secs: window size in seconds (900 = 15min, 300 = 5min, 0 = static market)
 

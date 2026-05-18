@@ -7,6 +7,7 @@ pub mod logging;
 pub mod okx;
 pub mod polymarket;
 pub mod redis;
+pub mod risk;
 pub mod server;
 pub mod storage;
 
@@ -19,6 +20,7 @@ pub use logging::LoggingConfig;
 pub use okx::OkxConfig;
 pub use polymarket::{PolymarketConfig, PolymarketFileConfig, PolymarketMarketConfig};
 pub use redis::RedisConfig;
+pub use risk::{ExchangeRisk, RiskConfig, RiskLimits};
 pub use server::ServerConfig;
 pub use storage::StorageConfig;
 
@@ -42,6 +44,7 @@ pub struct Config {
     pub kalshi: KalshiConfig,
     pub polymarket: PolymarketConfig,
     pub executor: ExecutorConfig,
+    pub risk: RiskConfig,
 }
 
 impl Config {

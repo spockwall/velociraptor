@@ -14,8 +14,8 @@
 use anyhow::Result;
 use clap::Parser;
 use libs::configs::Config;
+use libs::logging::init_logging;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
-use orderbook::configs::init_logging;
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
@@ -34,29 +34,29 @@ use tracing::{error, info};
 struct Args {
     #[arg(long, env = "CONFIG_FILE", default_value = "configs/server.yaml")]
     config: String,
-
-    #[arg(long, env = "LOG_LEVEL", default_value = "info")]
-    log_level: String,
-
-    #[arg(long, env = "LOG_JSON", default_value_t = false)]
-    log_json: bool,
 }
 
 #[tokio::main]
 async fn main() {
     let _ = dotenvy::dotenv();
     let args = Args::parse();
-    init_logging(&args.log_level, args.log_json);
 
-    if let Err(e) = run(&args.config).await {
+    // Load config first so the `logging:` section can drive tracing setup.
+    let cfg = Config::load(&args.config);
+    let _guards = init_logging(
+        "orderbook_recorder",
+        std::path::Path::new(&cfg.logging.dir),
+        &cfg.logging.level,
+        cfg.logging.json,
+    );
+
+    if let Err(e) = run(&args.config, cfg).await {
         error!("Fatal: {e:#}");
         std::process::exit(1);
     }
 }
 
-async fn run(config_path: &str) -> Result<()> {
-    let cfg = Config::load(config_path);
-
+async fn run(config_path: &str, cfg: Config) -> Result<()> {
     if !cfg.storage.enabled {
         anyhow::bail!("storage.enabled must be true in {config_path}");
     }

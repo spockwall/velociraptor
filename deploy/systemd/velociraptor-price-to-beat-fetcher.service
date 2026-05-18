@@ -10,7 +10,7 @@ User=velociraptor
 Group=velociraptor
 WorkingDirectory=/opt/velociraptor
 Environment=PATH=/home/velociraptor/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/velociraptor/.cargo/bin/cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml
+ExecStart=/home/velociraptor/.cargo/bin/cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml
 Restart=always
 RestartSec=5
 KillSignal=SIGINT

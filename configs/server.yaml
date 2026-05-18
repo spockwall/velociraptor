@@ -17,7 +17,7 @@ executor:
 logging:
   level: "info"          # env-filter string, e.g. "info,libs=debug"
   json: false            # set true to emit JSON-formatted records
-  dir: "./data/syslog"   # files: {dir}/server/log.YYYY-MM-DD and …/error.log.YYYY-MM-DD
+  dir: "/data/syslog"   # files: {dir}/server/log.YYYY-MM-DD and …/error.log.YYYY-MM-DD
 
 storage:
   enabled: true

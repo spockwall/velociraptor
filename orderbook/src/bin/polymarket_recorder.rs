@@ -24,6 +24,7 @@ use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 use libs::configs::{PolymarketFileConfig, PolymarketMarketConfig};
+use libs::logging::init_logging;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::polymarket::{
@@ -442,15 +443,16 @@ fn spawn_market_scheduler(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let args = Args::parse();
+
+    // Load config first so the `logging:` section can drive tracing setup.
     let cfg = PolymarketFileConfig::load(&args.config);
+    let _guards = init_logging(
+        "polymarket_recorder",
+        std::path::Path::new(&cfg.logging.dir),
+        &cfg.logging.level,
+        cfg.logging.json,
+    );
 
     let markets: Vec<PolymarketMarketConfig> = cfg
         .polymarket
