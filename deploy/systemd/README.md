@@ -3,12 +3,19 @@
 systemd service units for the four long-running binaries. Linux only (this
 repo's dev machine is macOS, which has no systemd).
 
-| Unit | Command |
+The units run the **pre-built release binaries** from `target/release/`
+directly — not `cargo run`. You must `cargo build --release` before
+starting/restarting them; see Install and Upgrade below.
+
+| Unit | Binary (run with `WorkingDirectory=/opt/velociraptor`) |
 |------|---------|
-| `velociraptor-polymarket-recorder.service` | `cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml` |
-| `velociraptor-orderbook-recorder.service`  | `cargo run --bin orderbook_recorder --release -- --config configs/server.yaml` |
-| `velociraptor-price-to-beat-fetcher.service` | `cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml` |
-| `velociraptor-asset-id-fetcher.service` | `cargo run --bin asset_id_fetcher --release -- --config configs/fetcher.yaml` |
+| `velociraptor-polymarket-recorder.service` | `target/release/polymarket_recorder --config configs/polymarket.yaml` |
+| `velociraptor-orderbook-recorder.service`  | `target/release/orderbook_recorder --config configs/server.yaml` |
+| `velociraptor-price-to-beat-fetcher.service` | `target/release/price_to_beat_fetcher --config configs/fetcher.yaml` |
+| `velociraptor-asset-id-fetcher.service` | `target/release/asset_id_fetcher --config configs/fetcher.yaml` |
+
+Each unit has an `ExecStartPre=test -x <binary>` guard so a missing build
+fails fast with a clear error instead of a cryptic `203/EXEC`.
 
 The two recorders write rotating log files via `libs::logging` — driven by the
 `logging:` section of their config (`configs/polymarket.yaml` /
@@ -25,7 +32,8 @@ Every `.service` is `Type=simple` with the same supervision policy:
 | Directive | Value | Effect |
 |---|---|---|
 | `After=network-online.target` / `Wants=network-online.target` | — | Don't start until the network is actually up (these binaries open WebSocket/HTTP connections immediately). |
-| `Restart=always` | — | Restart on *any* exit — crash, panic, or clean exit. |
+| `ExecStartPre=test -x target/release/<bin>` | — | Fail fast with a clear error if the release binary hasn't been built yet. |
+| `Restart=always` | — | Restart on *any* exit — crash, panic, or clean exit. Because the binary is pre-built, a restart is instant (no recompile). |
 | `RestartSec=5` | 5 s | Wait 5 s between restarts so a tight crash loop doesn't spin the CPU. |
 | `KillSignal=SIGINT` | — | Stop with `SIGINT` (Ctrl-C), not `SIGTERM`, so the recorder can flush its MessagePack buffer and close the file cleanly. |
 | `TimeoutStopSec=30` | 30 s | Give it 30 s to shut down after `SIGINT` before systemd `SIGKILL`s it. |
@@ -35,13 +43,14 @@ Every `.service` is `Type=simple` with the same supervision policy:
 
 - **Service user/group:** `velociraptor`
 - **Repo location (WorkingDirectory):** `/opt/velociraptor`
-- **cargo path:** `/home/velociraptor/.cargo/bin/cargo` (rustup default for that user)
+- **Binaries at:** `/opt/velociraptor/target/release/<name>` (default workspace
+  target dir; the units hardcode this absolute path in `ExecStart`)
 
-The units run `cargo run --release`, so the first start after a code change
-recompiles before the process comes up — startup can take several minutes and
-`systemctl start` will block until the build finishes. Build the workspace once
-with `cargo build --release` before enabling the units to avoid a long first
-start.
+The units exec the pre-built binary directly, so start/restart is instant and a
+broken build can never take a running service down — it just blocks the *next*
+start (caught by `ExecStartPre`). The trade-off: **you must `cargo build
+--release` yourself** before the first start and after every code change;
+nothing rebuilds automatically.
 
 ## Install
 
@@ -54,7 +63,8 @@ sudo chown -R velociraptor:velociraptor /opt/velociraptor
 # 2. Install rust for the service user (one-time)
 sudo -u velociraptor sh -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
 
-# 3. Pre-build (recommended, avoids a multi-minute first start)
+# 3. Build the release binaries — REQUIRED before first start; the units
+#    exec target/release/<bin> directly and will not start without it.
 sudo -u velociraptor sh -c 'cd /opt/velociraptor && ~/.cargo/bin/cargo build --release'
 
 # 4. Install the units
@@ -90,15 +100,18 @@ sudo systemctl stop velociraptor-*.service
 ```bash
 cd /opt/velociraptor
 sudo -u velociraptor git pull
-# Pre-build as the service user so the restart doesn't block on compilation
+# Build first — the OLD binaries keep running untouched during the compile.
 sudo -u velociraptor sh -c 'cd /opt/velociraptor && ~/.cargo/bin/cargo build --release'
+# Only now swap to the new binaries.
 sudo systemctl restart velociraptor-*.service
 ```
 
-Pre-building before the restart matters: the units invoke `cargo run --release`,
-so if you skip the build step the *restart itself* runs the compile while the
-service is down. A slow build = long downtime; a compile error = the service
-fails to start.
+This ordering gives near-zero downtime: the running services keep using the
+old `target/release/` binaries throughout the (possibly slow) build, and the
+`restart` only happens once the new binaries are in place. If the build
+*fails*, the old binaries are untouched and the services keep running on the
+old code — you simply don't restart until the build is green. Restart is a
+sub-second exec swap, not a recompile.
 
 ## Reboot & crash recovery
 
@@ -115,18 +128,20 @@ fails to start.
   back after `RestartSec=5`. This is independent of boot persistence — you need
   both, and the units have both.
 
-### Crash-loop rate limit (important with `cargo run`)
+### Crash-loop rate limit
 
-systemd's default start-rate limit is 5 starts within 10 s. Because these units
-run `cargo run --release`, a **compile error turns into a start failure** — five
-fast failures and systemd gives up:
+systemd's default start-rate limit is 5 starts within 10 s. With pre-built
+binaries a compile error can no longer cause this (the build is separate), but
+it still triggers if the binary itself crashes immediately on every start —
+e.g. a bad config, an unreachable Redis, a panic on startup, or a missing
+`target/release/` build (the `ExecStartPre` guard fails fast each time):
 
 ```
 systemctl status velociraptor-orderbook-recorder.service
 #  Active: failed (Result: start-limit-hit)
 ```
 
-Recover manually with:
+Recover after fixing the root cause (rebuild, fix config, etc.):
 
 ```bash
 sudo systemctl reset-failed velociraptor-orderbook-recorder.service
@@ -148,9 +163,9 @@ StartLimitIntervalSec=0   # never enter the start-limit-hit state
 | Symptom | Likely cause / fix |
 |---|---|
 | `status=200/CHDIR` | `WorkingDirectory=/opt/velociraptor` doesn't exist or isn't readable by the service user. |
-| `203/EXEC` or "No such file or directory" | `cargo` not at `/home/velociraptor/.cargo/bin/cargo`. Fix the `ExecStart` + `Environment=PATH` paths. |
+| `ExecStartPre` failed / `203/EXEC` | Release binary not built. Run `cargo build --release` (the `target/release/<bin>` is missing or not executable). |
 | `217/USER` | The `velociraptor` user/group doesn't exist (`useradd` step skipped). |
-| `failed (Result: start-limit-hit)` | Crash-looping (often a compile/config error). Inspect `journalctl -u <unit>`, fix, then `reset-failed`. |
+| `failed (Result: start-limit-hit)` | Binary crash-looping on startup (bad config, unreachable Redis, panic) or unbuilt. Inspect `journalctl -u <unit>`, fix the cause, then `reset-failed`. |
 | Starts then exits 0 immediately | A *fetcher* may be a run-once job, not a daemon. If so, `Restart=always` will keep relaunching it on `RestartSec=5` — switch that unit to `Restart=on-failure`, or run it as a `systemd.timer` instead of an always-on service. Confirm the intended runtime model before deploying. |
 | Config not found | `--config configs/...` is relative to `WorkingDirectory`. Confirm the YAML exists at `/opt/velociraptor/configs/`. |
 

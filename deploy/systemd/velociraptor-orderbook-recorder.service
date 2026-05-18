@@ -9,8 +9,8 @@ Type=simple
 User=velociraptor
 Group=velociraptor
 WorkingDirectory=/opt/velociraptor
-Environment=PATH=/home/velociraptor/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/velociraptor/.cargo/bin/cargo run --bin orderbook_recorder --release -- --config configs/server.yaml
+ExecStartPre=/usr/bin/test -x /opt/velociraptor/target/release/orderbook_recorder
+ExecStart=/opt/velociraptor/target/release/orderbook_recorder --config configs/server.yaml
 Restart=always
 RestartSec=5
 KillSignal=SIGINT

@@ -9,8 +9,8 @@ Type=simple
 User=velociraptor
 Group=velociraptor
 WorkingDirectory=/opt/velociraptor
-Environment=PATH=/home/velociraptor/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/velociraptor/.cargo/bin/cargo run --bin asset_id_fetcher --release -- --config configs/fetcher.yaml
+ExecStartPre=/usr/bin/test -x /opt/velociraptor/target/release/asset_id_fetcher
+ExecStart=/opt/velociraptor/target/release/asset_id_fetcher --config configs/fetcher.yaml
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
