@@ -57,6 +57,7 @@ Three Rust services (backend, orderbook_server, executor) share one `Dockerfile.
 | Adding a new exchange | `velociraptor-add-exchange` |
 | Wire formats per exchange | `velociraptor-wire-formats` |
 | Host nginx reverse-proxy setup | `velociraptor-nginx` |
+| Deploying recorders/fetchers as systemd services | `velociraptor-systemd` |
 
 ## Top-level commands
 
