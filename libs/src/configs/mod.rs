@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod binance;
 pub mod executor;
+pub mod fetcher;
 pub mod hyperliquid;
 pub mod kalshi;
 pub mod logging;
@@ -14,6 +15,7 @@ pub mod storage;
 pub use backend::BackendConfig;
 pub use binance::{BinanceConfig, BinanceSpotConfig};
 pub use executor::ExecutorConfig;
+pub use fetcher::FetcherConfig;
 pub use hyperliquid::HyperliquidConfig;
 pub use kalshi::{KalshiConfig, KalshiMarketConfig};
 pub use logging::LoggingConfig;
@@ -45,6 +47,7 @@ pub struct Config {
     pub polymarket: PolymarketConfig,
     pub executor: ExecutorConfig,
     pub risk: RiskConfig,
+    pub fetcher: FetcherConfig,
 }
 
 impl Config {

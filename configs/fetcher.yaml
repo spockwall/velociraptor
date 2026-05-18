@@ -9,6 +9,13 @@
 # pair to record). All other config sections fall back to their defaults.
 # Markets with `interval_secs: 0` (static markets) are skipped by both.
 
+# Archive output roots. Each binary's --archive-dir CLI flag, if passed,
+# overrides the matching key here. Paths are absolute so they don't depend on
+# the process WorkingDirectory.
+fetcher:
+  asset_id_dir: "/data/asset_ids"
+  price_to_beat_dir: "/data/price_to_beat"
+
 polymarket:
   markets:
     - enabled: true

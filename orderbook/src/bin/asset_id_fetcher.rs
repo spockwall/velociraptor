@@ -59,8 +59,10 @@ struct Args {
     #[arg(long, default_value_t = 8)]
     http_timeout_secs: u64,
 
-    #[arg(long, default_value = "./data/asset_ids")]
-    archive_dir: String,
+    /// Archive root. Overrides `fetcher.asset_id_dir` from the config when
+    /// given; otherwise the config value is used.
+    #[arg(long)]
+    archive_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,7 +327,11 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let cfg = Config::load(&args.config);
-    let archive_dir = PathBuf::from(&args.archive_dir);
+    let archive_dir = PathBuf::from(
+        args.archive_dir
+            .clone()
+            .unwrap_or_else(|| cfg.fetcher.asset_id_dir.clone()),
+    );
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(args.http_timeout_secs))
         .user_agent("velociraptor-asset-id-fetcher/0.1")

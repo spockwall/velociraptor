@@ -301,8 +301,10 @@ struct Args {
     #[arg(long, default_value_t = 8)]
     http_timeout_secs: u64,
 
-    #[arg(long, default_value = "./data/price_to_beat")]
-    archive_dir: String,
+    /// Archive root. Overrides `fetcher.price_to_beat_dir` from the config
+    /// when given; otherwise the config value is used.
+    #[arg(long)]
+    archive_dir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -468,7 +470,11 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let cfg = Config::load(&args.config);
-    let archive_dir = PathBuf::from(&args.archive_dir);
+    let archive_dir = PathBuf::from(
+        args.archive_dir
+            .clone()
+            .unwrap_or_else(|| cfg.fetcher.price_to_beat_dir.clone()),
+    );
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(args.http_timeout_secs))
         .user_agent("velociraptor-price-to-beat-fetcher/0.1")
