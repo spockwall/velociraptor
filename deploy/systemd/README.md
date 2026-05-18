@@ -85,12 +85,12 @@ setup is short.
 #      storage.base_path      -> orderbook_recorder errors per-file, stays up
 #      fetcher.{asset_id,price_to_beat}_dir -> fetchers can't write CSVs
 #    Config defaults:
-#      server.yaml    = /data/syslog + /data/orderbook_2
-#      polymarket.yaml = /data/syslog + /data/polymarket_2
+#      server.yaml    = /data/syslog + /data/orderbook_3
+#      polymarket.yaml = /data/syslog + /data/polymarket_3
 #      fetcher.yaml   = /data/asset_ids + /data/price_to_beat
-sudo mkdir -p /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
+sudo mkdir -p /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
 sudo chown -R ben:ben \
-  /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
+  /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
 
 # 2. Build (clean env — an active conda/venv can contaminate the binary)
 env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \
@@ -119,14 +119,16 @@ systemctl status 'velociraptor-*.service' --no-pager
 /home/ben/velociraptor/deploy/systemd/update.sh
 ```
 
-The script does **pull → build → re-sync units → restart → status**, and stops
-hard if the build fails (`set -euo pipefail`). The ordering is the point:
-running services keep using the *old* binaries throughout the (slow) build, so
-a failing build causes **zero downtime** — you simply don't reach the restart.
+The script does **build → re-sync units → restart → status**, and stops hard
+if the build fails (`set -euo pipefail`). It deliberately does **not** touch
+git — `git pull` (and any config-merge reconciliation) is done by hand so a
+local config edit can't be clobbered. The ordering is the point: running
+services keep using the *old* binaries throughout the (slow) build, so a
+failing build causes **zero downtime** — you simply don't reach the restart.
 Equivalent by hand:
 
 ```bash
-git -C /home/ben/velociraptor pull
+git -C /home/ben/velociraptor pull                               # manual, separate step
 env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \
   bash -c 'cd /home/ben/velociraptor && cargo build --release'   # build FIRST
 sudo cp /home/ben/velociraptor/deploy/systemd/*.service \
@@ -141,8 +143,9 @@ Build with the `env -i` clean-env wrapper: your `ben` shell often has conda
 
 **Not automated** — do these by hand when the change calls for it:
 
-- **Config edits.** `git pull` may conflict on locally-edited `configs/*.yaml`.
-  Reconcile, then restart (configs only reload on restart).
+- **Pulling code.** `update.sh` doesn't run `git pull`. Pull yourself before
+  running it, and reconcile any conflicts on locally-edited `configs/*.yaml`
+  (configs only reload on `systemctl restart`).
 - **New `logging.dir` / `storage.base_path` / `fetcher.*_dir`.** Pre-create +
   `chown ben:ben` the new path before restarting, or the service fails.
 - **Added/removed units.** Manually `enable --now` a new unit or

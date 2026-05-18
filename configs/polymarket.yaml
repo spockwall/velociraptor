@@ -6,7 +6,7 @@ server:
 
 storage:
   enabled: false
-  base_path: "/data/polymarket_2"
+  base_path: "/data/polymarket_3"
   depth: 20 # depth levels to store (bids + asks)
   flush_interval: 500 # ms between BufWriter flushes
   rotation: "none" # "daily" | "none"

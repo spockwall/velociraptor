@@ -70,18 +70,23 @@ setup is short:
 
 **Use the script:** `/home/ben/velociraptor/deploy/systemd/update.sh`
 
-Order is load-bearing: **pull → build → (only on success) restart**. The
-running services keep using the *old* `target/release/` binaries throughout the
-(slow) build, so a slow or failing build never causes downtime. If the build
-fails, do **not** restart — old binaries keep running on old code; fix and
-retry. `update.sh` does this plus re-syncs unit files and stops hard on build
-failure (`set -euo pipefail`). It needs `sudo` only for the unit-file copy and
-`systemctl`, not for git/build.
+Order is load-bearing: **build → (only on success) restart**. The running
+services keep using the *old* `target/release/` binaries throughout the (slow)
+build, so a slow or failing build never causes downtime. If the build fails,
+do **not** restart — old binaries keep running on old code; fix and retry.
+`update.sh` does this plus re-syncs unit files and stops hard on build failure
+(`set -euo pipefail`). It needs `sudo` only for the unit-file copy and
+`systemctl`, not for build.
 
-Not automated — handle manually: config schema drift / `git pull` conflicts on
-edited configs, a changed `logging.dir`/`storage.base_path`/`fetcher.*_dir`
-needing a fresh `chown`, and added/removed units needing manual
-`enable`/`disable`.
+`update.sh` deliberately does **not** run `git pull` — pull/merge happens by
+hand so a local config edit (e.g. enabled markets, `storage.base_path`) can't
+be silently clobbered. Workflow is: `git pull` (resolve any config conflicts)
+→ `update.sh`.
+
+Not automated — handle manually: `git pull` itself plus any conflict
+reconciliation on edited configs, a changed
+`logging.dir`/`storage.base_path`/`fetcher.*_dir` needing a fresh `chown`, and
+added/removed units needing manual `enable`/`disable`.
 
 ## Failure modes seen in practice (highest-value section)
 
@@ -92,7 +97,7 @@ distinct symptoms from three distinct config keys:
 - **`{logging.dir}`** (e.g. `/data/syslog`) — both recorders call
   `init_logging` → `create_dir_all` and **panic on startup** if it fails. The
   service won't stay up.
-- **`{storage.base_path}`** (e.g. `/data/orderbook_2`, `/data/polymarket_2`) —
+- **`{storage.base_path}`** (e.g. `/data/orderbook_3`, `/data/polymarket_3`) —
   `orderbook_recorder` logs `StorageWriter: failed to open /data/... :
   Permission denied (os error 13)` *per file*; the service stays up but
   records nothing.
@@ -105,8 +110,8 @@ mandatory** — a crash-looping recorder may already have created subdirs as
 root on earlier failed starts. **Stop the service before chowning** —
 otherwise it recreates root-owned dirs between your `chown` and its next
 restart. Paths come from the configs:
-- `configs/server.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/orderbook_2`
-- `configs/polymarket.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/polymarket_2` (storage only if `storage.enabled: true`)
+- `configs/server.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/orderbook_3`
+- `configs/polymarket.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/polymarket_3` (storage only if `storage.enabled: true`)
 - `configs/fetcher.yaml` → `fetcher.asset_id_dir` `/data/asset_ids`, `fetcher.price_to_beat_dir` `/data/price_to_beat`
 
 The fetcher archive dir resolves as: `--archive-dir` CLI flag (if passed) >

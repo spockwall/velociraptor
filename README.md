@@ -92,8 +92,8 @@ price-to-beat fetcher, and asset-id fetcher — ship with systemd units under
 # (edit the unit files if yours differ).
 
 # 1. Pre-create the root-owned /data dirs the configs write to, owned by ben
-sudo mkdir -p /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
-sudo chown -R ben:ben /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
+sudo mkdir -p /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
+sudo chown -R ben:ben /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
 
 # 2. Build (clean env — an active conda/venv can contaminate the binary)
 env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \

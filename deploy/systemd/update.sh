@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Update the deployed velociraptor services to the latest code.
+# Update the deployed velociraptor services to the current source tree.
 #
 #   /home/ben/velociraptor/deploy/systemd/update.sh
 #
-# Order matters: pull → build → (only on success) restart. The running
-# services keep using the OLD target/release/ binaries throughout the build,
-# so a slow or failing build never takes anything down — we only restart
-# once the new binaries are in place.
+# This does NOT touch git. Pull / merge / configs are managed by hand so a
+# config edit isn't clobbered. Order matters: build → (only on success)
+# re-sync units → restart. The running services keep using the OLD
+# target/release/ binaries throughout the build, so a slow or failing build
+# never takes anything down — we only restart once the new binaries are in
+# place.
 set -euo pipefail
 
 REPO="/home/ben/velociraptor"
@@ -16,9 +18,6 @@ UNITS=(
   velociraptor-price-to-beat-fetcher.service
   velociraptor-asset-id-fetcher.service
 )
-
-echo "==> git pull"
-git -C "$REPO" pull
 
 # Build with a CLEAN env. Do NOT inherit an active conda / virtualenv from an
 # interactive shell — it can contaminate the linker and produce a binary that

@@ -21,7 +21,7 @@ logging:
 
 storage:
   enabled: true
-  base_path: "/data/orderbook_2"
+  base_path: "/data/orderbook_3"
   depth: 20 # depth levels to store (bids + asks)
   flush_interval: 1000 # ms between BufWriter flushes
   rotation: "daily" # "daily" | "none"
