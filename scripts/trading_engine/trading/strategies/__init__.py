@@ -21,6 +21,7 @@ from .base import (
     Strategy,
 )
 from .fill_once import FillOnceStrategy
+from .momentum import MomentumStrategy
 from .one_shot import OneShotStrategy
 from .probe import ProbeStrategy
 
@@ -29,6 +30,7 @@ _REGISTRY: dict[str, Type[Strategy]] = {
     ProbeStrategy.name: ProbeStrategy,
     FillOnceStrategy.name: FillOnceStrategy,
     OneShotStrategy.name: OneShotStrategy,
+    MomentumStrategy.name: MomentumStrategy,
 }
 
 
@@ -53,6 +55,7 @@ def make_strategy(name: str, **kwargs) -> Strategy:
 
 __all__ = [
     "FillOnceStrategy",
+    "MomentumStrategy",
     "OneShotStrategy",
     "PIN_PX",
     "ProbeStrategy",
