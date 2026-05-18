@@ -1,0 +1,9 @@
+[Unit]
+Description=Velociraptor recorders and fetchers
+Wants=velociraptor-polymarket-recorder.service
+Wants=velociraptor-orderbook-recorder.service
+Wants=velociraptor-price-to-beat-fetcher.service
+Wants=velociraptor-asset-id-fetcher.service
+
+[Install]
+WantedBy=multi-user.target

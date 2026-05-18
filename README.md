@@ -81,6 +81,31 @@ polymarket:
 
 `orderbook_server` CLI accepts `--config`, `--log-level`, `--log-json` only. All tuning lives in YAML.
 
+## Run as services (systemd, Linux)
+
+Four long-running binaries — the Polymarket recorder, orderbook recorder,
+price-to-beat fetcher, and asset-id fetcher — ship with systemd units under
+`deploy/systemd/`. They auto-start on boot (once enabled) and restart on crash.
+
+```bash
+# From the repo root on the Linux server (defaults: user `velociraptor`,
+# repo at /opt/velociraptor — edit the units if yours differ)
+cargo build --release                       # pre-build so first start is fast
+sudo cp deploy/systemd/*.service deploy/systemd/*.target /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now \
+  velociraptor-polymarket-recorder.service \
+  velociraptor-orderbook-recorder.service \
+  velociraptor-price-to-beat-fetcher.service \
+  velociraptor-asset-id-fetcher.service
+
+# Logs / status
+journalctl -u velociraptor-orderbook-recorder.service -f
+```
+
+See `deploy/systemd/README.md` for the full install, the unit→command map,
+reboot/crash-recovery behavior, and the upgrade workflow.
+
 ## Architecture (one-liner)
 
 Exchange WebSocket → `MsgParserTrait` → mpsc → `StreamEngine` (hooks + broadcast + `Orderbook.apply_update` copy-on-write) → consumers: ZMQ PUB / Redis / disk recorder.

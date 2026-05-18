@@ -1,0 +1,20 @@
+[Unit]
+Description=Velociraptor asset-id fetcher
+Documentation=https://github.com/spockwall/velociraptor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=velociraptor
+Group=velociraptor
+WorkingDirectory=/opt/velociraptor
+Environment=PATH=/home/velociraptor/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/velociraptor/.cargo/bin/cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
