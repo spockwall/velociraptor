@@ -24,6 +24,7 @@ from ..market import (
     MarketFeed,
     MarketWindow,
     Quote,
+    Trade,
     discover,
     discover_kalshi,
 )
@@ -176,12 +177,16 @@ class Observer:
             window_end=window_end,
         )
         self.feed.subscribe([symbol], exchange=exchange)
+        # Also follow the public last-trade stream for this symbol so the
+        # status table can show executed prints next to the BBA.
+        self.feed.subscribe_trades([symbol], exchange=exchange)
         log.info("subscribe %s (%s)", label, key)
 
     def _untrack(self, ts: TrackedSymbol) -> None:
         key = f"{ts.exchange}:{ts.symbol}"
         log.info("unsubscribe %s (window rotated)", ts.label)
         self.feed.unsubscribe([ts.symbol], exchange=ts.exchange)
+        self.feed.unsubscribe_trades([ts.symbol], exchange=ts.exchange)
         self._tracked.pop(key, None)
 
     # ── reporting ──
@@ -195,7 +200,8 @@ class Observer:
         rows: list[tuple[str, str]] = []  # (group key, formatted row)
         for ts in self._tracked.values():
             quote = self.feed.latest(ts.symbol, exchange=ts.exchange)
-            rows.append((ts.exchange, _format_row(ts, quote, now_ns)))
+            trade = self.feed.latest_trade(ts.symbol, exchange=ts.exchange)
+            rows.append((ts.exchange, _format_row(ts, quote, trade, now_ns)))
 
         # Group by exchange for readability.
         rows.sort(key=lambda r: (r[0], r[1]))
@@ -211,9 +217,23 @@ class Observer:
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _format_row(ts: TrackedSymbol, quote: Optional[Quote], now_ns: int) -> str:
+def _format_trade(trade: Optional[Trade], now_ns: int) -> str:
+    if trade is None:
+        return "last=          —"
+    t_age_ms = (now_ns - trade.received_ns) / 1e6
+    px = f"{trade.price:.6f}"
+    return f"last={px:>10s}x{trade.size:<8.4g}{trade.side:<4s} ({t_age_ms:6.0f}ms)"
+
+
+def _format_row(
+    ts: TrackedSymbol,
+    quote: Optional[Quote],
+    trade: Optional[Trade],
+    now_ns: int,
+) -> str:
+    tr = _format_trade(trade, now_ns)
     if quote is None:
-        return f"{ts.label:48s}  (no quote yet)"
+        return f"{ts.label:48s}  (no quote yet)  {tr}"
     age_ms = (now_ns - quote.received_ns) / 1e6
     bid = f"{quote.best_bid:.6f}" if quote.best_bid is not None else "—"
     ask = f"{quote.best_ask:.6f}" if quote.best_ask is not None else "—"
@@ -223,4 +243,7 @@ def _format_row(ts: TrackedSymbol, quote: Optional[Quote], now_ns: int) -> str:
     if ts.window_end is not None:
         remaining = ts.window_end - int(time.time())
         win = f"  win-end-in={remaining:>4d}s"
-    return f"{ts.label:48s}  bid={bid:>10s}  ask={ask:>10s}  mid={mid:>10s}  age={age}{win}"
+    return (
+        f"{ts.label:48s}  bid={bid:>10s}  ask={ask:>10s}  mid={mid:>10s}  "
+        f"age={age}  {tr}{win}"
+    )

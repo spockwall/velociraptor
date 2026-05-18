@@ -18,13 +18,14 @@ from .discovery import (
     fetch_markets,
     group_into_windows,
 )
-from .feed import MarketFeed, Quote
+from .feed import MarketFeed, Quote, Trade
 
 __all__ = [
     "KalshiWindow",
     "MarketFeed",
     "MarketWindow",
     "Quote",
+    "Trade",
     "discover",
     "discover_kalshi",
     "fetch_kalshi_markets",

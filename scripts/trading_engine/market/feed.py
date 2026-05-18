@@ -45,6 +45,30 @@ class Quote:
         return self.best_bid is not None and self.best_ask is not None
 
 
+@dataclasses.dataclass
+class Trade:
+    """One public last-trade event (zmq_server `LastTradeTopic`).
+
+    Mirrors `libs::protocol::LastTradePrice`. `exchange` / `symbol` are taken
+    from the ZMQ topic, not the payload, so they match the keys used for
+    quotes (the payload's enum `exchange` serialises differently for
+    binance_spot)."""
+
+    exchange: str
+    symbol: str
+    price: float
+    size: float
+    side: str               # taker side: "BUY" | "SELL"
+    timestamp: str          # RFC3339 from the payload (as-is)
+    trade_id: Optional[int]
+    received_ns: int        # local wall clock at receive
+
+
+# ZMQ topic suffix the snapshot publisher appends for last-trade events
+# (`topics/trade.rs`: "{exchange}:{symbol}:last_trade").
+_TRADE_SUFFIX = ":last_trade"
+
+
 def _topic_key(exchange: str, symbol: str) -> str:
     return f"{exchange}:{symbol}"
 
@@ -66,10 +90,16 @@ class MarketFeed:
         self._dealer: Optional[zmq.Socket] = None
         self._dealer_lock = threading.Lock()
         self._quotes: dict[str, Quote] = {}
+        # Latest last-trade per (exchange, symbol), same key scheme as quotes.
+        self._trades: dict[str, Trade] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._subscribed: set[str] = set()
+        # Trade topics carry a ":last_trade" suffix and need no DEALER
+        # handshake (server publishes them unconditionally — see trade.rs),
+        # so they're tracked separately from `_subscribed`.
+        self._subscribed_trades: set[str] = set()
 
     # ── public ──
 
@@ -130,6 +160,41 @@ class MarketFeed:
                 self._quotes.pop(key, None)
             log.debug("unsubscribed %s", key)
 
+    def subscribe_trades(
+        self, symbols: Iterable[str], exchange: str = "polymarket"
+    ) -> None:
+        """Subscribe to `{exchange}:{symbol}:last_trade` topics.
+
+        Unlike snapshots, the server publishes last-trade events without a
+        registry check (`trade.rs`), so no DEALER handshake is needed — only
+        the SUB-side prefix filter."""
+        assert self._sock is not None, "start() the feed first"
+        for sym in symbols:
+            key = _topic_key(exchange, sym)
+            if key in self._subscribed_trades:
+                continue
+            self._sock.setsockopt(
+                zmq.SUBSCRIBE, (key + _TRADE_SUFFIX).encode()
+            )
+            self._subscribed_trades.add(key)
+            log.debug("subscribed %s%s", key, _TRADE_SUFFIX)
+
+    def unsubscribe_trades(
+        self, symbols: Iterable[str], exchange: str = "polymarket"
+    ) -> None:
+        assert self._sock is not None, "start() the feed first"
+        for sym in symbols:
+            key = _topic_key(exchange, sym)
+            if key not in self._subscribed_trades:
+                continue
+            self._sock.setsockopt(
+                zmq.UNSUBSCRIBE, (key + _TRADE_SUFFIX).encode()
+            )
+            self._subscribed_trades.discard(key)
+            with self._lock:
+                self._trades.pop(key, None)
+            log.debug("unsubscribed %s%s", key, _TRADE_SUFFIX)
+
     # ── control-plane handshake ──
 
     def _handshake(self, action: str, exchange: str, symbol: str) -> None:
@@ -168,6 +233,19 @@ class MarketFeed:
         with self._lock:
             return list(self._quotes.values())
 
+    def latest_trade(
+        self, symbol: str, exchange: str = "polymarket"
+    ) -> Optional[Trade]:
+        """Most recent last-trade for `(exchange, symbol)`, or None if none
+        seen yet. Requires a prior `subscribe_trades([symbol], exchange)`."""
+        with self._lock:
+            return self._trades.get(_topic_key(exchange, symbol))
+
+    def trades_all(self) -> list[Trade]:
+        """Copy of the latest Trade per (exchange, symbol)."""
+        with self._lock:
+            return list(self._trades.values())
+
     # ── inner ──
 
     def _loop(self) -> None:
@@ -185,13 +263,28 @@ class MarketFeed:
                 continue
             topic, payload = frames
             try:
-                snap = msgpack.unpackb(payload, raw=False)
+                decoded = msgpack.unpackb(payload, raw=False)
             except Exception as e:  # noqa: BLE001
                 log.warning("market feed decode: %s", e)
                 continue
+            topic_str = topic.decode()
+
+            # Last-trade topics carry a ":last_trade" suffix; strip it first
+            # so the remaining "{exchange}:{symbol}" parses the same way as a
+            # snapshot topic (Polymarket token ids contain no ':').
+            if topic_str.endswith(_TRADE_SUFFIX):
+                base = topic_str[: -len(_TRADE_SUFFIX)]
+                try:
+                    exchange, symbol = base.split(":", 1)
+                except ValueError:
+                    continue
+                self._handle_trade(exchange, symbol, decoded, time.time_ns())
+                continue
+
+            snap = decoded
             # topic = b"{exchange}:{symbol}"
             try:
-                exchange, symbol = topic.decode().split(":", 1)
+                exchange, symbol = topic_str.split(":", 1)
             except ValueError:
                 continue
 
@@ -214,3 +307,31 @@ class MarketFeed:
             )
             with self._lock:
                 self._quotes[_topic_key(exchange, symbol)] = q
+
+    def _handle_trade(
+        self, exchange: str, symbol: str, msg: object, received_ns: int
+    ) -> None:
+        """Decode a `LastTradePrice` map into a Trade and store the latest
+        one per (exchange, symbol). `exchange`/`symbol` come from the topic
+        (the payload enum serialises binance_spot differently)."""
+        if not isinstance(msg, dict):
+            return
+        try:
+            price = float(msg.get("price"))
+            size = float(msg.get("size"))
+        except (TypeError, ValueError):
+            log.warning("trade decode: bad price/size in %s:%s", exchange, symbol)
+            return
+        tid = msg.get("trade_id")
+        t = Trade(
+            exchange=exchange,
+            symbol=symbol,
+            price=price,
+            size=size,
+            side=str(msg.get("side", "")),
+            timestamp=str(msg.get("timestamp", "")),
+            trade_id=int(tid) if isinstance(tid, (int, float)) else None,
+            received_ns=received_ns,
+        )
+        with self._lock:
+            self._trades[_topic_key(exchange, symbol)] = t

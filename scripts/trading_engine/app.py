@@ -28,6 +28,7 @@ from .io import OrderRouter, UserFeed
 from .io.event_log import EventLog
 from .market import MarketFeed, MarketWindow, discover
 from .trading import Observer, Strategy, make_strategy
+from .trading.strategies.momentum import _binance_symbol_for
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +219,20 @@ class Engine:
         # Subscribe the market feed BEFORE the first tick so the first quote
         # has a chance to arrive.
         self.market_feed.subscribe([w.up_asset_id, w.down_asset_id])
+        # Also subscribe the public last-trade stream for both tokens so
+        # strategies / the observer can read executed prints (no DEALER
+        # handshake needed — the server publishes these unconditionally).
+        self.market_feed.subscribe_trades([w.up_asset_id, w.down_asset_id])
+        # Also subscribe the matching Binance spot symbol so strategies that
+        # use it for a signal (e.g. `momentum`) have data on the trading path
+        # — historically only the Observer received Binance quotes. Idempotent:
+        # MarketFeed dedups, and other strategies simply ignore the extra feed.
+        bsym = _binance_symbol_for(w.base_slug)
+        if bsym is not None:
+            self.market_feed.subscribe([bsym], exchange="binance")
+            # And its public trade prints, so `momentum` can read executed
+            # Binance trades alongside the BBA. Idempotent (MarketFeed dedups).
+            self.market_feed.subscribe_trades([bsym], exchange="binance")
         strat = make_strategy(
             self.args.strategy,
             window=w,
