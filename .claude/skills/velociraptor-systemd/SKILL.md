@@ -1,16 +1,17 @@
 ---
 name: velociraptor-systemd
-description: Deploying the four long-running velociraptor binaries (polymarket_recorder, orderbook_recorder, price_to_beat_fetcher, asset_id_fetcher) as Linux systemd services — unit layout, the pre-built-binary model, install/upgrade order, and the failure modes that bite in practice (217/USER, /data permission denials, conda-contaminated builds, journal access). Use when deploying, debugging, or modifying the systemd units under deploy/systemd/.
+description: Deploying the four long-running velociraptor binaries (polymarket_recorder, orderbook_recorder, price_to_beat_fetcher, asset_id_fetcher) as Linux systemd services running as user `ben` from /home/ben/velociraptor — unit layout, the pre-built-binary model, install/upgrade order, and the failure modes that bite in practice (/data permission denials, conda-contaminated builds, start-limit-hit). Use when deploying, debugging, or modifying the systemd units under deploy/systemd/.
 ---
 
 # Velociraptor — systemd deployment
 
-Runs the four long-running binaries as Linux systemd services. Units, the
-`update.sh` helper, and a long-form README live in `deploy/systemd/`. This
-skill is the distilled operational knowledge; the README is the full reference.
+Runs the four long-running binaries as Linux systemd services, **as user
+`ben`** from `/home/ben/velociraptor` (no dedicated service account — maintained
+as the normal login user). Units, the `update.sh` helper, and a long-form
+README live in `deploy/systemd/`. This skill is the distilled operational
+knowledge; the README is the full reference.
 
-> Linux only — the dev machine is macOS (no systemd). The units are deployed
-> to a Linux server.
+> Linux only — the dev machine is macOS (no systemd).
 
 ## The four units
 
@@ -27,63 +28,66 @@ target — enabling the four services is what makes them reboot-persistent).
 
 ## Key design decisions (and why)
 
-- **Pre-built binaries, not `cargo run`.** `ExecStart=/opt/velociraptor/target/release/<bin>`,
-  not `cargo run`. Restart is a sub-second exec swap; a broken build can never
-  take a running service down (you just don't restart until the build is
-  green). Trade-off: **you must `cargo build --release` yourself** before the
-  first start and after every code change — nothing rebuilds automatically.
+- **Runs as `ben`.** `User=ben`, `WorkingDirectory=/home/ben/velociraptor`.
+  No `velociraptor` service account — `git pull` / `cargo build` / log reading
+  need no `sudo -u`. (An earlier design used a dedicated `velociraptor` user;
+  dropped as too much maintenance overhead for a single-operator box.)
+- **Pre-built binaries, not `cargo run`.**
+  `ExecStart=/home/ben/velociraptor/target/release/<bin>`. Restart is a
+  sub-second exec swap; a broken build can never take a running service down
+  (you just don't restart until the build is green). Trade-off: **you must
+  `cargo build --release` yourself** — nothing rebuilds automatically.
 - **`ExecStartPre=/usr/bin/test -x <binary>`** on every unit — a missing build
   fails fast with a clear error instead of a cryptic `203/EXEC`.
 - **`KillSignal=SIGINT`**, `TimeoutStopSec=30` — recorders need `SIGINT`
   (not `SIGTERM`) to flush their MessagePack buffer and close files cleanly.
 - **`Restart=always`, `RestartSec=5`** — survive crashes; 5 s backoff avoids
   CPU spin in a tight crash loop.
+- **Configs read once at startup** — no file-watch / `SIGHUP` / `ExecReload`.
+  A config edit applies only on `systemctl restart`.
 
-## Three hardcoded assumptions (edit units if they differ)
+## Hardcoded in the units (edit them if the machine differs)
 
-1. Service user/group: **`velociraptor`**
-2. Repo / `WorkingDirectory`: **`/opt/velociraptor`**
-3. Binaries: **`/opt/velociraptor/target/release/<name>`**
+1. User/group: **`ben`**
+2. Repo / `WorkingDirectory`: **`/home/ben/velociraptor`**
+3. Binaries: **`/home/ben/velociraptor/target/release/<name>`**
 
 ## Install order (first-time)
 
-1. `useradd --system --create-home --shell /usr/sbin/nologin velociraptor`
-2. Repo to `/opt/velociraptor` (clone, or `cp -a` an existing clone to keep
-   edited configs), then `chown -R velociraptor:velociraptor /opt/velociraptor`
-3. **Pre-create every `/data` path the services write to**, `chown -R` them to
-   `velociraptor` (see "The /data permission trap" below)
-4. Install rust *for* the `velociraptor` user (rustup)
-5. `cargo build --release` **as the velociraptor user with a clean env**
-   (`env -i`, see "conda contamination" below)
-6. `cp deploy/systemd/*.service *.target /etc/systemd/system/` + `daemon-reload`
-7. `systemctl enable --now` the target and the four services
-8. `systemctl status 'velociraptor-*.service'` to verify
+The repo is already at `/home/ben/velociraptor` and you build as yourself, so
+setup is short:
+
+1. **Pre-create every `/data` path the configs write to**, `chown -R ben:ben`
+   them (see "The /data permission trap")
+2. `cargo build --release` **with a clean env** (`env -i`, see "conda
+   contamination")
+3. `sudo cp deploy/systemd/*.service *.target /etc/systemd/system/` +
+   `sudo systemctl daemon-reload`
+4. `sudo systemctl enable --now` the target and the four services, then
+   `systemctl status 'velociraptor-*.service'` to verify
 
 ## Upgrade order (after a repo update)
 
-**Use the script:** `sudo /opt/velociraptor/deploy/systemd/update.sh`
+**Use the script:** `/home/ben/velociraptor/deploy/systemd/update.sh`
 
 Order is load-bearing: **pull → build → (only on success) restart**. The
 running services keep using the *old* `target/release/` binaries throughout the
 (slow) build, so a slow or failing build never causes downtime. If the build
 fails, do **not** restart — old binaries keep running on old code; fix and
 retry. `update.sh` does this plus re-syncs unit files and stops hard on build
-failure (`set -euo pipefail`).
+failure (`set -euo pipefail`). It needs `sudo` only for the unit-file copy and
+`systemctl`, not for git/build.
 
 Not automated — handle manually: config schema drift / `git pull` conflicts on
-edited configs, a changed `logging.dir`/`storage.base_path` needing a fresh
-`chown`, and added/removed units needing manual `enable`/`disable`.
+edited configs, a changed `logging.dir`/`storage.base_path`/`fetcher.*_dir`
+needing a fresh `chown`, and added/removed units needing manual
+`enable`/`disable`.
 
 ## Failure modes seen in practice (highest-value section)
 
-### 1. `status=217/USER` on *all four* units
-The `velociraptor` user/group doesn't exist (install step 1 skipped). systemd
-can't resolve `User=`, so `ExecStartPre` never even runs. **#1 first-deploy
-failure.** Fix: create the user, `reset-failed`, start.
-
-### 2. The /data permission trap
-`/data` is root-owned; the unprivileged service user can't write there. Two
-*distinct* symptoms from two *distinct* config keys:
+### 1. The /data permission trap (the recurring one)
+`/data` is root-owned; `ben` can't write there until chowned. **Three**
+distinct symptoms from three distinct config keys:
 
 - **`{logging.dir}`** (e.g. `/data/syslog`) — both recorders call
   `init_logging` → `create_dir_all` and **panic on startup** if it fails. The
@@ -92,42 +96,57 @@ failure.** Fix: create the user, `reset-failed`, start.
   `orderbook_recorder` logs `StorageWriter: failed to open /data/... :
   Permission denied (os error 13)` *per file*; the service stays up but
   records nothing.
+- **`{fetcher.asset_id_dir}` / `{fetcher.price_to_beat_dir}`** (e.g.
+  `/data/asset_ids`, `/data/price_to_beat`) — the fetchers can't write their
+  per-day CSVs; no archive is produced.
 
-Fix both: `sudo mkdir -p <path> && sudo chown -R velociraptor:velociraptor
-<path>`. **`-R` is mandatory** — a crash-looping recorder may already have
-created subdirs as root on earlier failed starts. **Stop the service before
-chowning** — otherwise it recreates root-owned dirs between your `chown` and
-its next restart. Paths come from the configs:
+Fix all: `sudo mkdir -p <path> && sudo chown -R ben:ben <path>`. **`-R` is
+mandatory** — a crash-looping recorder may already have created subdirs as
+root on earlier failed starts. **Stop the service before chowning** —
+otherwise it recreates root-owned dirs between your `chown` and its next
+restart. Paths come from the configs:
 - `configs/server.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/orderbook_2`
 - `configs/polymarket.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/polymarket_2` (storage only if `storage.enabled: true`)
+- `configs/fetcher.yaml` → `fetcher.asset_id_dir` `/data/asset_ids`, `fetcher.price_to_beat_dir` `/data/price_to_beat`
 
-### 3. conda/venv-contaminated build
-Building from a shell with conda/venv active (prompt shows `(base)`) can bake
-that toolchain's linker/libs into the binary, which then fails to run under the
-bare service account. Always build with a clean env:
+The fetcher archive dir resolves as: `--archive-dir` CLI flag (if passed) >
+`fetcher.{asset_id,price_to_beat}_dir` in the config > built-in default
+(`./data/asset_ids` / `./data/price_to_beat`, relative to `WorkingDirectory`).
+The systemd units pass no `--archive-dir`, so the config value wins.
+
+### 2. conda/venv-contaminated build
+The `ben` shell often has conda active (prompt `(base)`). Building from it can
+bake that toolchain's linker/libs into the binary, which then misbehaves at
+runtime. Always build with a clean env:
 ```bash
-sudo -u velociraptor env -i HOME=/home/velociraptor PATH=/home/velociraptor/.cargo/bin:/usr/bin:/bin \
-  bash -c 'cd /opt/velociraptor && cargo build --release'
+env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \
+  bash -c 'cd /home/ben/velociraptor && cargo build --release'
 ```
 
-### 4. `start-limit-hit`
+### 3. `start-limit-hit`
 Binary crash-loops on startup (bad config, unreachable Redis, panic, or
 unbuilt). systemd's default limit is 5 starts / 10 s. **`reset-failed` is
 mandatory** before `start` will be accepted again — fix the root cause first.
 To soften boot recovery, add `StartLimitIntervalSec=0` to `[Service]`.
 
-### 5. `journalctl` shows `-- No entries --`
-Services run as `velociraptor`; a non-root login only sees its own journal.
-Either prefix `sudo`, or `sudo usermod -aG systemd-journal <user>` (takes
-effect on next login).
+### 4. Fetcher exits immediately, `inactive`
+Log says `no enabled … markets` → `configs/fetcher.yaml` has no enabled
+markets or the file is missing. The fetchers are genuine daemons (infinite
+poll loop after backfill) — any clean exit is an error path. Fix config,
+restart.
+
+### 5. `status=217/USER` on all units
+The units' `User=ben` can't be resolved. Confirm `id ben`, or edit
+`User=`/`Group=` in the unit files. (Was the #1 failure under the old
+dedicated-user design; unlikely now since `ben` is the login user.)
 
 ## Emergency runbook
 
 ```bash
-# Triage
+# Triage (ben can read its own services' journal — no sudo)
 systemctl status velociraptor-orderbook-recorder.service --no-pager -l
 journalctl -u velociraptor-orderbook-recorder.service -n 80 --no-pager
-sudo tail -n 80 /data/syslog/orderbook_recorder/$(date -u +%F).error.log  # recorders only
+tail -n 80 /data/syslog/orderbook_recorder/$(date -u +%F).error.log  # recorders only
 
 # Stop the bleed (before fixing /data perms)
 sudo systemctl stop velociraptor-orderbook-recorder.service     # one
@@ -149,8 +168,9 @@ sudo systemctl start velociraptor-orderbook-recorder.service
 - **Fetchers** (`price_to_beat_fetcher`, `asset_id_fetcher`) log to **stdout
   only** — journald is the only source.
 
+Services run as `ben` (the login user), so `journalctl` needs no `sudo`.
 Fastest error view for a recorder:
-`sudo tail -f /data/syslog/<service>/$(date -u +%F).error.log`
+`tail -f /data/syslog/<service>/$(date -u +%F).error.log`
 
 ## Related
 

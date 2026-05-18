@@ -6,11 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=velociraptor
-Group=velociraptor
-WorkingDirectory=/opt/velociraptor
-ExecStartPre=/usr/bin/test -x /opt/velociraptor/target/release/polymarket_recorder
-ExecStart=/opt/velociraptor/target/release/polymarket_recorder --config configs/polymarket.yaml
+User=ben
+Group=ben
+WorkingDirectory=/home/ben/velociraptor
+ExecStartPre=/usr/bin/test -x /home/ben/velociraptor/target/release/polymarket_recorder
+ExecStart=/home/ben/velociraptor/target/release/polymarket_recorder --config configs/polymarket.yaml
 Restart=always
 RestartSec=5
 KillSignal=SIGINT

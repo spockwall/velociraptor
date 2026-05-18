@@ -88,9 +88,18 @@ price-to-beat fetcher, and asset-id fetcher — ship with systemd units under
 `deploy/systemd/`. They auto-start on boot (once enabled) and restart on crash.
 
 ```bash
-# From the repo root on the Linux server (defaults: user `velociraptor`,
-# repo at /opt/velociraptor — edit the units if yours differ)
-cargo build --release                       # pre-build so first start is fast
+# On the Linux server. Units run as user `ben` from /home/ben/velociraptor
+# (edit the unit files if yours differ).
+
+# 1. Pre-create the root-owned /data dirs the configs write to, owned by ben
+sudo mkdir -p /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
+sudo chown -R ben:ben /data/syslog /data/orderbook_2 /data/polymarket_2 /data/asset_ids /data/price_to_beat
+
+# 2. Build (clean env — an active conda/venv can contaminate the binary)
+env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \
+  bash -c 'cd /home/ben/velociraptor && cargo build --release'
+
+# 3. Install + enable + start
 sudo cp deploy/systemd/*.service deploy/systemd/*.target /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now \
@@ -99,8 +108,11 @@ sudo systemctl enable --now \
   velociraptor-price-to-beat-fetcher.service \
   velociraptor-asset-id-fetcher.service
 
-# Logs / status
+# Logs / status (ben can read its own services' logs — no sudo)
 journalctl -u velociraptor-orderbook-recorder.service -f
+
+# Update after a code change:
+deploy/systemd/update.sh
 ```
 
 See `deploy/systemd/README.md` for the full install, the unit→command map,

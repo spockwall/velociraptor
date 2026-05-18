@@ -6,11 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=velociraptor
-Group=velociraptor
-WorkingDirectory=/opt/velociraptor
-ExecStartPre=/usr/bin/test -x /opt/velociraptor/target/release/asset_id_fetcher
-ExecStart=/opt/velociraptor/target/release/asset_id_fetcher --config configs/fetcher.yaml
+User=ben
+Group=ben
+WorkingDirectory=/home/ben/velociraptor
+ExecStartPre=/usr/bin/test -x /home/ben/velociraptor/target/release/asset_id_fetcher
+ExecStart=/home/ben/velociraptor/target/release/asset_id_fetcher --config configs/fetcher.yaml
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
