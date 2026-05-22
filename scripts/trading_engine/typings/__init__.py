@@ -2,9 +2,11 @@
 
   - `events`: immutable event dataclasses carried on the engine queue.
   - `state`:  per-strategy state container (trade history + order ledger).
+  - `window`: rolling-window dataclasses (PolymarketWindow / KalshiWindow).
 
 No behavior or threading here — the dispatcher that consumes events lives
-in `dispatcher.py`.
+in `dispatcher.py`; the discovery that builds windows lives in
+`utils/windows.py`.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from .events import (
     TradeEvent,
 )
 from .state import OrderLedger, OrderRecord, StrategyState
+from .window import KalshiWindow, PolymarketWindow
 
 __all__ = [
     "Event",
@@ -31,4 +34,8 @@ __all__ = [
     "StrategyState",
     "TimerEvent",
     "TradeEvent",
+
+    # Window
+    "KalshiWindow",
+    "PolymarketWindow",
 ]
