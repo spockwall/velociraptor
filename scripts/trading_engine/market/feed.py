@@ -81,10 +81,19 @@ class MarketFeed:
         pub_endpoint: str = "tcp://127.0.0.1:5555",
         router_endpoint: str = "tcp://127.0.0.1:5556",
         sub_type: str = "snapshot",   # "snapshot" or "bba"
+        on_quote=None,
+        on_trade=None,
     ):
         self._pub = pub_endpoint
         self._router = router_endpoint
         self._sub_type = sub_type
+        # Optional push callbacks invoked AFTER the latest value is stored,
+        # on the feed thread. The engine sets these to enqueue events on the
+        # dispatcher; they must be cheap and non-blocking (just queue.put).
+        # The dict store is always kept regardless, so `latest()` /
+        # `latest_trade()` (observer, momentum) still work unchanged.
+        self._on_quote = on_quote
+        self._on_trade = on_trade
         self._ctx = zmq.Context.instance()
         self._sock: Optional[zmq.Socket] = None
         self._dealer: Optional[zmq.Socket] = None
@@ -307,6 +316,8 @@ class MarketFeed:
             )
             with self._lock:
                 self._quotes[_topic_key(exchange, symbol)] = q
+            if self._on_quote is not None:
+                self._on_quote(exchange, symbol, q)
 
     def _handle_trade(
         self, exchange: str, symbol: str, msg: object, received_ns: int
@@ -335,3 +346,5 @@ class MarketFeed:
         )
         with self._lock:
             self._trades[_topic_key(exchange, symbol)] = t
+        if self._on_trade is not None:
+            self._on_trade(exchange, symbol, t)
