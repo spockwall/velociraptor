@@ -1,7 +1,7 @@
 """Event types carried on the engine's queue.
 
 Pure data — immutable dataclasses, no behavior. The consumer side
-(`Dispatcher`, `TimerThread`) lives in `trading/dispatcher.py`; keeping the
+(`Dispatcher`, `TimerThread`) lives in `dispatcher.py`; keeping the
 types here lets producers, the dispatcher, and tests share one definition
 without importing the threading machinery.
 

@@ -4,7 +4,7 @@
   - `state`:  per-strategy state container (trade history + order ledger).
 
 No behavior or threading here — the dispatcher that consumes events lives
-in `trading/dispatcher.py`.
+in `dispatcher.py`.
 """
 
 from __future__ import annotations
