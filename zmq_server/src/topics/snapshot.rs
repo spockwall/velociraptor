@@ -33,6 +33,32 @@ impl Topic for SnapshotTopic<'_> {
     }
 }
 
+/// Snapshot frame for a rolling market published on a **static topic**
+/// `{exchange}:{base_slug}` (e.g. `polymarket:btc-updown-15m`) that does not
+/// change across window rollover. The payload's `symbol` carries the
+/// per-window asset_id and `full_slug` carries the window identity, so
+/// subscribers can detect rollover from a single fixed subscription.
+pub struct RollingSnapshotTopic<'a> {
+    pub base_slug: &'a str,
+    pub snap: &'a OrderbookSnapshot,
+}
+
+impl Topic for RollingSnapshotTopic<'_> {
+    fn topic(&self) -> String {
+        format!("{}:{}", self.snap.exchange.to_str(), self.base_slug)
+    }
+
+    fn encode(&self) -> Option<Vec<u8>> {
+        match rmp_serde::to_vec_named(self.snap) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                warn!("RollingSnapshot encode error: {e}");
+                None
+            }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -44,6 +70,7 @@ mod tests {
         OrderbookSnapshot {
             exchange: ExchangeName::Binance,
             symbol: "btcusdt".into(),
+            full_slug: None,
             sequence: 42,
             timestamp: chrono::Utc::now(),
             best_bid: Some((30000.0, 1.5)),
@@ -65,5 +92,38 @@ mod tests {
         let decoded: OrderbookSnapshot = super::super::decode(&bytes).unwrap();
         assert_eq!(decoded.symbol, "btcusdt");
         assert_eq!(decoded.sequence, 42);
+    }
+
+    #[test]
+    fn rolling_snapshot_topic_uses_base_slug_and_preserves_full_slug() {
+        let mut s = snap();
+        s.exchange = ExchangeName::Polymarket;
+        s.symbol = "0xabc-asset-id".into();
+        s.full_slug = Some("btc-updown-15m-1715423400".into());
+        let t = RollingSnapshotTopic {
+            base_slug: "btc-updown-15m",
+            snap: &s,
+        };
+        // Static topic — does NOT include the asset_id (which would change at rollover).
+        assert_eq!(t.topic(), "polymarket:btc-updown-15m");
+        let bytes = t.encode().unwrap();
+        let decoded: OrderbookSnapshot = super::super::decode(&bytes).unwrap();
+        assert_eq!(decoded.symbol, "0xabc-asset-id");
+        assert_eq!(
+            decoded.full_slug.as_deref(),
+            Some("btc-updown-15m-1715423400"),
+        );
+    }
+
+    #[test]
+    fn decode_old_snapshot_missing_full_slug_yields_none() {
+        // Encode a snapshot WITHOUT full_slug set (None) and confirm it
+        // round-trips with full_slug == None — pins backward compatibility
+        // for already-encoded Redis values / recorded files.
+        let s = snap();
+        assert!(s.full_slug.is_none());
+        let bytes = rmp_serde::to_vec_named(&s).unwrap();
+        let decoded: OrderbookSnapshot = super::super::decode(&bytes).unwrap();
+        assert!(decoded.full_slug.is_none());
     }
 }

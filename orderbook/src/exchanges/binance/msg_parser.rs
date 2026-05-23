@@ -36,6 +36,8 @@ impl BinanceMessageParser {
         Some(StreamMessage::LastTradePrice(LastTradePrice {
             exchange: self.exchange_name.clone(),
             symbol: ev.symbol.to_lowercase(),
+            // Static exchange — no rolling window.
+            full_slug: None,
             price,
             size: qty,
             side,

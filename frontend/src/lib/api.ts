@@ -82,9 +82,15 @@ export interface ControlStatus {
 export type ControlAction = { type: "halt" } | { type: "resume" } | { type: "reload_risk" };
 
 export interface PolymarketMarket {
-    asset_id: string;
+    /** Stable identifier across rollovers. The UI keys cards on this and
+     *  fetches orderbook via `/api/orderbook/polymarket/{base_slug}`. */
     base_slug: string;
+    /** Per-side asset_id from the backend (one label per up/down). The UI
+     *  filters to `side === "up"` so each market shows as one card. */
+    asset_id: string;
+    /** Current window's full_slug. Changes on every rollover. */
     full_slug: string;
+    /** "up" or "down" — the UI keeps only the UP entries. */
     side: string;
     window_start: number;
     interval_secs: number;

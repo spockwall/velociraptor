@@ -14,7 +14,8 @@
 
 use crate::control::{dispatch, handle_control, Registry};
 use crate::socket::{parse_router_frames, PubSocket, RouterSocket};
-use crate::topics::trade::LastTradeTopic;
+use crate::topics::snapshot::RollingSnapshotTopic;
+use crate::topics::trade::{LastTradeTopic, RollingLastTradeTopic};
 use crate::topics::user::UserEventTopic;
 use crate::topics::Topic;
 use orderbook::{StreamEvent, StreamEventSource};
@@ -123,6 +124,26 @@ impl ZmqServer {
                             if let Some((topic, bytes)) = UserEventTopic(&ev).frame() {
                                 if let Err(e) = user_pub.send(topic, bytes).await {
                                     error!("ZMQ user PUB send error: {e}");
+                                }
+                            }
+                        }
+                        // Rolling-market snapshots: published on the stable
+                        // topic `{exchange}:{base_slug}` (no registry — the
+                        // base_slug doesn't change across rollover, so a
+                        // subscriber keeps one fixed subscription).
+                        Ok(StreamEvent::RollingSnapshot { base_slug, snap }) => {
+                            let t = RollingSnapshotTopic { base_slug: &base_slug, snap: &snap };
+                            if let Some((topic, bytes)) = t.frame() {
+                                if let Err(e) = market_pub.send(topic, bytes).await {
+                                    error!("ZMQ rolling snapshot PUB send error: {e}");
+                                }
+                            }
+                        }
+                        Ok(StreamEvent::RollingLastTradePrice { base_slug, trade }) => {
+                            let t = RollingLastTradeTopic { base_slug: &base_slug, trade: &trade };
+                            if let Some((topic, bytes)) = t.frame() {
+                                if let Err(e) = market_pub.send(topic, bytes).await {
+                                    error!("ZMQ rolling trade PUB send error: {e}");
                                 }
                             }
                         }

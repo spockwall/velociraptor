@@ -33,6 +33,7 @@ mod tests {
         OrderbookSnapshot {
             exchange: ExchangeName::Binance,
             symbol: "btcusdt".into(),
+            full_slug: None,
             sequence: 42,
             timestamp: chrono::Utc::now(),
             best_bid: Some((30000.0, 1.5)),

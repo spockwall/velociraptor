@@ -51,6 +51,7 @@ pub fn add_binance(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
         ClientConfig::new(ExchangeName::Binance).set_subscription_message(
             BinanceSubMsgBuilder::new()
                 .with_orderbook_channel(&refs)
+                .with_trade_channel(&refs)
                 .build(),
         ),
     );
@@ -175,6 +176,15 @@ pub fn attach_recorder(system: &mut StreamSystem, cfg: Option<recorder::StorageC
                     let _ = rec_tx.send(recorder::RecorderEvent::Snapshot(snap));
                 }
                 Ok(StreamEvent::LastTradePrice(trade)) => {
+                    let _ = rec_tx.send(recorder::RecorderEvent::Trade(trade));
+                }
+                // Rolling-market events carry the same payload as the static
+                // variants (`full_slug` is already stamped); archive them
+                // identically so per-(exchange, asset_id) files keep filling.
+                Ok(StreamEvent::RollingSnapshot { snap, .. }) => {
+                    let _ = rec_tx.send(recorder::RecorderEvent::Snapshot(snap));
+                }
+                Ok(StreamEvent::RollingLastTradePrice { trade, .. }) => {
                     let _ = rec_tx.send(recorder::RecorderEvent::Trade(trade));
                 }
                 Ok(StreamEvent::User(ev)) => {
@@ -330,10 +340,10 @@ async fn spawn_polymarket_window(
             }
             r.del(&prior_label).await;
             r.srem(RedisKey::POLYMARKET_LABEL_INDEX, prior_id).await;
-            r.del(&RedisKey::orderbook("polymarket", prior_id)).await;
-            r.del(&RedisKey::bba("polymarket", prior_id)).await;
-            r.del(&RedisKey::snapshots("polymarket", prior_id)).await;
-            r.del(&RedisKey::trades("polymarket", prior_id)).await;
+            // Under base_slug-keyed Redis writes, there's no per-asset_id
+            // ob/bba/snapshots/trades key to delete — those keys live at
+            // `ob:polymarket:{base_slug}` and get overwritten by the next
+            // window's first snapshot. Only the label index is stale.
             r.srem(&base_slug_index, prior_id).await;
         }
 
@@ -396,27 +406,116 @@ async fn spawn_polymarket_window(
         });
 
     // Forward this per-window engine's snapshots + trades onto the main
-    // engine bus so ZmqServer (which is attached to the main engine only)
-    // publishes them. Without this, Polymarket frames never reach the SUB.
+    // engine bus so ZmqServer publishes them on the STATIC topic
+    // `polymarket:{base_slug}`. We stamp `full_slug` into the payload so a
+    // subscriber on the stable topic can detect window rollover from the
+    // payload (no resubscribe needed).
+    //
+    // **UP-only forwarding**: Polymarket up/down tokens are mirror images
+    // of the same orderbook (buying YES at p = selling NO at 1-p). We
+    // subscribe both WS streams (the per-window orderbook engine needs
+    // both for full materialisation) but only forward the UP side to
+    // subscribers. Down-side frames are silently dropped from the bus.
     if let Some(bus) = main_bus.clone() {
+        // asset_id → is_up, for the per-frame gate inside the hook.
+        // `labeled` is (asset_id, resolved_base, full_slug, is_up).
+        let is_up_by_asset: std::collections::HashMap<String, bool> = labeled
+            .iter()
+            .map(|(id, _b, _f, is_up)| (id.clone(), *is_up))
+            .collect();
+
         let bus_snap = bus.clone();
+        let slug_snap = slug.clone();
+        let full_slug_snap = full_slug.clone();
+        let is_up_by_asset_snap = is_up_by_asset.clone();
+        let redis_snap = redis.clone();
+        let snap_cap = snapshot_cap;
         engine
             .hooks_mut()
             .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-                bus_snap.publish(StreamEvent::OrderbookSnapshot(snap.clone()));
+                // Forward + persist only the UP token's snapshots.
+                if !is_up_by_asset_snap.get(&snap.symbol).copied().unwrap_or(false)
+                {
+                    return;
+                }
+                let mut stamped = snap.clone();
+                stamped.full_slug = Some(full_slug_snap.clone());
+                bus_snap.publish(StreamEvent::RollingSnapshot {
+                    base_slug: slug_snap.clone(),
+                    snap: stamped.clone(),
+                });
+                // Redis writes keyed by BASE_SLUG (not asset_id), so a
+                // single entry per market is reused across rollovers.
+                // Replaces the global attach_redis hook for this engine.
+                if let Some(r) = &redis_snap {
+                    if let Ok(ob_bytes) = rmp_serde::to_vec_named(&stamped) {
+                        let r1 = r.clone();
+                        let s1 = slug_snap.clone();
+                        let b1 = ob_bytes.clone();
+                        tokio::spawn(async move {
+                            r1.set_orderbook("polymarket", &s1, &b1).await
+                        });
+                        let r2 = r.clone();
+                        let s2 = slug_snap.clone();
+                        tokio::spawn(async move {
+                            r2.lpush_capped(
+                                &RedisKey::snapshots("polymarket", &s2),
+                                &ob_bytes,
+                                snap_cap,
+                            )
+                            .await
+                        });
+                    }
+                    if let Ok(bba_bytes) =
+                        rmp_serde::to_vec_named(&BbaPayload::from(&stamped))
+                    {
+                        let r1 = r.clone();
+                        let s1 = slug_snap.clone();
+                        tokio::spawn(async move {
+                            r1.set_bba("polymarket", &s1, &bba_bytes).await
+                        });
+                    }
+                }
             });
+        let slug_trade = slug.clone();
+        let full_slug_trade = full_slug.clone();
+        let is_up_by_asset_trade = is_up_by_asset;
+        let redis_trade = redis.clone();
+        let trd_cap = trade_cap;
         engine
             .hooks_mut()
             .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
-                bus.publish(StreamEvent::LastTradePrice(trade.clone()));
+                if !is_up_by_asset_trade.get(&trade.symbol).copied().unwrap_or(false)
+                {
+                    return;
+                }
+                let mut stamped = trade.clone();
+                stamped.full_slug = Some(full_slug_trade.clone());
+                bus.publish(StreamEvent::RollingLastTradePrice {
+                    base_slug: slug_trade.clone(),
+                    trade: stamped.clone(),
+                });
+                if let Some(r) = &redis_trade {
+                    if let Ok(bytes) = rmp_serde::to_vec_named(&stamped) {
+                        let r1 = r.clone();
+                        let s1 = slug_trade.clone();
+                        tokio::spawn(async move {
+                            r1.lpush_capped(
+                                &RedisKey::trades("polymarket", &s1),
+                                &bytes,
+                                trd_cap,
+                            )
+                            .await
+                        });
+                    }
+                }
             });
     }
 
-    // Attach Redis snapshot/trade writers to the per-window engine so its
-    // data flows into Redis (the main engine's hook only sees static exchanges).
-    if let Some(r) = redis.clone() {
-        attach_redis(&mut engine, r, snapshot_cap, trade_cap);
-    }
+    // Note: we DO NOT call `attach_redis(&mut engine, ...)` here. The
+    // global hook keys Redis by `snap.symbol` (= asset_id), which under
+    // the static-topic design would create one stale entry per rolled-off
+    // asset. The per-frame writes above are keyed by base_slug instead.
 
     let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
     let ctrl = control.clone();
@@ -443,12 +542,12 @@ async fn spawn_polymarket_window(
             for id in &cleanup_assets {
                 r.del(&RedisKey::polymarket_label(id)).await;
                 r.srem(RedisKey::POLYMARKET_LABEL_INDEX, id).await;
-                r.del(&RedisKey::orderbook("polymarket", id)).await;
-                r.del(&RedisKey::bba("polymarket", id)).await;
-                r.del(&RedisKey::snapshots("polymarket", id)).await;
-                r.del(&RedisKey::trades("polymarket", id)).await;
                 r.srem(&base_slug_index, id).await;
             }
+            // ob/bba/snapshots/trades are keyed by base_slug now and reused
+            // across rollovers; nothing to clean up here. (If the engine is
+            // shutting down for good, leave the last snapshot in Redis for
+            // post-mortem inspection.)
         });
     }
 
@@ -715,10 +814,9 @@ async fn spawn_kalshi_window(
             }
             r.del(&prior_label).await;
             r.srem(RedisKey::KALSHI_LABEL_INDEX, prior_ticker).await;
-            r.del(&RedisKey::orderbook("kalshi", prior_ticker)).await;
-            r.del(&RedisKey::bba("kalshi", prior_ticker)).await;
-            r.del(&RedisKey::snapshots("kalshi", prior_ticker)).await;
-            r.del(&RedisKey::trades("kalshi", prior_ticker)).await;
+            // Kalshi Redis ob/bba/snapshots/trades are keyed by `series`
+            // and reused across ticker rollovers — nothing per-ticker to
+            // delete here.
             r.srem(&series_index, prior_ticker).await;
         }
 
@@ -759,24 +857,90 @@ async fn spawn_kalshi_window(
         });
 
     // Forward per-window snapshots + trades onto the main engine bus so
-    // ZmqServer publishes them (the per-window engine is invisible to it).
+    // ZmqServer publishes them on the STATIC topic `kalshi:{series}`. We
+    // stamp the per-window `ticker` into `full_slug` so a fixed subscription
+    // can detect rollover from the payload — same pattern as Polymarket.
+    // We ALSO write the stamped payload to Redis under `(kalshi, series)`
+    // keys so backend `/api/orderbook/kalshi/{series}` reads them.
     if let Some(bus) = main_bus.clone() {
         let bus_snap = bus.clone();
+        let series_snap = series.clone();
+        let ticker_snap = ticker.clone();
+        let redis_snap = redis.clone();
+        let snap_cap = snapshot_cap;
         engine
             .hooks_mut()
             .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
-                bus_snap.publish(StreamEvent::OrderbookSnapshot(snap.clone()));
+                let mut stamped = snap.clone();
+                stamped.full_slug = Some(ticker_snap.clone());
+                bus_snap.publish(StreamEvent::RollingSnapshot {
+                    base_slug: series_snap.clone(),
+                    snap: stamped.clone(),
+                });
+                if let Some(r) = &redis_snap {
+                    if let Ok(ob_bytes) = rmp_serde::to_vec_named(&stamped) {
+                        let r1 = r.clone();
+                        let s1 = series_snap.clone();
+                        let b1 = ob_bytes.clone();
+                        tokio::spawn(async move {
+                            r1.set_orderbook("kalshi", &s1, &b1).await
+                        });
+                        let r2 = r.clone();
+                        let s2 = series_snap.clone();
+                        tokio::spawn(async move {
+                            r2.lpush_capped(
+                                &RedisKey::snapshots("kalshi", &s2),
+                                &ob_bytes,
+                                snap_cap,
+                            )
+                            .await
+                        });
+                    }
+                    if let Ok(bba_bytes) =
+                        rmp_serde::to_vec_named(&BbaPayload::from(&stamped))
+                    {
+                        let r1 = r.clone();
+                        let s1 = series_snap.clone();
+                        tokio::spawn(async move {
+                            r1.set_bba("kalshi", &s1, &bba_bytes).await
+                        });
+                    }
+                }
             });
+        let series_trade = series.clone();
+        let ticker_trade = ticker.clone();
+        let redis_trade = redis.clone();
+        let trd_cap = trade_cap;
         engine
             .hooks_mut()
             .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
-                bus.publish(StreamEvent::LastTradePrice(trade.clone()));
+                let mut stamped = trade.clone();
+                stamped.full_slug = Some(ticker_trade.clone());
+                bus.publish(StreamEvent::RollingLastTradePrice {
+                    base_slug: series_trade.clone(),
+                    trade: stamped.clone(),
+                });
+                if let Some(r) = &redis_trade {
+                    if let Ok(bytes) = rmp_serde::to_vec_named(&stamped) {
+                        let r1 = r.clone();
+                        let s1 = series_trade.clone();
+                        tokio::spawn(async move {
+                            r1.lpush_capped(
+                                &RedisKey::trades("kalshi", &s1),
+                                &bytes,
+                                trd_cap,
+                            )
+                            .await
+                        });
+                    }
+                }
             });
     }
 
-    if let Some(r) = redis.clone() {
-        attach_redis(&mut engine, r, snapshot_cap, trade_cap);
-    }
+    // Note: no `attach_redis(&mut engine, ...)` here. The global hook
+    // keys Redis by `snap.symbol` (= ticker), which would create a stale
+    // entry per rolled-off ticker. The per-frame writes above key by
+    // `series` instead.
 
     let system = StreamSystem::new(engine, cfg, control.clone()).ok()?;
     let ctrl = control.clone();
@@ -797,11 +961,9 @@ async fn spawn_kalshi_window(
             let series_index = RedisKey::kalshi_series_tickers(&cleanup_series);
             r.del(&RedisKey::kalshi_label(&cleanup_ticker)).await;
             r.srem(RedisKey::KALSHI_LABEL_INDEX, &cleanup_ticker).await;
-            r.del(&RedisKey::orderbook("kalshi", &cleanup_ticker)).await;
-            r.del(&RedisKey::bba("kalshi", &cleanup_ticker)).await;
-            r.del(&RedisKey::snapshots("kalshi", &cleanup_ticker)).await;
-            r.del(&RedisKey::trades("kalshi", &cleanup_ticker)).await;
             r.srem(&series_index, &cleanup_ticker).await;
+            // ob/bba/snapshots/trades are keyed by `series` and reused
+            // across ticker rollovers — nothing per-ticker to clean up.
         });
     }
 

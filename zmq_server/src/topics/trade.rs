@@ -25,3 +25,28 @@ impl Topic for LastTradeTopic<'_> {
         }
     }
 }
+
+/// Rolling-market last-trade frame published on the stable topic
+/// `{exchange}:{base_slug}:last_trade`. The payload's `symbol` carries the
+/// per-window asset_id and `full_slug` carries the window identity, so a
+/// subscriber on a fixed subscription sees rollover as a payload change.
+pub struct RollingLastTradeTopic<'a> {
+    pub base_slug: &'a str,
+    pub trade: &'a LastTradePrice,
+}
+
+impl Topic for RollingLastTradeTopic<'_> {
+    fn topic(&self) -> String {
+        format!("{}:{}:last_trade", self.trade.exchange, self.base_slug)
+    }
+
+    fn encode(&self) -> Option<Vec<u8>> {
+        match rmp_serde::to_vec_named(self.trade) {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                error!("RollingLastTradeTopic encode error: {e}");
+                None
+            }
+        }
+    }
+}

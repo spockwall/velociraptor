@@ -1,6 +1,8 @@
 //! Market discovery endpoints. Each scans an exchange's label-index set in
-//! Redis, drops entries whose window has already ended (along with their
-//! associated orderbook/bba/snapshot/trade data), and returns what's left.
+//! Redis, drops entries whose window has already ended, and returns what's
+//! left. Orderbook/bba/snapshots/trades live under `base_slug` (Polymarket)
+//! or `series` (Kalshi) and are overwritten by the next window's first
+//! snapshot, so they don't need per-label teardown here.
 
 use std::sync::Arc;
 
@@ -43,21 +45,17 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Tear down all per-asset/per-ticker keys for a market that's no longer
-/// active. Called when the GC pass detects an expired window.
+/// Drop an expired label: its metadata hash + index-set membership.
+/// Orderbook/bba/snapshots/trades are keyed by base_slug/series and reused
+/// across rollovers, so they don't get torn down per label.
 async fn expire_label(
     redis: &RedisHandle,
     label_key: &str,
     label_index: &str,
-    exchange: &str,
     asset_or_ticker: &str,
 ) {
     redis.del(label_key).await;
     redis.srem(label_index, asset_or_ticker).await;
-    redis.del(&RedisKey::orderbook(exchange, asset_or_ticker)).await;
-    redis.del(&RedisKey::bba(exchange, asset_or_ticker)).await;
-    redis.del(&RedisKey::snapshots(exchange, asset_or_ticker)).await;
-    redis.del(&RedisKey::trades(exchange, asset_or_ticker)).await;
 }
 
 pub(crate) async fn get_polymarket_markets(
@@ -87,14 +85,7 @@ pub(crate) async fn get_polymarket_markets(
         // Drop labels whose window has already ended (interval_secs == 0
         // means a static market — never expires).
         if interval_secs > 0 && window_start > 0 && window_start + interval_secs <= now {
-            expire_label(
-                &s.redis,
-                &key,
-                RedisKey::POLYMARKET_LABEL_INDEX,
-                "polymarket",
-                &id,
-            )
-            .await;
+            expire_label(&s.redis, &key, RedisKey::POLYMARKET_LABEL_INDEX, &id).await;
             continue;
         }
 
@@ -150,14 +141,7 @@ pub(crate) async fn get_kalshi_markets(
             .unwrap_or(0);
 
         if interval_secs > 0 && window_start > 0 && window_start + interval_secs <= now {
-            expire_label(
-                &s.redis,
-                &key,
-                RedisKey::KALSHI_LABEL_INDEX,
-                "kalshi",
-                &ticker,
-            )
-            .await;
+            expire_label(&s.redis, &key, RedisKey::KALSHI_LABEL_INDEX, &ticker).await;
             continue;
         }
 

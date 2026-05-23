@@ -14,6 +14,9 @@ pub fn snapshot_from(book: &Orderbook, depth: usize) -> OrderbookSnapshot {
     OrderbookSnapshot {
         exchange: book.exchange.clone(),
         symbol: book.symbol.clone(),
+        // Stamped later by the per-window forwarding hook for rolling
+        // markets (zmq_server/src/setup.rs); static exchanges leave it None.
+        full_slug: None,
         sequence: book.sequence,
         timestamp: book.last_update,
         best_bid: book.best_bid(),

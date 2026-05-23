@@ -50,8 +50,11 @@ function DepthBar({ side, levels }: { side: "bid" | "ask"; levels: [number, numb
 }
 
 function MarketPanel({ market }: { market: KalshiMarket }) {
-    const snapFetcher = useCallback(() => api.orderbook("kalshi", market.ticker), [market.ticker]);
-    const bbaFetcher = useCallback(() => api.bba("kalshi", market.ticker), [market.ticker]);
+    // Fetch by SERIES (stable across ticker rollover). The Redis key is
+    // `ob:kalshi:{series}` and overwrites itself on each new ticker, so
+    // the card stays mounted and only the title (= current ticker) changes.
+    const snapFetcher = useCallback(() => api.orderbook("kalshi", market.series), [market.series]);
+    const bbaFetcher = useCallback(() => api.bba("kalshi", market.series), [market.series]);
 
     const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 1000);
     const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 600);
@@ -64,8 +67,14 @@ function MarketPanel({ market }: { market: KalshiMarket }) {
     const closeUnix = market.window_start + market.interval_secs;
     const closeLabel = market.interval_secs > 0 ? new Date(closeUnix * 1000).toISOString().slice(11, 16) + "Z" : "static";
 
+    // Title prefers the live payload's full_slug (= current ticker, server
+    // stamps it that way). Falls back to the markets-API title during the
+    // bootstrap window (before the first snapshot arrives).
+    const liveTicker = snap?.full_slug ?? source?.full_slug ?? market.ticker;
+    const titleLine = liveTicker || market.title;
+
     return (
-        <Card title={market.title} subtitle={`${market.series} · closes ${closeLabel}`} noPad>
+        <Card title={titleLine} subtitle={`${market.series} · closes ${closeLabel}`} noPad>
             <div className="flex items-center justify-between px-4 py-2 border-b border-border-strong bg-bg-surface/50">
                 <span className={`text-[10px] font-mono uppercase tracking-wider ${classMap.dim}`}>
                     {market.series}
@@ -160,7 +169,10 @@ export default function KalshiPage() {
             {markets && markets.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
                     {markets.map((m) => (
-                        <MarketPanel key={m.ticker} market={m} />
+                        // Keyed by series so the panel instance is reused
+                        // across ticker rollovers (no remount → polling
+                        // state survives).
+                        <MarketPanel key={m.series} market={m} />
                     ))}
                 </div>
             )}

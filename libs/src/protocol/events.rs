@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 pub struct BbaPayload {
     pub exchange: String,
     pub symbol: String,
+    /// Current window full_slug for rolling markets (mirrors
+    /// `OrderbookSnapshot.full_slug`). `#[serde(default)]` keeps back-compat
+    /// with older encoded BBAs in Redis.
+    #[serde(default)]
+    pub full_slug: Option<String>,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub best_bid: Option<(f64, f64)>,

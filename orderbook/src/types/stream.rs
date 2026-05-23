@@ -15,6 +15,20 @@ pub enum StreamEvent {
     User(UserEvent),
     /// Public market last-trade event — emitted when a maker/taker order is matched.
     LastTradePrice(LastTradePrice),
+    /// Rolling-market snapshot tagged with its base_slug, so the ZMQ server
+    /// can publish it on the stable topic `{exchange}:{base_slug}` while the
+    /// payload's `symbol` (asset_id) and `full_slug` carry the per-window
+    /// identity. Static exchanges keep using `OrderbookSnapshot`.
+    RollingSnapshot {
+        base_slug: String,
+        snap: OrderbookSnapshot,
+    },
+    /// Rolling-market last-trade tagged with base_slug — same rationale as
+    /// `RollingSnapshot`. Published on `{exchange}:{base_slug}:last_trade`.
+    RollingLastTradePrice {
+        base_slug: String,
+        trade: LastTradePrice,
+    },
 }
 
 /// Source of engine events for downstream consumers (transport layers,

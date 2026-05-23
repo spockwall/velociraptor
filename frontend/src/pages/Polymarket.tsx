@@ -109,8 +109,13 @@ function fmtUsd(n: number | null | undefined): string {
 }
 
 function MarketPanel({ market }: { market: PolymarketMarket }) {
-    const snapFetcher = useCallback(() => api.orderbook("polymarket", market.asset_id), [market.asset_id]);
-    const bbaFetcher = useCallback(() => api.bba("polymarket", market.asset_id), [market.asset_id]);
+    // Fetch by BASE_SLUG, not asset_id. The Redis key is now keyed by
+    // base_slug and is overwritten on every rollover, so this card stays
+    // mounted across window rollovers (React keeps the same instance
+    // because the list key is also base_slug). Only the title +
+    // best_bid/ask values change as the new window starts streaming.
+    const snapFetcher = useCallback(() => api.orderbook("polymarket", market.base_slug), [market.base_slug]);
+    const bbaFetcher = useCallback(() => api.bba("polymarket", market.base_slug), [market.base_slug]);
     // CEX spot price snapshotted *once* at window-open time and frozen for
     // the rest of the window. Shared across all panels of the same window.
     // Not byte-exact vs Polymarket's Chainlink-derived value, just a UI hint.
@@ -125,17 +130,18 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
     const ask = source?.best_ask?.[0];
     const spread = source?.spread ?? (bid != null && ask != null ? ask - bid : null);
 
-    const isUp = market.side === "up";
+    // Title comes from the live snapshot's full_slug (updates on rollover);
+    // fall back to the markets-API value during bootstrap dead time.
+    const liveFullSlug = snap?.full_slug ?? source?.full_slug ?? market.full_slug;
+    const titleLine = liveFullSlug || market.base_slug;
 
     return (
-        <Card title={market.title} subtitle={`asset ${market.asset_id.slice(0, 12)}…`} noPad>
+        <Card title={titleLine} subtitle={`asset ${(snap?.symbol ?? market.asset_id).slice(0, 12)}…`} noPad>
             <div className="flex items-center justify-between px-4 py-2 border-b border-border-strong bg-bg-surface/50">
                 <span
-                    className={`text-[10px] font-mono uppercase tracking-wider ${
-                        isUp ? classMap.bidText : classMap.askText
-                    }`}
+                    className={`text-[10px] font-mono uppercase tracking-wider ${classMap.bidText}`}
                 >
-                    {isUp ? "UP / YES" : "DOWN / NO"}
+                    UP / YES
                 </span>
                 <span className="text-[10px] font-mono text-text-muted opacity-80">
                     {snap ? `seq ${snap.sequence} · ${fmtTs(snap.timestamp)}` : loading ? "loading…" : "waiting"}
@@ -212,14 +218,19 @@ export default function PolymarketPage() {
     const fetcher = useCallback(() => api.polymarketMarkets(), []);
     const { data: markets, error, loading } = usePolling<PolymarketMarket[]>(fetcher, 5000);
 
+    // Show one card per market (the UP side). The backend still returns
+    // a label per side; we filter so the page renders one panel per
+    // base_slug and keys cards on base_slug so they survive rollover.
+    const upMarkets = markets?.filter((m) => m.side === "up") ?? null;
+
     return (
         <div className="p-4 w-full max-w-[1600px] mx-auto">
             <div className="flex items-center justify-between mb-4 gap-4">
                 <h1 className="text-sm font-mono text-text-primary">
                     Polymarket · live windows
-                    {markets && (
+                    {upMarkets && (
                         <span className="ml-3 text-text-muted">
-                            ({markets.length} asset{markets.length === 1 ? "" : "s"})
+                            ({upMarkets.length} market{upMarkets.length === 1 ? "" : "s"})
                         </span>
                     )}
                 </h1>
@@ -232,20 +243,23 @@ export default function PolymarketPage() {
                 </div>
             )}
 
-            {!markets && loading && (
+            {!upMarkets && loading && (
                 <div className="text-center text-sm text-text-muted py-12">discovering markets…</div>
             )}
 
-            {markets && markets.length === 0 && (
+            {upMarkets && upMarkets.length === 0 && (
                 <div className="text-center text-sm text-text-muted py-12">
                     no active Polymarket windows — start orderbook_server with polymarket enabled
                 </div>
             )}
 
-            {markets && markets.length > 0 && (
+            {upMarkets && upMarkets.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
-                    {markets.map((m) => (
-                        <MarketPanel key={m.asset_id} market={m} />
+                    {upMarkets.map((m) => (
+                        // Keyed by base_slug so the card instance is reused
+                        // across window rollovers (no remount → polling
+                        // state survives).
+                        <MarketPanel key={m.base_slug} market={m} />
                     ))}
                 </div>
             )}

@@ -79,10 +79,22 @@ impl fmt::Display for ExchangeName {
 pub type PriceLevelTuple = (f64, f64);
 
 /// Materialized orderbook snapshot broadcast to subscribers.
+///
+/// `symbol` is the exchange-native asset id (Polymarket: the per-window
+/// asset/token id; Binance: e.g. `btcusdt`). For rolling markets `full_slug`
+/// carries the current window identity (e.g. `btc-updown-15m-1715423400`) so
+/// a subscriber on the stable rolling topic `polymarket:{base_slug}` can tell
+/// which window a frame belongs to without parsing the topic string. Static
+/// exchanges leave it `None`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrderbookSnapshot {
     pub exchange: ExchangeName,
     pub symbol: String,
+    /// Current window full_slug for rolling markets; `None` otherwise.
+    /// `#[serde(default)]` so older encoded snapshots without the field
+    /// still decode cleanly (back-compat for Redis values and recorded files).
+    #[serde(default)]
+    pub full_slug: Option<String>,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub best_bid: Option<PriceLevelTuple>,
@@ -99,6 +111,7 @@ impl From<&OrderbookSnapshot> for BbaPayload {
         Self {
             exchange: snap.exchange.to_str().to_owned(),
             symbol: snap.symbol.clone(),
+            full_slug: snap.full_slug.clone(),
             sequence: snap.sequence,
             timestamp: snap.timestamp,
             best_bid: snap.best_bid,
@@ -118,6 +131,11 @@ pub struct LastTradePrice {
     pub exchange: ExchangeName,
     /// Asset / token ID (Polymarket: the YES/NO token ID).
     pub symbol: String,
+    /// Current window full_slug for rolling markets (see
+    /// `OrderbookSnapshot.full_slug`); `None` otherwise. `#[serde(default)]`
+    /// keeps back-compat with older encoded trades.
+    #[serde(default)]
+    pub full_slug: Option<String>,
     pub price: f64,
     pub size: f64,
     /// Taker side: `"BUY"` or `"SELL"`.
