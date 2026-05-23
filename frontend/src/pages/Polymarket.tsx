@@ -108,6 +108,46 @@ function fmtUsd(n: number | null | undefined): string {
     return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
+/// YES / NO implied-probability strip for binary-outcome markets.
+///
+/// The UP token's mid price IS the market's implied probability of YES
+/// (prices are in [0, 1] and the pair pays out exactly $1 at resolution).
+/// The NO token is a price mirror on the SAME book, so its probability is
+/// `1 - yes_mid` — no separate quote needed.
+///
+/// We use `mid` rather than ask/bid so the displayed probability is
+/// spread-symmetric and doesn't flicker with one-sided liquidity. Falls
+/// back to `(best_bid + best_ask) / 2` only when `snap.mid` is null.
+function YesNoProbabilities({
+    mid,
+    bestBid,
+    bestAsk,
+}: {
+    mid: number | null | undefined;
+    bestBid: number | undefined;
+    bestAsk: number | undefined;
+}) {
+    const yes =
+        mid ?? (bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : null);
+    if (yes == null) return null;
+    const no = 1 - yes;
+    return (
+        <div className="flex items-center justify-between px-3 py-2 border-t border-border-strong bg-bg-surface/30 text-[11px] font-mono">
+            <span className={`uppercase tracking-wider ${classMap.dim}`}></span>
+            <div className="flex items-center gap-6">
+                <span>
+                    <span className={`mr-1 ${classMap.dim}`}>YES</span>
+                    <span className={classMap.bidText}>{(yes * 100).toFixed(2)}%</span>
+                </span>
+                <span>
+                    <span className={`mr-1 ${classMap.dim}`}>NO</span>
+                    <span className={classMap.askText}>{(no * 100).toFixed(2)}%</span>
+                </span>
+            </div>
+        </div>
+    );
+}
+
 function MarketPanel({ market }: { market: PolymarketMarket }) {
     // Fetch by BASE_SLUG, not asset_id. The Redis key is now keyed by
     // base_slug and is overwritten on every rollover, so this card stays
@@ -136,7 +176,7 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
     const titleLine = liveFullSlug || market.base_slug;
 
     return (
-        <Card title={titleLine} subtitle={`asset ${(snap?.symbol ?? market.asset_id).slice(0, 12)}…`} noPad>
+        <Card title={titleLine} subtitle={`asset ${(snap?.symbol ?? market.asset_id).slice(0, 24)}…`} noPad>
             <div className="flex items-center justify-between px-4 py-2 border-b border-border-strong bg-bg-surface/50">
                 <span
                     className={`text-[10px] font-mono uppercase tracking-wider ${classMap.bidText}`}
@@ -177,6 +217,8 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
                     </div>
                 ))}
             </div>
+
+            <YesNoProbabilities mid={snap?.mid} bestBid={bid} bestAsk={ask} />
 
             {/* Price-to-beat hint — CEX spot, clearly labelled as approximate. */}
             <div className="flex items-center justify-between px-3 py-2 border-t border-border-strong bg-bg-surface/30 text-[11px] font-mono">

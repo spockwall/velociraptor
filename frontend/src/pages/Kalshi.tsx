@@ -49,6 +49,44 @@ function DepthBar({ side, levels }: { side: "bid" | "ask"; levels: [number, numb
     );
 }
 
+/// YES / NO implied-probability strip for Kalshi binary-outcome markets.
+///
+/// Kalshi's parser gives us a YES-perspective two-sided book — NO bids are
+/// complemented onto the ask side at parse time (see the
+/// `velociraptor-kalshi` skill / `orderbook/src/exchanges/kalshi/msg_parser.rs`).
+/// So `snap.mid` IS the market's implied probability of YES; NO is `1 - mid`.
+/// Same formula as Polymarket. Falls back to `(best_bid + best_ask) / 2`
+/// when `mid` is null.
+function YesNoProbabilities({
+    mid,
+    bestBid,
+    bestAsk,
+}: {
+    mid: number | null | undefined;
+    bestBid: number | undefined;
+    bestAsk: number | undefined;
+}) {
+    const yes =
+        mid ?? (bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : null);
+    if (yes == null) return null;
+    const no = 1 - yes;
+    return (
+        <div className="flex items-center justify-between px-3 py-2 border-t border-border-strong bg-bg-surface/30 text-[11px] font-mono">
+            <span className={`uppercase tracking-wider ${classMap.dim}`}></span>
+            <div className="flex items-center gap-6">
+                <span>
+                    <span className={`mr-1 ${classMap.dim}`}>YES</span>
+                    <span className={classMap.bidText}>{(yes * 100).toFixed(2)}%</span>
+                </span>
+                <span>
+                    <span className={`mr-1 ${classMap.dim}`}>NO</span>
+                    <span className={classMap.askText}>{(no * 100).toFixed(2)}%</span>
+                </span>
+            </div>
+        </div>
+    );
+}
+
 function MarketPanel({ market }: { market: KalshiMarket }) {
     // Fetch by SERIES (stable across ticker rollover). The Redis key is
     // `ob:kalshi:{series}` and overwrites itself on each new ticker, so
@@ -113,6 +151,8 @@ function MarketPanel({ market }: { market: KalshiMarket }) {
                     </div>
                 ))}
             </div>
+
+            <YesNoProbabilities mid={snap?.mid} bestBid={bid} bestAsk={ask} />
 
             {snap ? (
                 <div className="grid grid-cols-2 gap-px px-2 pb-2 pt-2 bg-border-strong">
