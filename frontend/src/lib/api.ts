@@ -3,6 +3,9 @@ const BASE = "/api";
 export interface OrderbookSnapshot {
     exchange: Record<string, number> | string;
     symbol: string;
+    /** For rolling markets, the current window's full_slug (e.g.
+     *  `btc-updown-15m-1715423400`). `null`/absent for static exchanges. */
+    full_slug?: string | null;
     sequence: number;
     timestamp: string;
     best_bid: [number, number] | null;
@@ -17,6 +20,8 @@ export interface OrderbookSnapshot {
 export interface BbaPayload {
     exchange: string;
     symbol: string;
+    /** Mirrors `OrderbookSnapshot.full_slug` for rolling markets. */
+    full_slug?: string | null;
     sequence: number;
     timestamp: string;
     best_bid: [number, number] | null;
@@ -27,6 +32,8 @@ export interface BbaPayload {
 export interface LastTradePrice {
     exchange: Record<string, number> | string;
     symbol: string;
+    /** Mirrors `OrderbookSnapshot.full_slug` for rolling markets. */
+    full_slug?: string | null;
     price: number;
     size: number;
     side: string;
@@ -72,7 +79,7 @@ export interface ControlStatus {
     last_heartbeat_secs: number;
 }
 
-export type ControlAction = { type: "halt" } | { type: "resume" };
+export type ControlAction = { type: "halt" } | { type: "resume" } | { type: "reload_risk" };
 
 export interface PolymarketMarket {
     asset_id: string;

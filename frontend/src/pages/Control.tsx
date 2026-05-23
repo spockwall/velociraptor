@@ -43,7 +43,10 @@ export default function ControlPage() {
         };
     }, []);
 
-    async function sendControl(action: { type: "halt" | "resume" }, label: string) {
+    async function sendControl(
+        action: { type: "halt" | "resume" | "reload_risk" },
+        label: string,
+    ) {
         setBusy(true);
         pushLog("info", `→ ${label}`);
         try {
@@ -110,6 +113,13 @@ export default function ControlPage() {
                             className={`flex-1 py-2.5 ${btnClass}`}
                         >
                             resume
+                        </button>
+                        <button
+                            disabled={busy}
+                            onClick={() => sendControl({ type: "reload_risk" }, "reload risk config")}
+                            className={`flex-1 py-2.5 ${btnClass}`}
+                        >
+                            reload risk
                         </button>
                     </div>
                 </Card>

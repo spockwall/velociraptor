@@ -97,6 +97,12 @@ pub(crate) async fn post_control(
                 .map_err(|e| ApiError::Redis(format!("DEL {}: {e}", Executor::KILL_SWITCH)))?;
             tracing::info!("control: RESUME requested via API (kill_switch cleared)");
         }
+        "reload_risk" => {
+            conn.set::<_, _, ()>(Executor::RELOAD_CONFIG, "1")
+                .await
+                .map_err(|e| ApiError::Redis(format!("SET {}: {e}", Executor::RELOAD_CONFIG)))?;
+            tracing::info!("control: risk-config reload requested via API");
+        }
         "pause" | "shutdown" | "strategy_params" => {
             return Err(ApiError::BadRequest(format!(
                 "action '{}' is not implemented — only 'halt' and 'resume' are supported",
