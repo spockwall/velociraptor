@@ -286,26 +286,27 @@ async fn spawn_polymarket_window(
         return None;
     }
 
+    // Parse window_start from the trailing timestamp the scheduler embedded
+    // in `full_slug` (format: "{base_slug}-{win_start}"). Computing from
+    // `now` here is wrong: this runs during pre-start (~10s before the
+    // current window ends), so `now / interval * interval` returns the
+    // CURRENT window's start, not the new one we're spinning up.
+    let window_start: u64 = if interval_secs == 0 {
+        0
+    } else {
+        full_slug
+            .rsplit('-')
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                let now = libs::time::now_secs();
+                (now / interval_secs) * interval_secs
+            })
+    };
+
     // Persist asset_id → {base_slug, full_slug, side, window_start} for the backend.
     let asset_ids: Vec<String> = labeled.iter().map(|(id, _, _, _)| id.clone()).collect();
     if let Some(r) = redis.clone() {
-        // Parse window_start from the trailing timestamp the scheduler embedded
-        // in `full_slug` (format: "{base_slug}-{win_start}"). Computing from
-        // `now` here is wrong: this runs during pre-start (~10s before the
-        // current window ends), so `now / interval * interval` returns the
-        // CURRENT window's start, not the new one we're spinning up.
-        let window_start = if interval_secs == 0 {
-            0u64
-        } else {
-            full_slug
-                .rsplit('-')
-                .next()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or_else(|| {
-                    let now = libs::time::now_secs();
-                    (now / interval_secs) * interval_secs
-                })
-        };
         let window_start_s = window_start.to_string();
         let interval_s = interval_secs.to_string();
 
@@ -347,36 +348,48 @@ async fn spawn_polymarket_window(
             r.srem(&base_slug_index, prior_id).await;
         }
 
-        // Register new window's assets under this base_slug index.
-        for id in &asset_ids {
-            r.sadd(&base_slug_index, id).await;
-        }
-
-        for (id, _resolved_base, full, is_up) in &labeled {
-            let side = if *is_up { "up" } else { "down" };
-            let key = RedisKey::polymarket_label(id);
-            let r2 = r.clone();
-            let key2 = key.clone();
-            let base = slug.clone(); // original base_slug from config
-            let full = full.clone();
-            let ws = window_start_s.clone();
-            let iv = interval_s.clone();
-            let id_clone = id.clone();
-            tokio::spawn(async move {
-                r2.hset_multi(
-                    &key2,
-                    &[
-                        ("base_slug", &base),
-                        ("full_slug", &full),
-                        ("side", side),
-                        ("window_start", &ws),
-                        ("interval_secs", &iv),
-                    ],
-                )
-                .await;
-                r2.sadd(RedisKey::POLYMARKET_LABEL_INDEX, &id_clone).await;
-            });
-        }
+        // Register the new window's labels — but only AFTER `window_start`.
+        // At pre-start (~10s before the previous window ends) the old
+        // window's labels are still the "live" set for this base_slug;
+        // adding ours now would make the discovery API return two rows
+        // per (base_slug, side). Sleep until the boundary, then publish.
+        let now = libs::time::now_secs();
+        let delay_secs = window_start.saturating_sub(now);
+        let r_reg = r.clone();
+        let base = slug.clone();
+        let iv = interval_s.clone();
+        let ws = window_start_s.clone();
+        let base_slug_index_c = base_slug_index.clone();
+        let asset_ids_c = asset_ids.clone();
+        let labeled_meta: Vec<(String, String, bool)> = labeled
+            .iter()
+            .map(|(id, _b, full, is_up)| (id.clone(), full.clone(), *is_up))
+            .collect();
+        tokio::spawn(async move {
+            if delay_secs > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+            }
+            for id in &asset_ids_c {
+                r_reg.sadd(&base_slug_index_c, id).await;
+            }
+            for (id, full, is_up) in &labeled_meta {
+                let side = if *is_up { "up" } else { "down" };
+                let key = RedisKey::polymarket_label(id);
+                r_reg
+                    .hset_multi(
+                        &key,
+                        &[
+                            ("base_slug", &base),
+                            ("full_slug", full),
+                            ("side", side),
+                            ("window_start", &ws),
+                            ("interval_secs", &iv),
+                        ],
+                    )
+                    .await;
+                r_reg.sadd(RedisKey::POLYMARKET_LABEL_INDEX, id).await;
+            }
+        });
     }
 
     let mut builder = PolymarketSubMsgBuilder::new();
@@ -430,9 +443,18 @@ async fn spawn_polymarket_window(
         let is_up_by_asset_snap = is_up_by_asset.clone();
         let redis_snap = redis.clone();
         let snap_cap = snapshot_cap;
+        let window_start_snap = window_start;
         engine
             .hooks_mut()
             .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+                // Suppress forward+persist while this is the pre-started
+                // window (boundary not yet reached). The previous window is
+                // still publishing under the same `polymarket:{base_slug}`
+                // topic / Redis key; overlapping would briefly clobber its
+                // last good state with our (often empty) initial snapshot.
+                if libs::time::now_secs() < window_start_snap {
+                    return;
+                }
                 // Forward + persist only the UP token's snapshots.
                 if !is_up_by_asset_snap.get(&snap.symbol).copied().unwrap_or(false)
                 {
@@ -482,9 +504,13 @@ async fn spawn_polymarket_window(
         let is_up_by_asset_trade = is_up_by_asset;
         let redis_trade = redis.clone();
         let trd_cap = trade_cap;
+        let window_start_trade = window_start;
         engine
             .hooks_mut()
             .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
+                if libs::time::now_secs() < window_start_trade {
+                    return;
+                }
                 if !is_up_by_asset_trade.get(&trade.symbol).copied().unwrap_or(false)
                 {
                     return;
@@ -777,16 +803,19 @@ async fn spawn_kalshi_window(
     cfg.with_exchange(conn_cfg);
     cfg.set_snapshot_depth(depth);
 
+    // Compute window_start by snapping `now` to the next 15-min boundary.
+    // Pre-start runs ~10s before the current window closes, so `now` is
+    // still inside the previous window — adding +30s lands us safely in
+    // the new window for the snap. window_start = the next :00/:15/:30/:45.
+    let window_start: u64 = if interval_secs == 0 {
+        0
+    } else {
+        let probe = libs::time::now_secs() + 30;
+        (probe / interval_secs) * interval_secs
+    };
+
     // Persist ticker → {series, ticker, window_start, interval_secs} for the backend.
     if let Some(r) = redis.clone() {
-        // Compute window_start by snapping `now` to the previous :00/:15/:30/:45.
-        // Pre-start runs ~10s before the current window closes, so `now` is still
-        // inside the previous window — the new window starts at `now + early_start`.
-        // We instead derive it from the rule: window_start = current_close,
-        // i.e. the next 15-min boundary at or after `now + EARLY_START_SECS`.
-        let now = libs::time::now_secs();
-        let probe = now + 30; // safely inside the new window
-        let window_start = (probe / interval_secs) * interval_secs;
         let window_start_s = window_start.to_string();
         let interval_s = interval_secs.to_string();
 
@@ -794,6 +823,7 @@ async fn spawn_kalshi_window(
         // windows clean themselves up via the watchdog — we never touch them here.
         let series_index = RedisKey::kalshi_series_tickers(&series);
         let prior_tickers = r.smembers(&series_index).await;
+        let now = libs::time::now_secs();
         for prior_ticker in &prior_tickers {
             if prior_ticker == &ticker {
                 continue;
@@ -820,23 +850,31 @@ async fn spawn_kalshi_window(
             r.srem(&series_index, prior_ticker).await;
         }
 
-        r.sadd(&series_index, &ticker).await;
-        let r2 = r.clone();
-        let key = RedisKey::kalshi_label(&ticker);
+        // Defer label registration until the boundary so the discovery
+        // API returns the old ticker for this series until then.
+        let delay_secs = window_start.saturating_sub(now);
+        let r_reg = r.clone();
         let series_clone = series.clone();
         let ticker_clone = ticker.clone();
+        let series_index_c = series_index.clone();
+        let key = RedisKey::kalshi_label(&ticker);
         tokio::spawn(async move {
-            r2.hset_multi(
-                &key,
-                &[
-                    ("series", &series_clone),
-                    ("ticker", &ticker_clone),
-                    ("window_start", &window_start_s),
-                    ("interval_secs", &interval_s),
-                ],
-            )
-            .await;
-            r2.sadd(RedisKey::KALSHI_LABEL_INDEX, &ticker_clone).await;
+            if delay_secs > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+            }
+            r_reg.sadd(&series_index_c, &ticker_clone).await;
+            r_reg
+                .hset_multi(
+                    &key,
+                    &[
+                        ("series", &series_clone),
+                        ("ticker", &ticker_clone),
+                        ("window_start", &window_start_s),
+                        ("interval_secs", &interval_s),
+                    ],
+                )
+                .await;
+            r_reg.sadd(RedisKey::KALSHI_LABEL_INDEX, &ticker_clone).await;
         });
     }
 
@@ -868,9 +906,15 @@ async fn spawn_kalshi_window(
         let ticker_snap = ticker.clone();
         let redis_snap = redis.clone();
         let snap_cap = snapshot_cap;
+        let window_start_snap = window_start;
         engine
             .hooks_mut()
             .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
+                // Suppress until this window's boundary — see the same gate
+                // in spawn_polymarket_window for rationale.
+                if libs::time::now_secs() < window_start_snap {
+                    return;
+                }
                 let mut stamped = snap.clone();
                 stamped.full_slug = Some(ticker_snap.clone());
                 bus_snap.publish(StreamEvent::RollingSnapshot {
@@ -911,9 +955,13 @@ async fn spawn_kalshi_window(
         let ticker_trade = ticker.clone();
         let redis_trade = redis.clone();
         let trd_cap = trade_cap;
+        let window_start_trade = window_start;
         engine
             .hooks_mut()
             .on::<LastTradePrice, _>(move |trade: &LastTradePrice| {
+                if libs::time::now_secs() < window_start_trade {
+                    return;
+                }
                 let mut stamped = trade.clone();
                 stamped.full_slug = Some(ticker_trade.clone());
                 bus.publish(StreamEvent::RollingLastTradePrice {
