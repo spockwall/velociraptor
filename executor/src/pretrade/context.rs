@@ -3,7 +3,7 @@ use libs::protocol::orders::PlaceOne;
 use libs::protocol::ExchangeName;
 
 /// Everything a rule needs to make a decision about one order.
-pub struct RiskContext<'a> {
+pub struct PretradeContext<'a> {
     pub exchange: ExchangeName,
     pub place: &'a PlaceOne,
     /// Best-effort count of currently-open orders for (exchange, symbol).
@@ -18,9 +18,9 @@ pub struct RiskContext<'a> {
     pub limits: &'a PretradeLimits,
 }
 
-pub trait RiskRule: Send + Sync {
+pub trait PretradeRule: Send + Sync {
     /// Stable identifier; used as the metrics label and in the rejection.
     fn name(&self) -> &'static str;
     /// `Ok(())` to pass, `Err(detail)` to reject with a human reason.
-    fn check(&self, ctx: &RiskContext) -> Result<(), String>;
+    fn check(&self, ctx: &PretradeContext) -> Result<(), String>;
 }

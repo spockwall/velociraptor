@@ -13,5 +13,5 @@ pub mod control;
 pub mod error;
 pub mod gateway;
 pub mod ops;
+pub mod pretrade;
 pub mod rest;
-pub mod risk_mgnt;

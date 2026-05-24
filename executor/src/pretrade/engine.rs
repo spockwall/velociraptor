@@ -1,11 +1,11 @@
-use super::context::{RiskContext, RiskRule};
+use super::context::{PretradeContext, PretradeRule};
 use super::rules::{MaxNotional, MaxOpenOrders, PriceSanity, QtyBounds, RateLimit};
 
-pub struct RiskEngine {
-    rules: Vec<Box<dyn RiskRule>>,
+pub struct PretradeEngine {
+    rules: Vec<Box<dyn PretradeRule>>,
 }
 
-impl Default for RiskEngine {
+impl Default for PretradeEngine {
     fn default() -> Self {
         Self {
             rules: vec![
@@ -19,9 +19,9 @@ impl Default for RiskEngine {
     }
 }
 
-impl RiskEngine {
+impl PretradeEngine {
     /// Run every rule; return the first failure as `(rule_name, detail)`.
-    pub fn evaluate(&self, ctx: &RiskContext) -> Result<(), (&'static str, String)> {
+    pub fn evaluate(&self, ctx: &PretradeContext) -> Result<(), (&'static str, String)> {
         for rule in &self.rules {
             if let Err(detail) = rule.check(ctx) {
                 return Err((rule.name(), detail));
@@ -54,8 +54,8 @@ mod tests {
         p: &'a PlaceOne,
         l: &'a PretradeLimits,
         reference_px: Option<f64>,
-    ) -> RiskContext<'a> {
-        RiskContext {
+    ) -> PretradeContext<'a> {
+        PretradeContext {
             exchange: ExchangeName::Polymarket,
             place: p,
             open_orders: 0,
@@ -69,7 +69,7 @@ mod tests {
     fn passes_when_all_limits_none() {
         let p = place(0.5, 10.0);
         let l = PretradeLimits::default();
-        assert!(RiskEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
+        assert!(PretradeEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
     }
 
     #[test]
@@ -78,7 +78,7 @@ mod tests {
             max_qty: Some(10.0),
             ..Default::default()
         };
-        let eng = RiskEngine::default();
+        let eng = PretradeEngine::default();
         let over = place(0.5, 10.01);
         let (rule, _) = eng.evaluate(&ctx(&over, &l, None)).unwrap_err();
         assert_eq!(rule, "qty_bounds");
@@ -94,7 +94,7 @@ mod tests {
         };
         let p = place(0.5, 4.99);
         assert_eq!(
-            RiskEngine::default()
+            PretradeEngine::default()
                 .evaluate(&ctx(&p, &l, None))
                 .unwrap_err()
                 .0,
@@ -110,7 +110,7 @@ mod tests {
         };
         let p = place(0.6, 10.0);
         assert_eq!(
-            RiskEngine::default()
+            PretradeEngine::default()
                 .evaluate(&ctx(&p, &l, None))
                 .unwrap_err()
                 .0,
@@ -125,7 +125,7 @@ mod tests {
             ..Default::default()
         };
         let p = place(0.99, 1.0);
-        assert!(RiskEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
+        assert!(PretradeEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
     }
 
     #[test]
@@ -135,7 +135,7 @@ mod tests {
             ..Default::default()
         };
         let p = place(0.60, 1.0);
-        let (rule, _) = RiskEngine::default()
+        let (rule, _) = PretradeEngine::default()
             .evaluate(&ctx(&p, &l, Some(0.50)))
             .unwrap_err();
         assert_eq!(rule, "price_sanity");
@@ -151,7 +151,7 @@ mod tests {
         let mut c = ctx(&p, &l, None);
         c.recent_order_count = 4;
         assert_eq!(
-            RiskEngine::default().evaluate(&c).unwrap_err().0,
+            PretradeEngine::default().evaluate(&c).unwrap_err().0,
             "rate_limit"
         );
     }
@@ -166,7 +166,7 @@ mod tests {
         let mut c = ctx(&p, &l, None);
         c.open_orders = 2;
         assert_eq!(
-            RiskEngine::default().evaluate(&c).unwrap_err().0,
+            PretradeEngine::default().evaluate(&c).unwrap_err().0,
             "max_open_orders"
         );
     }
