@@ -5,8 +5,7 @@
   - `window`: rolling-window dataclasses (PolymarketWindow / KalshiWindow).
 
 No behavior or threading here — the dispatcher that consumes events lives
-in `dispatcher.py`; the discovery that builds windows lives in
-`utils/windows.py`.
+in `trading/dispatcher.py`; window discovery lives in `utils/windows.py`.
 """
 
 from __future__ import annotations
@@ -16,8 +15,8 @@ from .events import (
     FillEvent,
     OrderUpdateEvent,
     QuoteEvent,
+    RolloverEvent,
     ShutdownEvent,
-    TimerEvent,
     TradeEvent,
 )
 from .state import OrderLedger, OrderRecord, StrategyState
@@ -30,9 +29,9 @@ __all__ = [
     "OrderRecord",
     "OrderUpdateEvent",
     "QuoteEvent",
+    "RolloverEvent",
     "ShutdownEvent",
     "StrategyState",
-    "TimerEvent",
     "TradeEvent",
 
     # Window

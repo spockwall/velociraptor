@@ -16,22 +16,34 @@ discovery functions that build these from the backend live in
 from __future__ import annotations
 
 import dataclasses
+import typing
 
 
 @dataclasses.dataclass
 class PolymarketWindow:
-    """One rolling Polymarket window. Holds both YES (up) and NO (down)
-    token ids."""
+    """One rolling Polymarket window.
 
-    base_slug: str          # e.g. "btc-updown-15m"
-    full_slug: str          # e.g. "btc-updown-15m-1715423400"
-    window_start: int       # UTC seconds
-    interval_secs: int
-    up_asset_id: str        # YES side token
-    down_asset_id: str      # NO side token
+    Only `base_slug` is required — the rest is populated from incoming
+    snapshot payloads (the server stamps `full_slug` per frame, and the
+    payload `symbol` IS the current up_asset_id). `down_asset_id` is
+    intentionally unused now that the server forwards only the UP side
+    (down is the mirror image of the same orderbook). Kept as an
+    `Optional[str]` field for back-compat with code that imports it.
+    """
+
+    base_slug: str  # e.g. "btc-updown-15m"
+    full_slug: typing.Optional[str] = None  # filled from payload on first snapshot
+    window_start: typing.Optional[int] = None
+    interval_secs: typing.Optional[int] = None
+    up_asset_id: typing.Optional[str] = None
+    down_asset_id: typing.Optional[str] = (
+        None  # vestigial — never set under static-topic forwarding
+    )
 
     @property
-    def window_end(self) -> int:
+    def window_end(self) -> typing.Optional[int]:
+        if self.window_start is None or self.interval_secs is None:
+            return None
         return self.window_start + self.interval_secs
 
 
@@ -40,9 +52,9 @@ class KalshiWindow:
     """One Kalshi market window. Kalshi exposes a single `ticker` per market
     (no YES/NO split — orders carry side internally)."""
 
-    series: str             # e.g. "KXBTC15M"
-    ticker: str             # full Kalshi ticker (also the ZMQ symbol)
-    window_start: int       # UTC seconds
+    series: str  # e.g. "KXBTC15M"
+    ticker: str  # full Kalshi ticker (also the ZMQ symbol)
+    window_start: int  # UTC seconds
     interval_secs: int
 
     @property

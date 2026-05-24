@@ -124,7 +124,7 @@ class EventLog:
 
     def __init__(
         self,
-        base_dir: Optional[str | Path] = "./data/engine_log",
+        base_dir: Optional[str | Path],
         flush_interval_secs: float = 1.0,
         enabled: bool = True,
     ):
@@ -140,12 +140,12 @@ class EventLog:
         if self._enabled:
             self._base.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
             (self._base / "actions").mkdir(exist_ok=True)  # type: ignore[union-attr]
-            (self._base / "events").mkdir(exist_ok=True)   # type: ignore[union-attr]
+            (self._base / "events").mkdir(exist_ok=True)  # type: ignore[union-attr]
             self._flusher = threading.Thread(
                 target=self._flush_loop, name="event-log-flusher", daemon=True
             )
             self._flusher.start()
-            log.info("EventLog: writing CSV to %s", self._base)
+            log.info(f"EventLog: writing CSV to {self._base}")
 
     # ── public API ──
 
@@ -245,7 +245,7 @@ class EventLog:
             try:
                 handle.write(row)
             except Exception:  # noqa: BLE001
-                log.exception("EventLog: write failed for %s", kind)
+                log.exception(f"EventLog: write failed for {kind}")
 
     def _open(self, kind: str, date: str) -> _OpenFile:
         # Drop stale handle for this `kind` if the date rolled over.
@@ -266,7 +266,7 @@ class EventLog:
         columns = _ACTION_COLS if kind == "actions" else _EVENT_COLS
         handle = _OpenFile(path, columns)
         self._handles[key] = handle
-        log.info("EventLog: opened %s", path)
+        log.info(f"EventLog: opened {path}")
         return handle
 
     def _flush_loop(self) -> None:

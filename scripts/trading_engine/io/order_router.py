@@ -95,17 +95,32 @@ class OrderRouter:
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
             self._record(
-                "place", strategy=strategy, label=label, side=side, symbol=symbol,
-                px=px, qty=qty, client_oid=client_oid, ok=False,
-                latency_ms=latency_ms, error=str(err),
+                "place",
+                strategy=strategy,
+                label=label,
+                side=side,
+                symbol=symbol,
+                px=px,
+                qty=qty,
+                client_oid=client_oid,
+                ok=False,
+                latency_ms=latency_ms,
+                error=str(err),
             )
             raise RuntimeError(f"place failed: {err}")
         ack = unwrap(resp)
         self._record(
-            "place", strategy=strategy, label=label, side=side, symbol=symbol,
-            px=px, qty=qty, client_oid=client_oid,
+            "place",
+            strategy=strategy,
+            label=label,
+            side=side,
+            symbol=symbol,
+            px=px,
+            qty=qty,
+            client_oid=client_oid,
             exchange_oid=ack.get("exchange_oid"),
-            ok=True, latency_ms=latency_ms,
+            ok=True,
+            latency_ms=latency_ms,
         )
         return ack
 
@@ -122,23 +137,35 @@ class OrderRouter:
             err = resp.get("result", {}).get("Err", {})
             # NotFound is a soft outcome — the order already terminated.
             if isinstance(err, dict) and err.get("kind") == "not_found":
-                log.debug("cancel %s: already gone", exchange_oid)
+                log.debug(f"cancel {exchange_oid}: already gone")
                 self._record(
-                    "cancel", strategy=strategy, label=label,
-                    exchange_oid=exchange_oid, ok=True, latency_ms=latency_ms,
+                    "cancel",
+                    strategy=strategy,
+                    label=label,
+                    exchange_oid=exchange_oid,
+                    ok=True,
+                    latency_ms=latency_ms,
                     extra={"count": 0, "already_gone": True},
                 )
                 return {"result": "cancel_count", "count": 0}
             self._record(
-                "cancel", strategy=strategy, label=label,
-                exchange_oid=exchange_oid, ok=False, latency_ms=latency_ms,
+                "cancel",
+                strategy=strategy,
+                label=label,
+                exchange_oid=exchange_oid,
+                ok=False,
+                latency_ms=latency_ms,
                 error=str(err),
             )
             raise RuntimeError(f"cancel failed: {err}")
         out = unwrap(resp)
         self._record(
-            "cancel", strategy=strategy, label=label, exchange_oid=exchange_oid,
-            ok=True, latency_ms=latency_ms,
+            "cancel",
+            strategy=strategy,
+            label=label,
+            exchange_oid=exchange_oid,
+            ok=True,
+            latency_ms=latency_ms,
             extra={"count": int(out.get("count", 0))},
         )
         return out
@@ -149,14 +176,20 @@ class OrderRouter:
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
             self._record(
-                "cancel_all", strategy=strategy, ok=False,
-                latency_ms=latency_ms, error=str(err),
+                "cancel_all",
+                strategy=strategy,
+                ok=False,
+                latency_ms=latency_ms,
+                error=str(err),
             )
             raise RuntimeError(f"cancel_all failed: {err}")
         inner = unwrap(resp)
         count = int(inner.get("count", 0))
         self._record(
-            "cancel_all", strategy=strategy, ok=True, latency_ms=latency_ms,
+            "cancel_all",
+            strategy=strategy,
+            ok=True,
+            latency_ms=latency_ms,
             extra={"count": count},
         )
         return count
@@ -170,7 +203,8 @@ class OrderRouter:
         # the round-trip identity without re-parsing the request.
         resp.setdefault("_meta", {})["req_id"] = req["req_id"]
         self._record(
-            "heartbeat", ok=is_ok(resp),
+            "heartbeat",
+            ok=is_ok(resp),
             latency_ms=resp.get("_meta", {}).get("latency_ms"),
         )
         return resp
@@ -205,7 +239,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"connecting DEALER → {args.endpoint}")
     all_ok = True
-    with OrderRouter(args.endpoint, exchange=args.exchange, timeout_ms=args.timeout_ms) as r:
+    with OrderRouter(
+        args.endpoint, exchange=args.exchange, timeout_ms=args.timeout_ms
+    ) as r:
         for i in range(args.count):
             resp = r.heartbeat()
             print(f"[{i + 1}/{args.count}] ← {json.dumps(resp, default=str)}")

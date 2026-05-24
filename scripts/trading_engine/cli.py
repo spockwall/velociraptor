@@ -10,64 +10,68 @@ from .trading import available_strategies
 
 log = logging.getLogger(__name__)
 
-# Legacy `--step` → strategy name. Step 0 is the observer (not a Strategy).
+# Legacy `--step` → strategy name. Step 0 = observe.
 _STEP_ALIASES = {0: "observe", 1: "probe", 2: "fill_once"}
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="python -m scripts.trading_engine",
-        description="Velociraptor Python trading engine — Polymarket up/down windows.",
-    )
-    # New selector: --strategy.
-    strategy_choices = ["observe", *available_strategies()]
-    p.add_argument(
-        "--strategy",
-        choices=strategy_choices,
-        default=None,
-        help=(
-            "What the engine runs. "
-            "`observe` is the no-orders multi-exchange watcher. "
-            "Other choices are per-window strategies registered in "
-            "`trading/strategies/`."
+        description=(
+            "Velociraptor Python trading engine — single-strategy, "
+            "event-driven. Launch one process per strategy/market."
         ),
     )
-    # Legacy: --step. Mapped to --strategy via _STEP_ALIASES.
+
+    # ── Strategy selection ──
+    p.add_argument(
+        "--strategy",
+        choices=available_strategies(),
+        default=None,
+        help=(
+            "What the engine runs. `observe` is the no-orders "
+            "multi-exchange watcher. Other choices are per-Polymarket-"
+            "window strategies registered in `trading/strategies/`."
+        ),
+    )
     p.add_argument(
         "--step",
         type=int,
         choices=[0, 1, 2],
         default=None,
-        help=(
-            "Deprecated. Use --strategy. "
-            "0→observe, 1→probe, 2→fill_once."
-        ),
+        help="Deprecated. Use --strategy. 0→observe, 1→probe, 2→fill_once.",
     )
 
     # ── Markets to track / trade ──
+    # Window strategies require exactly one --base-slugs value.
+    # Observer accepts the full list and watches all of them.
     p.add_argument(
         "--base-slugs",
         nargs="+",
         default=["btc-updown-15m", "eth-updown-15m"],
-        help="Polymarket base slugs to track / trade",
+        help=(
+            "Polymarket base slugs. Window strategies (probe/fill_once/"
+            "one_shot/momentum) require exactly one value. Observer "
+            "watches all."
+        ),
     )
     p.add_argument(
         "--kalshi-series",
         nargs="+",
         default=["KXBTC15M", "KXETH15M"],
-        help="Kalshi series to track (step 0 only)",
+        help="Kalshi series (observer only)",
     )
     p.add_argument(
         "--binance-symbols",
         nargs="+",
         default=["btcusdt", "ethusdt"],
-        help="Binance USDT-margined futures symbols to track (step 0 only)",
+        help="Binance USDT-margined futures symbols (observer only)",
     )
     p.add_argument(
         "--binance-spot-symbols",
         nargs="+",
         default=["btcusdt", "ethusdt"],
-        help="Binance Spot symbols to track (step 0 only)",
+        help="Binance Spot symbols (observer only)",
     )
 
     # ── Endpoints ──
@@ -96,44 +100,32 @@ def parse_args() -> argparse.Namespace:
         help="Skip placing on a side whose mid is above this. Default 0.70.",
     )
 
-    # ── Loop cadence ──
-    p.add_argument("--tick-secs", type=float, default=2.0)
-    p.add_argument("--rediscover-secs", type=float, default=30.0)
-    p.add_argument(
-        "--report-secs",
-        type=float,
-        default=5.0,
-        help="Step 0: how often to dump the orderbook status table",
-    )
-
     p.add_argument("--log-level", default="info")
 
-    # ── Engine event log (durable record of actions + received events) ──
+    # ── Engine event log (durable action + event record) ──
+    # Mandatory. The log is the only durable record of what the engine
+    # placed / cancelled and what events it saw, so the engine refuses
+    # to start if the directory isn't writable.
     p.add_argument(
         "--engine-log-dir",
-        default="./data/engine_log",
+        default="/syslog/trading_engine/",
         help=(
-            "Directory for the engine's append-only action + event log "
-            "(daily-rotated JSONL). Two files per day under this dir: "
-            "actions/<date>.jsonl, events/<date>.jsonl."
+            "Directory for the engine's append-only action + event log. "
+            "Daily-rotated CSV: {dir}/actions/<YYYY-MM-DD>.csv + "
+            "{dir}/events/<YYYY-MM-DD>.csv. The directory is created if "
+            "missing; the engine exits at startup if it can't be written."
         ),
     )
-    p.add_argument(
-        "--no-engine-log",
-        action="store_true",
-        help="Disable the engine event log entirely (no disk writes).",
-    )
+
     args = p.parse_args()
 
     # Resolve --strategy from --step if needed, then drop --step.
     if args.strategy is None:
         if args.step is None:
-            args.strategy = "probe"  # historical default
+            args.strategy = "probe"
         else:
             args.strategy = _STEP_ALIASES[args.step]
-            log.warning(
-                "--step is deprecated; use --strategy %s", args.strategy,
-            )
+            log.warning(f"--step is deprecated; use --strategy {args.strategy}")
     elif args.step is not None:
         log.warning("--step ignored because --strategy was set")
     delattr(args, "step")

@@ -45,7 +45,7 @@ def group_into_windows(raw: Iterable[dict]) -> list[PolymarketWindow]:
     for full_slug, sides in by_full.items():
         up, down = sides.get("up"), sides.get("down")
         if up is None or down is None:
-            log.debug("skipping %s — only one side resolved", full_slug)
+            log.debug(f"skipping {full_slug} — only one side resolved")
             continue
         out.append(
             PolymarketWindow(
@@ -118,7 +118,7 @@ def active_polymarket_windows(
     try:
         windows = discover_polymarket(base_slugs, backend_url)
     except Exception as e:  # noqa: BLE001
-        log.warning("polymarket discover failed: %s", e)
+        log.warning(f"polymarket discover failed: {e}")
         return None
     return _drop_expired(windows) if drop_expired else windows
 
@@ -134,7 +134,7 @@ def active_kalshi_windows(
     try:
         windows = discover_kalshi(series, backend_url)
     except Exception as e:  # noqa: BLE001
-        log.warning("kalshi discover failed: %s", e)
+        log.warning(f"kalshi discover failed: {e}")
         return None
     return _drop_expired(windows) if drop_expired else windows
 

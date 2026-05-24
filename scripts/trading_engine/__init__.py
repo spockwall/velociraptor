@@ -1,14 +1,19 @@
 """Velociraptor Python trading engine.
 
-Three steps (selected by `--step`):
+One engine = one strategy. Launch one process per market.
 
-  0 — passive multi-exchange orderbook observer; no orders.
-  1 — far-from-touch place + cancel probe; no fills expected.
-  2 — tight quotes; fill once per side per window ($10 notional).
+Available strategies (select with `--strategy`):
+
+  observe   — passive multi-exchange watcher; no orders.
+  probe     — place + cancel at the price floor on every quote.
+  fill_once — cross the spread, fill once per window.
+  one_shot  — place once, cancel once, terminate.
+  momentum  — Binance signal → one small Polymarket position.
 
 Run with:
 
-    python -m scripts.trading_engine --step 1
+    python -m scripts.trading_engine --strategy observe
+    python -m scripts.trading_engine --strategy probe --base-slugs btc-updown-15m
 
 See `README.md` for the full architecture and CLI reference.
 """
@@ -20,36 +25,44 @@ from .io import (
     OrderRouter,
     UserFeed,
 )
-from .market import (
-    KalshiWindow,
-    MarketFeed,
-    MarketWindow,
-    Quote,
-    discover,
-    discover_kalshi,
-)
+from .market import MarketFeed, MarketState, Quote, Trade
 from .trading import (
-    Observer,
-    SideState,
-    TrackedSymbol,
+    Dispatcher,
+    ObserverStrategy,
+    Strategy,
     WindowStrategy,
+    available_strategies,
+    make_strategy,
+)
+from .typings.state import OrderLedger, OrderRecord, StrategyState
+from .typings.window import KalshiWindow, PolymarketWindow as MarketWindow
+from .utils.windows import (
+    discover_kalshi,
+    discover_polymarket as discover,
 )
 
 __all__ = [
+    "Dispatcher",
     "Engine",
-    "ExecutorClient",
     "EventHandler",
+    "ExecutorClient",
     "KalshiWindow",
     "MarketFeed",
+    "MarketState",
     "MarketWindow",
-    "Observer",
+    "ObserverStrategy",
+    "OrderLedger",
+    "OrderRecord",
     "OrderRouter",
     "Quote",
-    "SideState",
-    "TrackedSymbol",
+    "Strategy",
+    "StrategyState",
+    "Trade",
     "UserFeed",
     "WindowStrategy",
+    "available_strategies",
     "discover",
     "discover_kalshi",
     "main",
+    "make_strategy",
 ]

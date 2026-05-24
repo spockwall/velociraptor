@@ -2,31 +2,38 @@
 
 Adding a strategy:
   1. Subclass `Strategy` in a new file under this directory.
-  2. Set `name = "..."` on the class.
-  3. Import + register below.
+  2. Implement `required_topics()` + `setup(dispatcher)`.
+  3. Set `name = "..."` on the class.
+  4. Import + register below.
 
-The engine resolves the strategy by name via `make_strategy(name, **kwargs)`.
-Use `available_strategies()` for the CLI choice list.
+The engine resolves the strategy by name via
+`make_strategy(name, **kwargs)`. Use `available_strategies()` for the
+CLI choice list.
 """
 
 from __future__ import annotations
 
 from typing import Type
 
-from .base import (
+from ..helpers import (
+    MIN_PX,
     PIN_PX,
     SAFE_MID_HIGH,
     SAFE_MID_LOW,
-    SideState,
-    Strategy,
+    clamp_px,
+    qty_for_notional,
+    safe_mid_guard,
 )
+from .base import Strategy
 from .fill_once import FillOnceStrategy
 from .momentum import MomentumStrategy
+from .observer import ObserverStrategy
 from .one_shot import OneShotStrategy
 from .probe import ProbeStrategy
 
-# Name → class registry. Order here is the order shown in `--help`.
+# Name → class registry. Order here is the order shown in --help.
 _REGISTRY: dict[str, Type[Strategy]] = {
+    ObserverStrategy.name: ObserverStrategy,
     ProbeStrategy.name: ProbeStrategy,
     FillOnceStrategy.name: FillOnceStrategy,
     OneShotStrategy.name: OneShotStrategy,
@@ -40,11 +47,9 @@ def available_strategies() -> list[str]:
 
 
 def make_strategy(name: str, **kwargs) -> Strategy:
-    """Instantiate the strategy registered under `name`.
-
-    Extra `**kwargs` are forwarded to the concrete class — see each
-    strategy file for its specific constructor knobs.
-    """
+    """Instantiate the strategy registered under `name`. Extra kwargs
+    are forwarded to the concrete class — see each strategy file for
+    its specific constructor knobs."""
     cls = _REGISTRY.get(name)
     if cls is None:
         raise ValueError(
@@ -55,14 +60,18 @@ def make_strategy(name: str, **kwargs) -> Strategy:
 
 __all__ = [
     "FillOnceStrategy",
+    "MIN_PX",
     "MomentumStrategy",
+    "ObserverStrategy",
     "OneShotStrategy",
     "PIN_PX",
     "ProbeStrategy",
     "SAFE_MID_HIGH",
     "SAFE_MID_LOW",
-    "SideState",
     "Strategy",
     "available_strategies",
+    "clamp_px",
     "make_strategy",
+    "qty_for_notional",
+    "safe_mid_guard",
 ]

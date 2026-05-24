@@ -1,32 +1,27 @@
-"""Probe strategy — no-fill correctness check.
+"""Probe strategy — place + cancel at the price floor on every quote.
 
-Place + cancel back-to-back on both YES and NO. Two safety properties:
+Event-driven. Subscribes one Polymarket quote callback; on each fire,
+runs the pin/safe-mid guard, places at MIN_PX, then cancels in the
+same callback (synchronous REST round-trips).
 
-1. **Price is the floor** (`MIN_PX = 0.01`). At $0.01 buy, the order is
-   below every standing bid on the book, so the matching engine cannot
-   match it against any resting sell. No partial fills possible.
+Safety properties:
 
-2. **Cancel is synchronous and immediate.** After `place_limit` returns
-   the exchange_oid, we issue `cancel(...)` in the same tick — within
-   the same Python coroutine, sub-second turnaround bounded only by
-   the two REST round-trips. The order's lifetime on the book is the
-   network latency between the two calls.
-
-The tick loop still calls us periodically; each tick is a fresh
-place-then-cancel pair. The `--tick-secs` flag controls how often
-we run another probe.
-
-Used to be `--step 1`.
+  1. Price = MIN_PX. Every standing bid is strictly higher, so the
+     matching engine cannot match the order against any resting sell.
+     No partial fills possible.
+  2. Place and cancel happen back-to-back inside one callback —
+     no other event can run between them on the dispatcher thread.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
 
 from ...market import Quote
-from .base import MIN_PX, SideState, Strategy
+from ..dispatcher import Dispatcher
+from .base import Strategy
+from ..helpers import MIN_PX, PIN_PX, SAFE_MID_HIGH, SAFE_MID_LOW, safe_mid_guard
 
 log = logging.getLogger(__name__)
 
@@ -34,62 +29,101 @@ log = logging.getLogger(__name__)
 class ProbeStrategy(Strategy):
     name = "probe"
 
-    def _target_px(self, quote: Quote) -> Optional[float]:
-        # Always quote at the absolute floor. No fill is possible at this
-        # price because every standing bid is strictly higher.
-        return MIN_PX
+    def __init__(
+        self,
+        *,
+        pin_px: float = PIN_PX,
+        safe_mid_low: float = SAFE_MID_LOW,
+        safe_mid_high: float = SAFE_MID_HIGH,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if self.window is None:
+            raise ValueError("ProbeStrategy needs a Polymarket window")
+        self.pin_px = pin_px
+        self.safe_mid_low = safe_mid_low
+        self.safe_mid_high = safe_mid_high
+        # Live oid stash so a failed cancel can retry next quote.
+        self._stale_oid: str | None = None
 
-    def _tick_one_side(self, side_name: str, side: SideState) -> None:
-        """Override the base tick so place + cancel happen back-to-back
-        with no intervening wait. We don't reuse the parent's
-        place-and-leave-resting flow because that exposes the order to
-        the book until the next tick (potentially seconds)."""
+    def required_topics(self) -> list[tuple[str, str, str]]:
+        # Rolling Polymarket topic. Snapshot only — trades aren't needed.
+        return [("polymarket", self.window.base_slug, "snapshot")]
 
-        if side.done:
-            return
-
-        quote = self.feed.latest(side.asset_id)
-        if quote is None or not quote.is_two_sided or quote.mid is None:
-            return  # not enough info yet
-
-        # Pin + safe-mid guards still apply.
-        if self._should_skip_side(side_name, side, quote):
-            return
-
-        log.info(
-            "[%s/%s] QUOTE bid=%s ask=%s mid=%s spread=%s safe_mid=[%.2f,%.2f] pin=%.2f "
-            "two_sided=%s -> target_px=%.4f (probe floor)",
-            self.label,
-            side_name,
-            f"{quote.best_bid:.4f}" if quote.best_bid is not None else "—",
-            f"{quote.best_ask:.4f}" if quote.best_ask is not None else "—",
-            f"{quote.mid:.4f}" if quote.mid is not None else "—",
-            f"{(quote.best_ask - quote.best_bid):.4f}"
-            if quote.best_bid is not None and quote.best_ask is not None
-            else "—",
-            self.safe_mid_low,
-            self.safe_mid_high,
-            self.pin_px,
-            quote.is_two_sided,
-            MIN_PX,
+    def setup(self, dispatcher: Dispatcher) -> None:
+        # Probe is meant to exercise the order pipe — fire on every
+        # quote, overriding the dispatcher's default 2s throttle.
+        dispatcher.register_quote(
+            "polymarket", self.window.base_slug, self._on_quote, min_interval_ms=0
         )
+        dispatcher.register_rollover(
+            "polymarket", self.window.base_slug, self._on_rollover
+        )
+        dispatcher.register_order_update(self._on_order_update)
 
-        # If somehow we still have a live oid (e.g. previous cancel
-        # failed), tear it down before placing again.
-        if side.live_oid is not None:
-            self._cancel_live(side_name, side)
+    # ── event handlers ──
+
+    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+        old = self.window.full_slug
+        self.window.full_slug = full_slug
+        self.window.up_asset_id = asset_id
+        if old is None:
+            log.info(
+                f"[{self.window.base_slug}] probe bootstrap: "
+                f"full_slug={full_slug} asset={asset_id}"
+            )
+        else:
+            log.info(
+                f"[{self.window.base_slug}] probe rollover: "
+                f"{old} → {full_slug} asset={asset_id}"
+            )
+
+    def _on_order_update(self, ev: dict) -> None:
+        oid = ev.get("exchange_oid")
+        status = ev.get("status")
+        if oid is None:
+            return
+        if status in {"filled", "canceled", "rejected", "expired"}:
+            self.state.orders.mark(oid, status)
+            if oid == self._stale_oid:
+                self._stale_oid = None
+
+    def _on_quote(self, q: Quote) -> None:
+        asset_id = self.window.up_asset_id
+        if asset_id is None:
+            log.debug(f"[{self.label}] probe bootstrapping, skipping")
+            return
+
+        reason = safe_mid_guard(
+            self.market,
+            "polymarket",
+            self.window.base_slug,
+            low=self.safe_mid_low,
+            high=self.safe_mid_high,
+            pin_px=self.pin_px,
+        )
+        if reason is not None:
+            return
+
+        # If a prior cancel failed, retry it before placing a fresh one.
+        if self._stale_oid is not None:
+            try:
+                self.router.cancel(self._stale_oid, **self._attribution())
+                log.info(f"[{self.label}] PROBE stale cancel ok oid={self._stale_oid}")
+                self._stale_oid = None
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[{self.label}] PROBE stale cancel still failing: {e}")
+                return
 
         target_px = MIN_PX
-        # Tiny notional — $1 worth is plenty for a probe. The order won't
-        # fill at the floor, so notional only affects the "size" field
-        # that appears on the audit log.
         target_qty = max(round(1.0 / target_px, 2), 1.0)
-        client_oid = f"te-probe-{self.window.full_slug[:18]}-{side_name}-{int(time.time() * 1000)}"
+        slug = self.window.full_slug or self.window.base_slug
+        client_oid = f"te-probe-{slug[:18]}-{int(time.time() * 1000)}"
 
-        attribution = self._attribution(side_name)
+        attribution = self._attribution()
         try:
             ack = self.router.place_limit(
-                symbol=side.asset_id,
+                symbol=asset_id,
                 side="buy",
                 px=target_px,
                 qty=target_qty,
@@ -97,37 +131,30 @@ class ProbeStrategy(Strategy):
                 **attribution,
             )
         except Exception as e:  # noqa: BLE001
-            log.warning("[%s/%s] probe place failed: %s", self.label, side_name, e)
+            log.warning(f"[{self.label}] PROBE place failed: {e}")
             return
 
         oid = ack.get("exchange_oid")
         log.info(
-            "[%s/%s] PROBE place px=%.2f qty=%.2f oid=%s",
-            self.label,
-            side_name,
-            target_px,
-            target_qty,
-            oid,
+            f"[{self.label}] PROBE place px={target_px:.2f} "
+            f"qty={target_qty:.2f} oid={oid}"
         )
 
-        # Immediate cancel — no wait, no other tick in between.
-        if oid:
+        if oid is None:
+            return
+        try:
+            self.router.cancel(oid, **attribution)
+            log.info(f"[{self.label}] PROBE cancel ok oid={oid}")
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                f"[{self.label}] PROBE cancel failed (will retry next quote): {e}"
+            )
+            self._stale_oid = oid
+
+    def teardown(self) -> None:
+        if self._stale_oid is not None:
             try:
-                self.router.cancel(oid, **attribution)
-                log.info(
-                    "[%s/%s] PROBE cancel ok oid=%s",
-                    self.label,
-                    side_name,
-                    oid,
-                )
+                self.router.cancel(self._stale_oid, **self._attribution())
             except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "[%s/%s] probe cancel failed (order may sit): %s",
-                    self.label,
-                    side_name,
-                    e,
-                )
-                # Stash the oid so a subsequent tick can retry the cancel.
-                side.live_oid = oid
-                side.live_px = target_px
-                side.live_qty = target_qty
+                log.warning(f"[{self.label}] probe teardown cancel failed: {e}")
+            self._stale_oid = None

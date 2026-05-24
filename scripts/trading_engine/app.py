@@ -1,301 +1,239 @@
-"""Trading-engine orchestration. Wires market discovery, feeds, router, and
-per-window strategies into a single tick loop.
+"""Trading-engine orchestration. Wires feeds, router, MarketState, and
+a single Strategy into one Dispatcher loop.
 
-Run as `python -m scripts.trading_engine --step <N>`. CLI parsing lives in
-`cli.py`; this file owns the run-time class.
+Run as `python -m scripts.trading_engine --strategy <name>`. CLI parsing
+lives in `cli.py`; this file owns the run-time class.
+
+**One engine, one strategy.** Multi-market trading is expressed by
+launching multiple engine processes. Inside one process the engine
+holds:
+
+  - a single `Strategy` instance,
+  - a `MarketState` it owns and the dispatcher writes,
+  - a `MarketFeed` (ZMQ SUB) that enqueues `QuoteEvent` /
+    `TradeEvent` / `RolloverEvent` onto a `queue.Queue`,
+  - a `UserFeed` (ZMQ SUB) that enqueues `FillEvent` /
+    `OrderUpdateEvent`,
+  - a `Dispatcher` that drains the queue on a single thread.
 
 Pre-reqs:
-    - backend running on :3000 (for market discovery)
-    - zmq_server running       (market PUB + user PUB)
-    - executor running         (order ROUTER on :5557)
+    - zmq_server running (market PUB + user PUB; publishes the static
+      rolling topics `polymarket:{base_slug}` and `kalshi:{series}`
+      with `full_slug` stamped into the payload).
+    - executor running (order ROUTER on :5557) — not required for the
+      `observe` strategy.
 
-The engine refreshes the active-window list every `--rediscover-secs`
-seconds, instantiates a `WindowStrategy` per new window, and cancels all
-known orders + drops the strategy when a window expires.
+Bootstrap is purely event-driven: there is no tick loop. The strategy's
+`required_topics()` list tells the engine which ZMQ topics to
+subscribe before any events flow. Once `Dispatcher.run()` is called
+the main thread blocks until a `ShutdownEvent` is enqueued (by a
+signal handler or by the strategy itself via `dispatcher.stop()`).
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
+import queue
 import signal
 import sys
-import threading
-import time
+from pathlib import Path
+from typing import Optional
 
 from .cli import parse_args
 from .io import OrderRouter, UserFeed
 from .io.event_log import EventLog
-from .market import MarketFeed, MarketWindow, discover
-from .trading import Observer, Strategy, make_strategy
-from .trading.strategies.momentum import _binance_symbol_for
+from .market import MarketFeed, MarketState, Quote, Trade
+from .trading import Dispatcher, Strategy, make_strategy
+from .typings.events import (
+    FillEvent,
+    OrderUpdateEvent,
+    QuoteEvent,
+    RolloverEvent,
+    TradeEvent,
+)
+from .typings.state import StrategyState
+from .typings.window import PolymarketWindow
 
 log = logging.getLogger(__name__)
+
+
+# Strategies that need a Polymarket window (and therefore exactly one
+# --base-slug). Observer is the exception — it works with N inputs.
+_WINDOW_STRATEGIES = {"probe", "fill_once", "one_shot", "momentum"}
+
+
+def _ensure_writable_dir(path: str) -> None:
+    """Create `path` (and parents) and verify the engine can write to
+    it. Raises SystemExit with a readable message if not — the engine
+    must not start with a log dir it can't actually write."""
+    p = Path(path)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SystemExit(
+            f"--engine-log-dir {path!r}: cannot create directory: {e}. "
+            f"Pick a writable path (try --engine-log-dir ~/trading_engine_log)."
+        ) from None
+    if not os.access(p, os.W_OK):
+        raise SystemExit(
+            f"--engine-log-dir {path!r}: directory is not writable by this "
+            f"process. Fix permissions or pick another path."
+        )
 
 
 class Engine:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.strategies: dict[str, Strategy] = {}  # keyed by full_slug
-        # Engine-side append-only log. `--no-engine-log` makes every record
-        # a no-op (constructor still returns a sentinel object).
-        self.event_log = EventLog(
-            base_dir=None if getattr(args, "no_engine_log", False) else args.engine_log_dir,
-            enabled=not getattr(args, "no_engine_log", False),
+        # Engine event log is MANDATORY. The log is the only durable
+        # record of what the engine placed / cancelled and what events
+        # it saw, so we refuse to start if the directory isn't writable.
+        # Daily rotation is built into EventLog itself (see its `_open`).
+        _ensure_writable_dir(args.engine_log_dir)
+        self.event_log = EventLog(base_dir=args.engine_log_dir, enabled=True)
+        self.market = MarketState()
+        self.queue: "queue.Queue" = queue.Queue()
+        # Producers enqueue Events; the dispatcher drains.
+        self.market_feed = MarketFeed(
+            args.market_pub,
+            args.market_router,
+            on_quote=self._enqueue_quote,
+            on_trade=self._enqueue_trade,
+            on_rollover=self._enqueue_rollover,
         )
-        self.market_feed = MarketFeed(args.market_pub, args.market_router)
-        self.user_feed = UserFeed(args.user_pub, on_event=self._on_user_event)
-        self.router = OrderRouter(args.router_endpoint, event_log=self.event_log)
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        # Set when a tracked window has passed its end but no successor window
-        # has been discovered yet. Holds the wall-clock time the gap began so
-        # we can report how long the engine went dark. None = no open gap.
-        self._rollover_gap_since: float | None = None
-        # Fast-retry cadence (seconds) used while a rollover gap is open, so
-        # we don't wait a full --rediscover-secs to pick the new window up.
-        self._rollover_retry_secs = 2.0
+        # Observer doesn't need a connected executor or user feed.
+        self._needs_orders = args.strategy != "observe"
+        self.user_feed = (
+            UserFeed(args.user_pub, on_event=self._enqueue_user_event)
+            if self._needs_orders
+            else None
+        )
+        self.router = (
+            OrderRouter(args.router_endpoint, event_log=self.event_log)
+            if self._needs_orders
+            else None
+        )
+        self.dispatcher = Dispatcher(self.queue, self.market)
+        self.strategy: Strategy = self._build_strategy()
+
+    # ── build ──
+
+    def _build_strategy(self) -> Strategy:
+        name = self.args.strategy
+        kwargs: dict = {
+            "market": self.market,
+            "router": self.router,  # may be None for observer
+            "state": StrategyState(),
+        }
+        if name == "observe":
+            kwargs.update(
+                binance_symbols=self.args.binance_symbols,
+                binance_spot_symbols=self.args.binance_spot_symbols,
+                poly_base_slugs=self.args.base_slugs,
+                kalshi_series=self.args.kalshi_series,
+            )
+        elif name in _WINDOW_STRATEGIES:
+            slugs = self.args.base_slugs
+            if len(slugs) != 1:
+                raise SystemExit(
+                    f"--strategy {name} requires exactly one --base-slugs "
+                    f"value (got {len(slugs)}: {slugs}). Launch multiple "
+                    f"engine processes for multiple markets."
+                )
+            kwargs["window"] = PolymarketWindow(base_slug=slugs[0])
+            # Trading-strategy knobs.
+            kwargs["safe_mid_low"] = self.args.safe_mid_low
+            kwargs["safe_mid_high"] = self.args.safe_mid_high
+            if name == "fill_once":
+                kwargs["order_notional_usd"] = self.args.order_notional_usd
+        return make_strategy(name, **kwargs)
+
+    # ── run ──
 
     def run(self) -> int:
         self._handle_signals()
         self.market_feed.start()
-        # `observe` never sends orders — skip the user feed + executor
-        # connection entirely so the observer can run against a stack
-        # with no executor.
-        if self.args.strategy == "observe":
-            try:
-                obs = Observer(
-                    feed=self.market_feed,
-                    backend_url=self.args.backend_url,
-                    binance_symbols=self.args.binance_symbols,
-                    binance_spot_symbols=self.args.binance_spot_symbols,
-                    poly_base_slugs=self.args.base_slugs,
-                    kalshi_series=self.args.kalshi_series,
-                    report_interval_secs=self.args.report_secs,
-                    rediscover_interval_secs=self.args.rediscover_secs,
-                )
-                # Hook so SIGINT propagates from the parent thread.
-                self._observer = obs
-                return obs.run()
-            finally:
-                self.market_feed.stop()
-                self.event_log.close()
-
-        # Trading strategies (probe / fill_once / one_shot / ...).
-        self.user_feed.start()
-        with self.router:
-            self._rediscover()
-            last_rediscover = time.monotonic()
-            try:
-                while not self._stop.is_set():
-                    now = time.monotonic()
-                    # Rediscover when either:
-                    #   (a) the periodic interval elapsed, or
-                    #   (b) a tracked window has rolled past its end (boundary
-                    #       crossed) — pick the new window up immediately
-                    #       instead of waiting up to --rediscover-secs, and
-                    #       keep retrying fast while the successor is still
-                    #       unresolved (zmq_server may not have registered its
-                    #       labels yet).
-                    interval_due = now - last_rediscover >= self.args.rediscover_secs
-                    rolled = self._has_window_rolled()
-                    gap_open = self._rollover_gap_since is not None
-                    retry_due = gap_open and (
-                        now - last_rediscover >= self._rollover_retry_secs
-                    )
-                    if interval_due or rolled or retry_due:
-                        self._rediscover()
-                        last_rediscover = now
-                    self._tick()
-                    # one_shot terminates when every tracked side has run
-                    # its place+cancel once.
-                    if self._all_strategies_done():
-                        log.info("all strategies done — exiting")
-                        break
-                    self._stop.wait(timeout=self.args.tick_secs)
-            finally:
-                self._shutdown_orders()
-        self.market_feed.stop()
-        self.user_feed.stop()
-        self.event_log.close()
+        self._subscribe_required_topics()
+        self.strategy.setup(self.dispatcher)
+        if self.user_feed is not None:
+            self.user_feed.start()
+        if self.router is not None:
+            with self.router:
+                self._run_dispatcher()
+        else:
+            self._run_dispatcher()
         return 0
 
-    def _all_strategies_done(self) -> bool:
-        """True when every strategy reports `is_done` (`OneShotStrategy`).
-        Strategies without an `is_done` attribute are treated as never-done
-        — so probe / fill_once never trigger this branch."""
-        with self._lock:
-            strats = list(self.strategies.values())
-        if not strats:
-            return False
-        return all(getattr(s, "is_done", False) for s in strats)
-
-    # ── discovery + lifecycle ──
-
-    def _has_window_rolled(self) -> bool:
-        """True if any currently-tracked window has passed its end time.
-
-        Window end is `window_start + interval_secs` (the engine already has
-        both on every `MarketWindow`), so this is a pure clock check — it does
-        not depend on the backend/Redis having registered the next window yet.
-        """
-        now = int(time.time())
-        with self._lock:
-            strats = list(self.strategies.values())
-        return any(s.window.window_end <= now for s in strats)
-
-    def _rediscover(self) -> None:
+    def _run_dispatcher(self) -> None:
         try:
-            windows = discover(self.args.base_slugs, self.args.backend_url)
-        except Exception as e:  # noqa: BLE001
-            log.warning("rediscover failed: %s", e)
-            return
-
-        now = int(time.time())
-
-        seen: set[str] = set()
-        for w in windows:
-            # Ignore windows that discovery still lists but whose end has
-            # already passed — spinning a strategy on a dead market would
-            # immediately re-expire it and churn the rollover gap.
-            if w.window_end <= now:
-                continue
-            seen.add(w.full_slug)
-            if w.full_slug not in self.strategies:
-                self._add_window(w)
-
-        # Drop windows that are no longer in discovery output OR have passed
-        # their end time. We tear the expired strategy down even if its
-        # successor isn't discoverable yet (open a rollover gap below) so we
-        # never keep quoting a dead market.
-        with self._lock:
-            tracked = list(self.strategies.items())
-            any_expired = False
-            for stale_slug, strat in tracked:
-                expired_by_clock = strat.window.window_end <= now
-                gone_from_discovery = stale_slug not in seen
-                if expired_by_clock or gone_from_discovery:
-                    log.info(
-                        "window expired: %s (%s) — cancelling orders",
-                        stale_slug,
-                        "clock" if expired_by_clock else "discovery",
-                    )
-                    try:
-                        self.strategies[stale_slug].cancel_all()
-                    except Exception:  # noqa: BLE001
-                        log.exception("cancel_all on expiring window")
-                    del self.strategies[stale_slug]
-                    any_expired = True
-
-            have_active = len(self.strategies) > 0
-
-        # ── Rollover-gap accounting ──────────────────────────────────────────
-        # A gap is the interval where we have NO active strategy because a
-        # window ended but its successor isn't resolvable yet (zmq_server
-        # hasn't registered the new window's Redis labels). Make it explicit.
-        if not have_active and (any_expired or self._rollover_gap_since is None):
-            if self._rollover_gap_since is None:
-                self._rollover_gap_since = time.monotonic()
-                log.warning(
-                    "window rolled but successor not yet discoverable — "
-                    "engine idle, retrying every %.0fs",
-                    self._rollover_retry_secs,
-                )
-        elif have_active and self._rollover_gap_since is not None:
-            gap = time.monotonic() - self._rollover_gap_since
-            self._rollover_gap_since = None
-            log.info(
-                "new window picked up after %.1fs gap — strategy resumed", gap
-            )
-
-    def _add_window(self, w: MarketWindow) -> None:
-        log.info(
-            "tracking new window %s  (up=%s no=%s, ends in %ds)",
-            w.full_slug,
-            w.up_asset_id[:8],
-            w.down_asset_id[:8],
-            w.window_end - int(time.time()),
-        )
-        # Subscribe the market feed BEFORE the first tick so the first quote
-        # has a chance to arrive.
-        self.market_feed.subscribe([w.up_asset_id, w.down_asset_id])
-        # Also subscribe the public last-trade stream for both tokens so
-        # strategies / the observer can read executed prints (no DEALER
-        # handshake needed — the server publishes these unconditionally).
-        self.market_feed.subscribe_trades([w.up_asset_id, w.down_asset_id])
-        # Also subscribe the matching Binance spot symbol so strategies that
-        # use it for a signal (e.g. `momentum`) have data on the trading path
-        # — historically only the Observer received Binance quotes. Idempotent:
-        # MarketFeed dedups, and other strategies simply ignore the extra feed.
-        bsym = _binance_symbol_for(w.base_slug)
-        if bsym is not None:
-            self.market_feed.subscribe([bsym], exchange="binance")
-            # And its public trade prints, so `momentum` can read executed
-            # Binance trades alongside the BBA. Idempotent (MarketFeed dedups).
-            self.market_feed.subscribe_trades([bsym], exchange="binance")
-        strat = make_strategy(
-            self.args.strategy,
-            window=w,
-            router=self.router,
-            feed=self.market_feed,
-            order_notional_usd=self.args.order_notional_usd,
-            safe_mid_low=self.args.safe_mid_low,
-            safe_mid_high=self.args.safe_mid_high,
-        )
-        with self._lock:
-            self.strategies[w.full_slug] = strat
-
-    # ── tick ──
-
-    def _tick(self) -> None:
-        with self._lock:
-            strats = list(self.strategies.values())
-        for s in strats:
+            self.dispatcher.run()  # blocks until ShutdownEvent
+        finally:
             try:
-                s.tick()
+                self.strategy.teardown()
             except Exception:  # noqa: BLE001
-                log.exception("tick failed for %s", s.label)
+                log.exception("strategy.teardown() raised")
+            self.market_feed.stop()
+            if self.user_feed is not None:
+                self.user_feed.stop()
+            self.event_log.close()
 
-    # ── user events ──
+    def _subscribe_required_topics(self) -> None:
+        """Subscribe ZMQ topics declared by the strategy. Rolling topics
+        (Polymarket base_slug / Kalshi series) skip the handshake; static
+        exchanges (binance / binance_spot / okx) use it."""
+        for ex, sym, kind in self.strategy.required_topics():
+            handshake = ex not in {"polymarket", "kalshi"}
+            if kind == "snapshot":
+                self.market_feed.subscribe([sym], exchange=ex, handshake=handshake)
+            elif kind == "trade":
+                self.market_feed.subscribe_trades([sym], exchange=ex)
+            else:
+                log.warning(
+                    f"required_topics: unknown kind {kind!r} for {ex}:{sym} — skipped"
+                )
+            log.info(f"subscribed {ex}:{sym} ({kind})")
 
-    def _on_user_event(self, topic: str, ev: dict) -> None:
-        # Record every received event first — even if no strategy claims it,
-        # research wants the full stream. `record_event` is a no-op when
-        # the log is disabled.
+    # ── producer hooks (run on feed threads) ──
+
+    def _enqueue_quote(self, exchange: str, symbol: str, q: Quote) -> None:
+        self.queue.put(QuoteEvent(exchange=exchange, symbol=symbol, quote=q))
+
+    def _enqueue_trade(self, exchange: str, symbol: str, t: Trade) -> None:
+        self.queue.put(TradeEvent(exchange=exchange, symbol=symbol, trade=t))
+
+    def _enqueue_rollover(
+        self, exchange: str, base_slug: str, full_slug: str, asset_id: str
+    ) -> None:
+        self.queue.put(
+            RolloverEvent(
+                exchange=exchange,
+                base_slug=base_slug,
+                full_slug=full_slug,
+                asset_id=asset_id,
+            )
+        )
+
+    def _enqueue_user_event(self, topic: str, ev: dict) -> None:
+        # Record every received event for research, even if the
+        # strategy doesn't claim it. `record_event` no-ops when the log
+        # is disabled.
         self.event_log.record_event(topic, ev)
-
         kind = ev.get("type")
-        with self._lock:
-            strats = list(self.strategies.values())
-        if kind == "order_update":
-            for s in strats:
-                s.on_order_update(ev)
-        elif kind == "fill":
-            for s in strats:
-                s.on_fill(ev)
+        if kind == "fill":
+            self.queue.put(FillEvent(topic=topic, ev=ev))
+        elif kind == "order_update":
+            self.queue.put(OrderUpdateEvent(topic=topic, ev=ev))
 
-    # ── shutdown ──
+    # ── signals ──
 
     def _handle_signals(self) -> None:
         def _handler(_sig: int, _frame: object) -> None:
             log.info("shutdown signal received")
-            self._stop.set()
-            obs = getattr(self, "_observer", None)
-            if obs is not None:
-                obs.request_stop()
+            self.dispatcher.stop()
 
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)
-
-    def _shutdown_orders(self) -> None:
-        log.info("cancelling all known orders before exit")
-        with self._lock:
-            strats = list(self.strategies.values())
-        for s in strats:
-            try:
-                s.cancel_all()
-            except Exception:  # noqa: BLE001
-                log.exception("shutdown cancel failed for %s", s.label)
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -309,10 +247,7 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
     log.info(
-        "starting engine strategy=%s slugs=%s notional=$%.2f",
-        args.strategy,
-        args.base_slugs,
-        args.order_notional_usd,
+        f"starting engine strategy={args.strategy} slugs={args.base_slugs} notional=${args.order_notional_usd:.2f}"
     )
     eng = Engine(args)
     try:

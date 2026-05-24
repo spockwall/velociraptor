@@ -69,7 +69,7 @@ class UserFeed:
             except zmq.error.Again:
                 continue
             except zmq.error.ZMQError as e:
-                log.warning("user feed recv error: %s", e)
+                log.warning(f"user feed recv error: {e}")
                 continue
             if not frames:
                 continue
@@ -78,7 +78,7 @@ class UserFeed:
             try:
                 ev = msgpack.unpackb(payload, raw=False)
             except Exception as e:  # noqa: BLE001
-                log.warning("user feed decode: %s", e)
+                log.warning(f"user feed decode: {e}")
                 continue
             if not isinstance(ev, dict):
                 continue

@@ -1,31 +1,25 @@
-"""One-shot strategy — place once, cancel once, exit.
+"""One-shot strategy — place once at the floor, cancel once, stop.
 
-Per side: place a single buy at the absolute floor ($0.01), then cancel it
-synchronously in the same tick. Mark the side done. Once both sides are
-done, the engine exits.
+Single Polymarket quote callback. On first valid quote (passes the
+pin / safe-mid guard), place at MIN_PX, cancel immediately, then call
+`dispatcher.stop()` so the engine exits cleanly.
 
 Two safety properties (same as `probe`):
 
-1. **Price is the floor** (`MIN_PX = 0.01`). At $0.01 buy, the order is
-   below every standing bid, so the matching engine cannot match against
-   any resting sell. No partial fills.
-
-2. **Cancel is synchronous and immediate.** No "next tick" gap.
-
-Useful as a one-time round-trip probe through the order ROUTER + user
-channel — same shape as the old `scripts/poly_place_cancel.py` but driven
-by the engine, so it picks up the current Polymarket window automatically
-and runs across both YES and NO without manual token-id editing.
+  1. Price = MIN_PX → no fill possible (every standing bid is higher).
+  2. Place + cancel run back-to-back inside one callback; no other
+     event can interleave.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
 
 from ...market import Quote
-from .base import MIN_PX, SideState, Strategy
+from ..dispatcher import Dispatcher
+from .base import Strategy
+from ..helpers import MIN_PX, PIN_PX, SAFE_MID_HIGH, SAFE_MID_LOW, safe_mid_guard
 
 log = logging.getLogger(__name__)
 
@@ -33,51 +27,70 @@ log = logging.getLogger(__name__)
 class OneShotStrategy(Strategy):
     name = "one_shot"
 
-    def _target_px(self, quote: Quote) -> Optional[float]:
-        return MIN_PX
+    def __init__(
+        self,
+        *,
+        pin_px: float = PIN_PX,
+        safe_mid_low: float = SAFE_MID_LOW,
+        safe_mid_high: float = SAFE_MID_HIGH,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if self.window is None:
+            raise ValueError("OneShotStrategy needs a Polymarket window")
+        self.pin_px = pin_px
+        self.safe_mid_low = safe_mid_low
+        self.safe_mid_high = safe_mid_high
+        self._done = False
+        self._dispatcher: Dispatcher | None = None
+        self._stale_oid: str | None = None
 
-    def _tick_one_side(self, side_name: str, side: SideState) -> None:
-        if side.done:
-            return
+    def required_topics(self) -> list[tuple[str, str, str]]:
+        return [("polymarket", self.window.base_slug, "snapshot")]
 
-        quote = self.feed.latest(side.asset_id)
-        if quote is None or not quote.is_two_sided or quote.mid is None:
-            return  # not enough info yet
-
-        if self._should_skip_side(side_name, side, quote):
-            return
-
-        log.info(
-            "[%s/%s] QUOTE bid=%s ask=%s mid=%s spread=%s safe_mid=[%.2f,%.2f] pin=%.2f "
-            "two_sided=%s -> target_px=%.4f (one_shot floor)",
-            self.label,
-            side_name,
-            f"{quote.best_bid:.4f}" if quote.best_bid is not None else "—",
-            f"{quote.best_ask:.4f}" if quote.best_ask is not None else "—",
-            f"{quote.mid:.4f}" if quote.mid is not None else "—",
-            f"{(quote.best_ask - quote.best_bid):.4f}"
-            if quote.best_bid is not None and quote.best_ask is not None
-            else "—",
-            self.safe_mid_low,
-            self.safe_mid_high,
-            self.pin_px,
-            quote.is_two_sided,
-            MIN_PX,
+    def setup(self, dispatcher: Dispatcher) -> None:
+        self._dispatcher = dispatcher
+        # Fire on the first valid quote (no 2s default-throttle delay).
+        dispatcher.register_quote(
+            "polymarket", self.window.base_slug, self._on_quote, min_interval_ms=0
+        )
+        dispatcher.register_rollover(
+            "polymarket", self.window.base_slug, self._on_rollover
         )
 
-        # If something left a live oid (e.g. previous cancel failed), tear it
-        # down before placing.
-        if side.live_oid is not None:
-            self._cancel_live(side_name, side)
+    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+        self.window.full_slug = full_slug
+        self.window.up_asset_id = asset_id
+
+    def _on_quote(self, q: Quote) -> None:
+        if self._done:
+            return
+        asset_id = self.window.up_asset_id
+        if asset_id is None:
+            return
+
+        if (
+            safe_mid_guard(
+                self.market,
+                "polymarket",
+                self.window.base_slug,
+                low=self.safe_mid_low,
+                high=self.safe_mid_high,
+                pin_px=self.pin_px,
+            )
+            is not None
+        ):
+            return
 
         target_px = MIN_PX
         target_qty = max(round(1.0 / target_px, 2), 1.0)
-        client_oid = f"te-1shot-{self.window.full_slug[:18]}-{side_name}-{int(time.time() * 1000)}"
+        slug = self.window.full_slug or self.window.base_slug
+        client_oid = f"te-1shot-{slug[:18]}-{int(time.time() * 1000)}"
 
-        attribution = self._attribution(side_name)
+        attribution = self._attribution()
         try:
             ack = self.router.place_limit(
-                symbol=side.asset_id,
+                symbol=asset_id,
                 side="buy",
                 px=target_px,
                 qty=target_qty,
@@ -85,52 +98,39 @@ class OneShotStrategy(Strategy):
                 **attribution,
             )
         except Exception as e:  # noqa: BLE001
-            log.warning("[%s/%s] one_shot place failed: %s", self.label, side_name, e)
+            log.warning(f"[{self.label}] ONE_SHOT place failed: {e}")
             return
 
         oid = ack.get("exchange_oid")
         log.info(
-            "[%s/%s] ONE_SHOT place px=%.2f qty=%.2f oid=%s",
-            self.label,
-            side_name,
-            target_px,
-            target_qty,
-            oid,
+            f"[{self.label}] ONE_SHOT place px={target_px:.2f} "
+            f"qty={target_qty:.2f} oid={oid}"
         )
+        if oid is None:
+            self._finish("no exchange_oid returned")
+            return
 
-        if oid:
-            try:
-                self.router.cancel(oid, **attribution)
-                log.info(
-                    "[%s/%s] ONE_SHOT cancel ok oid=%s",
-                    self.label,
-                    side_name,
-                    oid,
-                )
-                side.done = True
-            except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "[%s/%s] one_shot cancel failed; will retry next tick: %s",
-                    self.label,
-                    side_name,
-                    e,
-                )
-                # Stash so a retry on the next tick can cancel it before
-                # marking the side done.
-                side.live_oid = oid
-                side.live_px = target_px
-                side.live_qty = target_qty
-        else:
-            # No exchange_oid returned somehow — treat as done so we don't
-            # spin forever. Probably means the executor returned an Err that
-            # `place_limit` did not raise.
+        try:
+            self.router.cancel(oid, **attribution)
+            log.info(f"[{self.label}] ONE_SHOT cancel ok oid={oid}")
+            self._finish("place+cancel ok")
+        except Exception as e:  # noqa: BLE001
             log.warning(
-                "[%s/%s] one_shot: place ACK had no exchange_oid; finalising anyway",
-                self.label,
-                side_name,
+                f"[{self.label}] ONE_SHOT cancel failed; keeping oid for teardown: {e}"
             )
-            side.done = True
+            self._stale_oid = oid
+            # Don't finish — let teardown retry the cancel on exit.
 
-    @property
-    def is_done(self) -> bool:
-        return self.yes.done and self.no.done
+    def _finish(self, why: str) -> None:
+        self._done = True
+        log.info(f"[{self.label}] ONE_SHOT done ({why}) — stopping dispatcher")
+        if self._dispatcher is not None:
+            self._dispatcher.stop()
+
+    def teardown(self) -> None:
+        if self._stale_oid is not None:
+            try:
+                self.router.cancel(self._stale_oid, **self._attribution())
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[{self.label}] one_shot teardown cancel failed: {e}")
+            self._stale_oid = None
