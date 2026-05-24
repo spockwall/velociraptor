@@ -1,5 +1,15 @@
+//! Pre-trade risk runner. Walks the configured rules for every
+//! `Place` / `PlaceBatch` leg and returns the first rejection as
+//! `(rule_name, detail)`. Cancels / update / heartbeat skip the runner.
+
+use libs::protocol::events::BbaPayload;
+use libs::protocol::orders::{OrderAction, OrderRequest, PlaceOne};
+use libs::redis_client::keys::RedisKey;
+use libs::redis_client::RedisHandle;
+
 use super::context::{PretradeContext, PretradeRule};
 use super::rules::{MaxNotional, MaxOpenOrders, PriceSanity, QtyBounds, RateLimit};
+use super::state::PretradeState;
 
 pub struct PretradeEngine {
     rules: Vec<Box<dyn PretradeRule>>,
@@ -20,154 +30,219 @@ impl Default for PretradeEngine {
 }
 
 impl PretradeEngine {
-    /// Run every rule; return the first failure as `(rule_name, detail)`.
-    pub fn evaluate(&self, ctx: &PretradeContext) -> Result<(), (&'static str, String)> {
-        for rule in &self.rules {
-            if let Err(detail) = rule.check(ctx) {
-                return Err((rule.name(), detail));
+    /// Evaluate every rule for every Place leg of `req`. Returns
+    /// `Some((rule, detail))` on the first rejection, `None` if the order
+    /// passes (or risk is disabled, or the (exchange, symbol) is
+    /// unconfigured). Cancels / update / heartbeat always return `None`.
+    pub async fn run(
+        &self,
+        req: &OrderRequest,
+        state: &PretradeState,
+        redis: Option<&RedisHandle>,
+    ) -> Option<(&'static str, String)> {
+        let places: Vec<&PlaceOne> = match &req.action {
+            OrderAction::Place(p) => vec![p],
+            OrderAction::PlaceBatch { orders } => orders.iter().collect(),
+            _ => return None,
+        };
+
+        let cfg = state.snapshot();
+        if !cfg.enabled {
+            return None;
+        }
+        let ex_str = req.exchange.to_str();
+
+        for p in places {
+            let Some(limits) = cfg.resolve(ex_str, &p.symbol) else {
+                continue;
+            };
+            let reference_px = reference_price(redis, ex_str, &p.symbol).await;
+            let open_orders = state.open_count(req.exchange, &p.symbol);
+            // Counts this prospective placement in the rolling window so a
+            // burst is caught on the order that crosses the threshold.
+            let recent_order_count = state.record_and_count_rate(req.exchange, &p.symbol);
+            let ctx = PretradeContext {
+                exchange: req.exchange,
+                place: p,
+                open_orders,
+                recent_order_count,
+                reference_px,
+                limits: &limits,
+            };
+            if let Some(hit) = self.check(&ctx) {
+                return Some(hit);
             }
         }
-        Ok(())
+        None
+    }
+
+    fn check(&self, ctx: &PretradeContext) -> Option<(&'static str, String)> {
+        for rule in &self.rules {
+            if let Err(detail) = rule.check(ctx) {
+                return Some((rule.name(), detail));
+            }
+        }
+        None
+    }
+}
+
+/// Mid price from `bba:{exchange}:{symbol}` if present, else `None` (the
+/// price-sanity rule then fails open). Any Redis/decode error → `None`.
+async fn reference_price(redis: Option<&RedisHandle>, exchange: &str, symbol: &str) -> Option<f64> {
+    let bytes = redis?.get_raw(&RedisKey::bba(exchange, symbol)).await?;
+    let bba: BbaPayload = rmp_serde::from_slice(&bytes).ok()?;
+    match (bba.best_bid, bba.best_ask) {
+        (Some((bid, _)), Some((ask, _))) => Some((bid + ask) / 2.0),
+        (Some((bid, _)), None) => Some(bid),
+        (None, Some((ask, _))) => Some(ask),
+        (None, None) => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libs::configs::PretradeLimits;
-    use libs::protocol::orders::{OrderKind, PlaceOne, Side, Tif};
+    use libs::configs::{ExchangeRisk, PretradeLimits, RiskConfig};
+    use libs::protocol::orders::{OrderKind, Side, Tif};
     use libs::protocol::ExchangeName;
+    use std::collections::HashMap;
 
-    fn place(px: f64, qty: f64) -> PlaceOne {
-        PlaceOne {
-            client_oid: "t".into(),
-            symbol: "TOK".into(),
-            side: Side::Buy,
-            kind: OrderKind::Limit,
-            px,
-            qty,
-            tif: Tif::Gtc,
-        }
-    }
-
-    fn ctx<'a>(
-        p: &'a PlaceOne,
-        l: &'a PretradeLimits,
-        reference_px: Option<f64>,
-    ) -> PretradeContext<'a> {
-        PretradeContext {
+    fn place_req(qty: f64, px: f64) -> OrderRequest {
+        OrderRequest {
+            req_id: 1,
             exchange: ExchangeName::Polymarket,
-            place: p,
-            open_orders: 0,
-            recent_order_count: 1,
-            reference_px,
-            limits: l,
+            action: OrderAction::Place(PlaceOne {
+                client_oid: "t".into(),
+                symbol: "TOK".into(),
+                side: Side::Buy,
+                kind: OrderKind::Limit,
+                px,
+                qty,
+                tif: Tif::Gtc,
+            }),
         }
     }
 
-    #[test]
-    fn passes_when_all_limits_none() {
-        let p = place(0.5, 10.0);
-        let l = PretradeLimits::default();
-        assert!(PretradeEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
+    fn cfg(limits: PretradeLimits) -> RiskConfig {
+        let mut exchanges = HashMap::new();
+        exchanges.insert(
+            "polymarket".to_string(),
+            ExchangeRisk {
+                default: limits,
+                symbols: HashMap::new(),
+            },
+        );
+        RiskConfig {
+            enabled: true,
+            exchanges,
+        }
     }
 
-    #[test]
-    fn max_qty_rejects_over_and_passes_at_boundary() {
-        let l = PretradeLimits {
+    #[tokio::test]
+    async fn passes_when_disabled() {
+        let st = PretradeState::default();
+        // disabled by default — even oversize qty passes
+        assert!(PretradeEngine::default()
+            .run(&place_req(1e9, 0.5), &st, None)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn passes_when_unconfigured_exchange() {
+        let st = PretradeState::default();
+        st.swap(RiskConfig {
+            enabled: true,
+            exchanges: HashMap::new(),
+        });
+        assert!(PretradeEngine::default()
+            .run(&place_req(1e9, 0.5), &st, None)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn max_qty_rejects_over_passes_at_boundary() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
             max_qty: Some(10.0),
             ..Default::default()
-        };
-        let eng = PretradeEngine::default();
-        let over = place(0.5, 10.01);
-        let (rule, _) = eng.evaluate(&ctx(&over, &l, None)).unwrap_err();
+        }));
+        let r = PretradeEngine::default();
+        let (rule, _) = r.run(&place_req(10.01, 0.5), &st, None).await.unwrap();
         assert_eq!(rule, "qty_bounds");
-        let at = place(0.5, 10.0);
-        assert!(eng.evaluate(&ctx(&at, &l, None)).is_ok());
+        assert!(r.run(&place_req(10.0, 0.5), &st, None).await.is_none());
     }
 
-    #[test]
-    fn min_qty_rejects_below() {
-        let l = PretradeLimits {
+    #[tokio::test]
+    async fn min_qty_rejects_below() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
             min_qty: Some(5.0),
             ..Default::default()
-        };
-        let p = place(0.5, 4.99);
-        assert_eq!(
-            PretradeEngine::default()
-                .evaluate(&ctx(&p, &l, None))
-                .unwrap_err()
-                .0,
-            "qty_bounds"
-        );
+        }));
+        let (rule, _) = PretradeEngine::default()
+            .run(&place_req(4.99, 0.5), &st, None)
+            .await
+            .unwrap();
+        assert_eq!(rule, "qty_bounds");
     }
 
-    #[test]
-    fn max_notional_rejects() {
-        let l = PretradeLimits {
+    #[tokio::test]
+    async fn max_notional_rejects() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
             max_notional: Some(5.0),
             ..Default::default()
-        };
-        let p = place(0.6, 10.0);
-        assert_eq!(
-            PretradeEngine::default()
-                .evaluate(&ctx(&p, &l, None))
-                .unwrap_err()
-                .0,
-            "max_notional"
-        );
-    }
-
-    #[test]
-    fn price_sanity_fails_open_without_reference() {
-        let l = PretradeLimits {
-            price_ref_max_deviation_pct: Some(5.0),
-            ..Default::default()
-        };
-        let p = place(0.99, 1.0);
-        assert!(PretradeEngine::default().evaluate(&ctx(&p, &l, None)).is_ok());
-    }
-
-    #[test]
-    fn price_sanity_rejects_far_from_reference() {
-        let l = PretradeLimits {
-            price_ref_max_deviation_pct: Some(5.0),
-            ..Default::default()
-        };
-        let p = place(0.60, 1.0);
+        }));
         let (rule, _) = PretradeEngine::default()
-            .evaluate(&ctx(&p, &l, Some(0.50)))
-            .unwrap_err();
-        assert_eq!(rule, "price_sanity");
+            .run(&place_req(10.0, 0.6), &st, None)
+            .await
+            .unwrap();
+        assert_eq!(rule, "max_notional");
     }
 
-    #[test]
-    fn rate_limit_rejects_when_over() {
-        let l = PretradeLimits {
-            max_orders_per_min: Some(3),
+    #[tokio::test]
+    async fn price_sanity_fails_open_without_reference() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
+            price_ref_max_deviation_pct: Some(5.0),
             ..Default::default()
-        };
-        let p = place(0.5, 1.0);
-        let mut c = ctx(&p, &l, None);
-        c.recent_order_count = 4;
-        assert_eq!(
-            PretradeEngine::default().evaluate(&c).unwrap_err().0,
-            "rate_limit"
-        );
+        }));
+        assert!(PretradeEngine::default()
+            .run(&place_req(1.0, 0.99), &st, None)
+            .await
+            .is_none());
     }
 
-    #[test]
-    fn max_open_orders_rejects_at_cap() {
-        let l = PretradeLimits {
+    #[tokio::test]
+    async fn rate_limit_rejects_when_over() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
+            max_orders_per_min: Some(2),
+            ..Default::default()
+        }));
+        let r = PretradeEngine::default();
+        // First three placements bump the rolling count; the third crosses 2.
+        assert!(r.run(&place_req(1.0, 0.5), &st, None).await.is_none());
+        assert!(r.run(&place_req(1.0, 0.5), &st, None).await.is_none());
+        let (rule, _) = r.run(&place_req(1.0, 0.5), &st, None).await.unwrap();
+        assert_eq!(rule, "rate_limit");
+    }
+
+    #[tokio::test]
+    async fn max_open_orders_rejects_at_cap() {
+        let st = PretradeState::default();
+        st.swap(cfg(PretradeLimits {
             max_open_orders: Some(2),
             ..Default::default()
-        };
-        let p = place(0.5, 1.0);
-        let mut c = ctx(&p, &l, None);
-        c.open_orders = 2;
-        assert_eq!(
-            PretradeEngine::default().evaluate(&c).unwrap_err().0,
-            "max_open_orders"
-        );
+        }));
+        st.incr_open(ExchangeName::Polymarket, "TOK");
+        st.incr_open(ExchangeName::Polymarket, "TOK");
+        let (rule, _) = PretradeEngine::default()
+            .run(&place_req(1.0, 0.5), &st, None)
+            .await
+            .unwrap();
+        assert_eq!(rule, "max_open_orders");
     }
 }
