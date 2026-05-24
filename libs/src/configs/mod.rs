@@ -22,7 +22,7 @@ pub use logging::LoggingConfig;
 pub use okx::OkxConfig;
 pub use polymarket::{PolymarketConfig, PolymarketFileConfig, PolymarketMarketConfig};
 pub use redis::RedisConfig;
-pub use risk::{ExchangeRisk, RiskConfig, RiskLimits};
+pub use risk::{ExchangeRisk, RiskConfig, PretradeLimits};
 pub use server::ServerConfig;
 pub use storage::StorageConfig;
 

@@ -95,6 +95,9 @@ impl Executor {
     pub const KILL_SWITCH_CHAN: &'static str = "executor:kill_switch_chan";
     /// One-shot trigger: executor calls cancel_all on every client and DELs the key.
     pub const CANCEL_ALL: &'static str = "executor:cancel_all";
+    /// One-shot trigger: executor re-reads its YAML config and swaps the
+    /// active risk limits, then DELs the key.
+    pub const RELOAD_CONFIG: &'static str = "executor:reload_config";
     /// Backend writes this every 5s; executor auto-engages local kill-switch
     /// if no update for 30s.
     pub const BACKEND_HEARTBEAT: &'static str = "executor:backend_heartbeat";
