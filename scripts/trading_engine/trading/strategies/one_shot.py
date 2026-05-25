@@ -57,15 +57,23 @@ class OneShotStrategy(Strategy):
         dispatcher.register_rollover(
             "polymarket", self.window.base_slug, self._on_rollover
         )
+        dispatcher.register_bootstrap(
+            "polymarket", self.window.base_slug, self._on_bootstrap
+        )
 
-    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+    def _on_bootstrap(self, full_slug: str) -> None:
+        # No-op stub. MarketState.on_bootstrap already populated
+        # asset_ids; the engine pre-stamped self.window.full_slug.
+        pass
+
+    def _on_rollover(self, full_slug: str) -> None:
+        # asset_ids already resolved by MarketState.on_rollover.
         self.window.full_slug = full_slug
-        self.window.up_asset_id = asset_id
 
     def _on_quote(self, q: Quote) -> None:
         if self._done:
             return
-        asset_id = self.window.up_asset_id
+        asset_id = self._asset_id("up")
         if asset_id is None:
             return
 

@@ -30,10 +30,14 @@ dispatcher instead.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from typing import Deque, Optional
 
 from .feed import Quote, Snapshot, Trade
+from .gamma import fetch_asset_ids
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_TRADE_HISTORY = 64
 
@@ -52,11 +56,14 @@ class MarketState:
         # Bounded trade history per (exchange, symbol). Strategies that
         # need a window of prints (e.g. momentum) read this.
         self._trade_hist: dict[tuple[str, str], Deque[Trade]] = {}
-        # Last seen full_slug per (exchange, base_slug) for rolling
-        # topics. Mirrors `MarketFeed._last_full_slug` so callers that
-        # want the current asset_id without parsing payloads can read
-        # `current_asset_id(...)` straight off the state.
-        self._current_asset_id: dict[tuple[str, str], str] = {}
+        # Current full_slug per (exchange, base_slug) for rolling topics.
+        # Updated by `_update_rollover` on every RolloverEvent.
+        self._current_full_slug: dict[tuple[str, str], str] = {}
+        # Resolved (up_asset_id, down_asset_id) per full_slug. Populated
+        # by strategies (or by an engine-level helper) via Gamma on
+        # rollover; `None` entries are allowed if resolution failed and
+        # strategies should NOT trade until present.
+        self._asset_ids: dict[str, tuple[Optional[str], Optional[str]]] = {}
 
     # ── reads (strategy-facing) ──
 
@@ -108,10 +115,31 @@ class MarketState:
     def trades_all(self) -> dict[tuple[str, str], Trade]:
         return dict(self._trades)
 
-    def current_asset_id(self, exchange: str, base_slug: str) -> Optional[str]:
-        """For rolling topics: the asset_id (= full_slug-side) currently
-        backing this base_slug. None until the first frame arrives."""
-        return self._current_asset_id.get((exchange, base_slug))
+    def current_full_slug(self, exchange: str, base_slug: str) -> Optional[str]:
+        """For rolling topics: the latest `full_slug` seen on
+        `polymarket:{base_slug}` / `kalshi:{series}`. `None` until the
+        first frame arrives."""
+        return self._current_full_slug.get((exchange, base_slug))
+
+    def asset_ids(
+        self, full_slug: str
+    ) -> Optional[tuple[Optional[str], Optional[str]]]:
+        """Resolved `(up_asset_id, down_asset_id)` for a Polymarket
+        rolling window. `None` if the engine hasn't resolved this
+        full_slug yet — strategies MUST guard on this and refuse to
+        trade when it returns `None`."""
+        return self._asset_ids.get(full_slug)
+
+    def set_asset_ids(
+        self,
+        full_slug: str,
+        up_asset_id: Optional[str],
+        down_asset_id: Optional[str],
+    ) -> None:
+        """Populate the (up, down) entry for a Polymarket full_slug.
+        Normally called by `on_rollover`; exposed for tests and any
+        external resolver (e.g. backend pre-seed)."""
+        self._asset_ids[full_slug] = (up_asset_id, down_asset_id)
 
     # ── writes (dispatcher-only) ──
 
@@ -129,5 +157,60 @@ class MarketState:
             self._trade_hist[(exchange, symbol)] = hist
         hist.append(t)
 
-    def _update_rollover(self, exchange: str, base_slug: str, asset_id: str) -> None:
-        self._current_asset_id[(exchange, base_slug)] = asset_id
+    def _update_current_full_slug(
+        self, exchange: str, base_slug: str, full_slug: str
+    ) -> None:
+        """Internal write helper. Advances the last-seen `full_slug`
+        without touching asset_ids — used by both the bootstrap and
+        rollover code paths."""
+        self._current_full_slug[(exchange, base_slug)] = full_slug
+
+    def _refresh_window(
+        self, exchange: str, base_slug: str, full_slug: str, log_prefix: str
+    ) -> None:
+        """Shared work for `on_bootstrap` and `on_rollover`:
+        advance `_current_full_slug`, then for Polymarket resolve
+        UP/DOWN asset_ids via Gamma and stamp `_asset_ids[full_slug]`.
+
+        `log_prefix` is `"bootstrap"` or `"rollover"` so the operator
+        can tell which trigger ran in the logs. Kalshi exchanges skip
+        the Gamma call (the ticker IS the asset id; not a Gamma slug).
+        Failures are logged and stored as `(None, None)` so strategies
+        that guard on `asset_ids()` correctly refuse to trade.
+        """
+        self._update_current_full_slug(exchange, base_slug, full_slug)
+        if exchange != "polymarket":
+            return
+        ids = fetch_asset_ids(full_slug)
+        if ids is None:
+            log.warning(
+                "%s: gamma resolve failed for %s; trading disabled "
+                "until next rollover",
+                log_prefix,
+                full_slug,
+            )
+            self._asset_ids[full_slug] = (None, None)
+            return
+        up, down = ids
+        self._asset_ids[full_slug] = (up, down)
+        log.info(
+            "%s: resolved asset_ids for %s: up=%s… down=%s…",
+            log_prefix,
+            full_slug,
+            up[:12] if up else None,
+            down[:12] if down else None,
+        )
+
+    def on_bootstrap(
+        self, exchange: str, base_slug: str, full_slug: str
+    ) -> None:
+        """Called by the dispatcher on `BootstrapEvent` (engine
+        startup, once per window-strategy)."""
+        self._refresh_window(exchange, base_slug, full_slug, "bootstrap")
+
+    def on_rollover(
+        self, exchange: str, base_slug: str, full_slug: str
+    ) -> None:
+        """Called by the dispatcher on `RolloverEvent` (wire-detected
+        `full_slug` change)."""
+        self._refresh_window(exchange, base_slug, full_slug, "rollover")

@@ -50,6 +50,7 @@ from typing import Callable, Optional
 
 from ..market import MarketState
 from ..typings.events import (
+    BootstrapEvent,
     Event,
     FillEvent,
     OrderUpdateEvent,
@@ -66,7 +67,8 @@ log = logging.getLogger(__name__)
 QuoteCallback = Callable[..., None]  # signature: (Quote) -> None
 SnapshotCallback = Callable[..., None]  # signature: (Snapshot) -> None
 TradeCallback = Callable[..., None]  # signature: (Trade) -> None
-RolloverCallback = Callable[..., None]  # signature: (full_slug, asset_id) -> None
+RolloverCallback = Callable[..., None]  # signature: (full_slug) -> None
+BootstrapCallback = Callable[..., None]  # signature: (full_slug) -> None
 UserCallback = Callable[..., None]  # signature: (ev_dict) -> None
 
 
@@ -107,6 +109,12 @@ class Dispatcher:
         self._snapshot_regs: dict[tuple[str, str], list[_Registration]] = {}
         self._trade_regs: dict[tuple[str, str], list[_Registration]] = {}
         self._rollover_regs: dict[tuple[str, str], list[_Registration]] = {}
+        # Per-(exchange, base_slug) bootstrap callbacks. Fired exactly
+        # once per strategy run, on the engine's `BootstrapEvent`,
+        # AFTER `MarketState.on_bootstrap` resolves the current
+        # window's asset_ids. Strategies that don't need bootstrap-time
+        # initialisation register an empty stub (`_on_bootstrap`).
+        self._bootstrap_regs: dict[tuple[str, str], list[_Registration]] = {}
         # User-channel registrations are global (one queue per kind).
         self._order_update_regs: list[_Registration] = []
         self._fill_regs: list[_Registration] = []
@@ -171,6 +179,22 @@ class Dispatcher:
             _Registration(callback=cb, min_interval_ns=0)
         )
 
+    def register_bootstrap(
+        self,
+        exchange: str,
+        base_slug: str,
+        cb: BootstrapCallback,
+    ) -> None:
+        """Bootstrap fires at most once per `(exchange, base_slug)` per
+        engine run, when the engine emits a `BootstrapEvent` at
+        startup. Use for window-scoped one-time initialisation
+        (stamping `window.full_slug`, hydrating state from MarketState,
+        etc.). It is NOT a rollover and `_on_rollover` is not invoked
+        on bootstrap — strategies that need both must register both."""
+        self._bootstrap_regs.setdefault((exchange, base_slug), []).append(
+            _Registration(callback=cb, min_interval_ns=0)
+        )
+
     def register_order_update(self, cb: UserCallback) -> None:
         self._order_update_regs.append(_Registration(callback=cb))
 
@@ -205,22 +229,27 @@ class Dispatcher:
             self._fire(self._quote_regs.get((ev.exchange, ev.symbol)), now_ns, ev.quote)
         elif isinstance(ev, SnapshotEvent):
             self._market._update_snapshot(ev.exchange, ev.symbol, ev.snapshot)
-            self._fire(
-                self._snapshot_regs.get((ev.exchange, ev.symbol)),
-                now_ns,
-                ev.snapshot,
-            )
+            snapshot = self._snapshot_regs.get((ev.exchange, ev.symbol))
+            self._fire(snapshot, now_ns, ev.snapshot)
         elif isinstance(ev, TradeEvent):
             self._market._update_trade(ev.exchange, ev.symbol, ev.trade)
             self._fire(self._trade_regs.get((ev.exchange, ev.symbol)), now_ns, ev.trade)
+        elif isinstance(ev, BootstrapEvent):
+            # Boot-time window resolution. MarketState.on_bootstrap
+            # populates asset_ids for the current window so the
+            # strategy's first `_on_quote` finds them. Bootstrap fires
+            # its OWN callback set (`_bootstrap_regs`) so strategies
+            # opt into one-time initialisation WITHOUT running their
+            # rollover side-effects (flatten, reset latches, etc.).
+            self._market.on_bootstrap(ev.exchange, ev.base_slug, ev.full_slug)
+            bootstrap = self._bootstrap_regs.get((ev.exchange, ev.base_slug))
+            self._fire(bootstrap, now_ns, ev.full_slug)
         elif isinstance(ev, RolloverEvent):
-            self._market._update_rollover(ev.exchange, ev.base_slug, ev.asset_id)
-            self._fire(
-                self._rollover_regs.get((ev.exchange, ev.base_slug)),
-                now_ns,
-                ev.full_slug,
-                ev.asset_id,
-            )
+            # Real wire rollover: refresh asset_ids THEN fire strategy
+            # callbacks so they can read the just-resolved ids via `MarketState.asset_ids`.
+            self._market.on_rollover(ev.exchange, ev.base_slug, ev.full_slug)
+            rollover = self._rollover_regs.get((ev.exchange, ev.base_slug))
+            self._fire(rollover, now_ns, ev.full_slug)
         elif isinstance(ev, OrderUpdateEvent):
             self._fire(self._order_update_regs, now_ns, ev.ev)
         elif isinstance(ev, FillEvent):

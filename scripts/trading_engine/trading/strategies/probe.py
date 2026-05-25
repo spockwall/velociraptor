@@ -59,24 +59,28 @@ class ProbeStrategy(Strategy):
         dispatcher.register_rollover(
             "polymarket", self.window.base_slug, self._on_rollover
         )
+        dispatcher.register_bootstrap(
+            "polymarket", self.window.base_slug, self._on_bootstrap
+        )
         dispatcher.register_order_update(self._on_order_update)
 
     # ── event handlers ──
 
-    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+    def _on_bootstrap(self, full_slug: str) -> None:
+        # No-op stub. MarketState.on_bootstrap already populated
+        # asset_ids; the engine pre-stamped self.window.full_slug.
+        pass
+
+    def _on_rollover(self, full_slug: str) -> None:
+        # asset_ids already resolved by MarketState.on_rollover.
         old = self.window.full_slug
         self.window.full_slug = full_slug
-        self.window.up_asset_id = asset_id
         if old is None:
             log.info(
-                f"[{self.window.base_slug}] probe bootstrap: "
-                f"full_slug={full_slug} asset={asset_id}"
+                f"[{self.window.base_slug}] probe bootstrap: full_slug={full_slug}"
             )
         else:
-            log.info(
-                f"[{self.window.base_slug}] probe rollover: "
-                f"{old} → {full_slug} asset={asset_id}"
-            )
+            log.info(f"[{self.window.base_slug}] probe rollover: {old} → {full_slug}")
 
     def _on_order_update(self, ev: dict) -> None:
         oid = ev.get("exchange_oid")
@@ -89,9 +93,9 @@ class ProbeStrategy(Strategy):
                 self._stale_oid = None
 
     def _on_quote(self, q: Quote) -> None:
-        asset_id = self.window.up_asset_id
+        asset_id = self._asset_id("up")
         if asset_id is None:
-            log.debug(f"[{self.label}] probe bootstrapping, skipping")
+            log.debug(f"[{self.label}] probe bootstrapping (no UP asset_id), skipping")
             return
 
         reason = safe_mid_guard(

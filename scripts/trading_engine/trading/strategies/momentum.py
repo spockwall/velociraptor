@@ -106,15 +106,25 @@ class MomentumStrategy(Strategy):
         dispatcher.register_rollover(
             "polymarket", self.window.base_slug, self._on_rollover
         )
+        dispatcher.register_bootstrap(
+            "polymarket", self.window.base_slug, self._on_bootstrap
+        )
         dispatcher.register_order_update(self._on_order_update)
         dispatcher.register_fill(self._on_fill)
 
     # ── handlers ──
 
-    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+    def _on_bootstrap(self, full_slug: str) -> None:
+        # No-op stub. MarketState.on_bootstrap already populated
+        # asset_ids; the engine pre-stamped self.window.full_slug.
+        # Crucially we do NOT call `_reset_position` here — there's
+        # no prior position to clear at process start.
+        pass
+
+    def _on_rollover(self, full_slug: str) -> None:
+        # asset_ids already resolved by MarketState.on_rollover before
+        # this callback fires. New window → flat.
         self.window.full_slug = full_slug
-        self.window.up_asset_id = asset_id
-        # New window → flat.
         self._reset_position()
 
     def _on_binance_quote(self, q: Quote) -> None:
@@ -133,7 +143,7 @@ class MomentumStrategy(Strategy):
         try:
             if self.entry_oid is not None or self.closing:
                 action = self._manage_open(now, phase)
-            elif phase == "bootstrapping" or self.window.up_asset_id is None:
+            elif phase == "bootstrapping" or self._asset_id("up") is None:
                 action = "skip(bootstrapping)"
             elif phase == "late":
                 action = "skip(late)"
@@ -205,7 +215,7 @@ class MomentumStrategy(Strategy):
         return (latest_mid - ref) / ref * 1e4
 
     def _enter(self, now: float) -> str:
-        asset_id = self.window.up_asset_id
+        asset_id = self._asset_id("up")
         if asset_id is None:
             return "skip(no asset_id)"
         q = self.market.quote("polymarket", self.window.base_slug)
@@ -252,7 +262,7 @@ class MomentumStrategy(Strategy):
     def _manage_open(self, now: float, phase: str) -> str:
         if self.closing:
             return "closing"
-        if self.entry_px is None or self.window.up_asset_id is None:
+        if self.entry_px is None or self._asset_id("up") is None:
             return "hold"
         q = self.market.quote("polymarket", self.window.base_slug)
         if phase == "late":
@@ -267,7 +277,7 @@ class MomentumStrategy(Strategy):
         return "HOLD"
 
     def _exit(self, q: Optional[Quote], reason: str) -> str:
-        asset_id = self.window.up_asset_id
+        asset_id = self._asset_id("up")
         if asset_id is None:
             return "hold"
         if q is None or q.best_bid is None:

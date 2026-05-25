@@ -56,7 +56,12 @@ log = logging.getLogger(__name__)
 class Quote:
     """Best-bid / best-ask snapshot only. Mirrors the `bba:*` ZMQ
     topic payload shape — no depth. Strategies that need the ladder
-    should register an `on_snapshot` callback for the full `Snapshot`."""
+    should register an `on_snapshot` callback for the full `Snapshot`.
+
+    `symbol` is the venue asset id (Polymarket: clobTokenId; Binance:
+    e.g. `btcusdt`). `full_slug` carries the window identity for
+    rolling Polymarket / Kalshi topics (`None` for static).
+    """
 
     exchange: str
     symbol: str
@@ -65,9 +70,6 @@ class Quote:
     mid: Optional[float]
     sequence: int
     received_ns: int  # local wall clock at receive
-    # For rolling markets (Polymarket/Kalshi) the publisher stamps the
-    # current window's full_slug into the payload — `None` for static
-    # exchanges (binance/okx/etc.) and for older feeds without the field.
     full_slug: Optional[str] = None
 
     @property
@@ -81,7 +83,7 @@ class Snapshot:
 
     Mirrors `libs::protocol::OrderbookSnapshot`. Bids are sorted high
     → low, asks low → high; the publisher does the sorting so callers
-    can trust the order.
+    can trust the order. See [`Quote`] for the symbol / full_slug split.
     """
 
     exchange: str
@@ -114,10 +116,8 @@ class Snapshot:
 class Trade:
     """One public last-trade event (zmq_server `LastTradeTopic`).
 
-    Mirrors `libs::protocol::LastTradePrice`. `exchange` / `symbol` are
-    taken from the ZMQ topic, not the payload, so they match the keys
-    used for quotes (the payload's enum `exchange` serialises
-    differently for binance_spot)."""
+    Mirrors `libs::protocol::LastTradePrice`. See [`Quote`] for the
+    symbol / full_slug split."""
 
     exchange: str
     symbol: str
@@ -127,15 +127,17 @@ class Trade:
     timestamp: str  # RFC3339 from the payload (as-is)
     trade_id: Optional[int]
     received_ns: int  # local wall clock at receive
-    # See Quote.full_slug.
     full_slug: Optional[str] = None
 
 
 # Producer-callback signatures used by Engine to enqueue events.
 QuoteHandler = Callable[[str, str, Quote], None]
 TradeHandler = Callable[[str, str, Trade], None]
-RolloverHandler = Callable[[str, str, str, str], None]
-# Args: (exchange, base_slug, new_full_slug, asset_id)
+# Args: (exchange, base_slug, full_slug). The dispatcher resolves
+# per-token asset_ids via `MarketState.on_rollover` BEFORE invoking
+# strategy callbacks — strategies just read via
+# `MarketState.asset_ids(full_slug)`.
+RolloverHandler = Callable[[str, str, str], None]
 SnapshotHandler = Callable[[str, str, "Snapshot"], None]
 
 
@@ -186,6 +188,17 @@ class MarketFeed:
         self._subscribed_trades: set[tuple[str, str]] = set()
 
     # ── public ──
+
+    def prime_rollover(
+        self, exchange: str, base_slug: str, full_slug: str
+    ) -> None:
+        """Seed the internal `_last_full_slug` cache so the next
+        wire frame carrying the SAME `full_slug` does NOT trigger a
+        spurious rollover event. Called by the engine after it
+        synthesises a `BootstrapEvent` for the current window, so
+        the dispatcher doesn't run the rollover path twice for one
+        window."""
+        self._last_full_slug[(exchange, base_slug)] = full_slug
 
     def start(self) -> None:
         if self._thread is not None:
@@ -378,15 +391,12 @@ class MarketFeed:
         if mid is None and bid_px is not None and ask_px is not None:
             mid = (bid_px + ask_px) / 2.0
 
-        full_slug = snap.get("full_slug")
-        # For rolling topics the payload's `symbol` carries the real
-        # per-window asset_id, which differs from the topic_id (= the
-        # stable base_slug). Use it as the Snapshot.symbol; otherwise
-        # fall back to topic_id.
+        # `symbol` is the venue asset id (asset_id for Polymarket,
+        # `btcusdt` for Binance, etc.). For rolling topics the
+        # publisher also stamps `full_slug` — that's the rollover
+        # identity. Static exchanges have `full_slug == None`.
         payload_symbol = snap.get("symbol") or topic_id
-        # Depth — `bids` / `asks` arrive as lists of `[price, size]`
-        # tuples (msgpack pairs). Coerce to `(float, float)` and drop
-        # malformed entries silently.
+        full_slug = snap.get("full_slug")
         bids = _coerce_levels(snap.get("bids"))
         asks = _coerce_levels(snap.get("asks"))
         s = Snapshot(
@@ -401,14 +411,14 @@ class MarketFeed:
             bids=bids,
             asks=asks,
         )
-        # Derived BBA view — pure projection of `s`. The Engine wires
-        # this to `register_quote` callbacks (e.g. signal logic that
-        # only cares about touch).
+        # Derived BBA view — pure projection of `s`.
         q = s.as_quote()
 
-        # Rollover detection: fire BEFORE the quote so the strategy's
-        # rollover handler can reset its window-scoped state before the
-        # quote callback reacts to the new asset's data.
+        # Rollover detection: a `full_slug` change vs the
+        # previously-seen value on `(exchange, topic_id)` IS the
+        # signal. Fires BEFORE the quote/snapshot so strategies can
+        # repopulate per-window state (e.g. resolve UP/DOWN asset_ids
+        # via Gamma) before the callback reacts to the new book.
         if isinstance(full_slug, str):
             rk = (exchange, topic_id)
             last = self._last_full_slug.get(rk)
@@ -416,50 +426,29 @@ class MarketFeed:
                 self._last_full_slug[rk] = full_slug
                 if self._on_rollover is not None:
                     try:
-                        self._on_rollover(exchange, topic_id, full_slug, payload_symbol)
+                        self._on_rollover(exchange, topic_id, full_slug)
                     except Exception:  # noqa: BLE001
                         log.exception("on_rollover handler raised")
 
-        # Snapshot first (depth-aware consumers), then the derived BBA
-        # quote. Same dual-keying for rolling topics. Both callbacks
-        # see the same publisher frame; consumers pick whichever shape
-        # they need.
+        # Single delivery keyed by `topic_id` (= base_slug for rolling,
+        # asset_id for static). Strategies that need the per-token
+        # asset_id look it up via `MarketState.asset_ids()`.
         if self._on_snapshot is not None:
             try:
                 self._on_snapshot(exchange, topic_id, s)
             except Exception:  # noqa: BLE001
                 log.exception("on_snapshot handler raised")
-            if payload_symbol != topic_id:
-                try:
-                    self._on_snapshot(exchange, payload_symbol, s)
-                except Exception:  # noqa: BLE001
-                    log.exception("on_snapshot handler raised (asset_id key)")
-
-        if self._on_quote is None:
-            return
-        # Always emit keyed by topic_id (back-compat: subscribe-by-base_slug
-        # callers read by base_slug; static-exchange callers read by their
-        # asset_id, which IS the topic id).
-        try:
-            self._on_quote(exchange, topic_id, q)
-        except Exception:  # noqa: BLE001
-            log.exception("on_quote handler raised")
-        # For rolling topics, ALSO emit keyed by the payload's asset_id
-        # so callers that read `market.quote(ex, asset_id)` after a
-        # rollover see the latest frame.
-        if payload_symbol != topic_id:
+        if self._on_quote is not None:
             try:
-                self._on_quote(exchange, payload_symbol, q)
+                self._on_quote(exchange, topic_id, q)
             except Exception:  # noqa: BLE001
-                log.exception("on_quote handler raised (asset_id key)")
+                log.exception("on_quote handler raised")
 
     def _handle_trade(
         self, exchange: str, topic_id: str, msg: object, received_ns: int
     ) -> None:
-        """Decode a `LastTradePrice` map. For rolling topics the payload
-        carries the per-window asset_id in `symbol` — we emit the trade
-        twice (once keyed by topic_id, once by asset_id) for the same
-        reason as `_handle_snapshot`."""
+        """Decode a `LastTradePrice` map. See `_handle_snapshot` for
+        the symbol / full_slug semantics."""
         if not isinstance(msg, dict):
             return
         try:
@@ -469,8 +458,8 @@ class MarketFeed:
             log.warning(f"trade decode: bad price/size in {exchange}:{topic_id}")
             return
         tid = msg.get("trade_id")
-        full_slug = msg.get("full_slug")
         payload_symbol = msg.get("symbol") or topic_id
+        full_slug = msg.get("full_slug")
         t = Trade(
             exchange=exchange,
             symbol=payload_symbol,
@@ -488,11 +477,6 @@ class MarketFeed:
             self._on_trade(exchange, topic_id, t)
         except Exception:  # noqa: BLE001
             log.exception("on_trade handler raised")
-        if payload_symbol != topic_id:
-            try:
-                self._on_trade(exchange, payload_symbol, t)
-            except Exception:  # noqa: BLE001
-                log.exception("on_trade handler raised (asset_id key)")
 
 
 def _coerce_levels(raw: object) -> list[tuple[float, float]]:

@@ -47,6 +47,7 @@ from .io.event_log import EventLog
 from .market import MarketFeed, MarketState, Quote, Snapshot, Trade
 from .trading import Dispatcher, Strategy, make_strategy
 from .typings.events import (
+    BootstrapEvent,
     FillEvent,
     OrderUpdateEvent,
     QuoteEvent,
@@ -158,6 +159,13 @@ class Engine:
         self.market_feed.start()
         self._subscribe_required_topics()
         self.strategy.setup(self.dispatcher)
+        # Enqueue a one-shot BootstrapEvent for window-based strategies
+        # so the dispatcher resolves the current window's UP/DOWN
+        # asset_ids via Gamma before any quote arrives. This is NOT a
+        # rollover (no prior window to transition from) — the dispatcher
+        # treats them as distinct events and only fires strategies'
+        # `_on_rollover` on real wire rollovers.
+        self._enqueue_bootstrap()
         if self.user_feed is not None:
             self.user_feed.start()
         if self.router is not None:
@@ -166,6 +174,47 @@ class Engine:
         else:
             self._run_dispatcher()
         return 0
+
+    def _enqueue_bootstrap(self) -> None:
+        """Push one `BootstrapEvent` per window-strategy so the
+        dispatcher resolves the current window's asset_ids before any
+        quote callback runs. No-op for observe-style strategies
+        (`window is None`)."""
+        strat = self.strategy
+        if strat.window is None:
+            return
+        from .market import current_full_slug, interval_secs_from_base_slug
+
+        base_slug = strat.window.base_slug
+        interval_secs = strat.window.interval_secs or interval_secs_from_base_slug(
+            base_slug
+        )
+        if interval_secs is None:
+            log.warning(
+                "bootstrap: cannot infer interval_secs from base_slug %r — "
+                "strategy will wait for the first wire rollover before trading",
+                base_slug,
+            )
+            return
+        full_slug = current_full_slug(base_slug, interval_secs)
+        # Pre-stamp the window so `Strategy.label` and any `_on_quote`
+        # logic that reads `self.window.full_slug` see a sensible
+        # value from the very first frame. Real wire rollovers do the
+        # same in each strategy's `_on_rollover`.
+        strat.window.full_slug = full_slug
+        strat.window.interval_secs = interval_secs
+        log.info("bootstrap: enqueuing BootstrapEvent for %s", full_slug)
+        self.queue.put(
+            BootstrapEvent(
+                exchange="polymarket",
+                base_slug=base_slug,
+                full_slug=full_slug,
+            )
+        )
+        # Seed the feed's rollover dedup so the first wire snapshot
+        # carrying this same full_slug doesn't re-fire a rollover.
+        # Real wire rollovers (different full_slug) still pass.
+        self.market_feed.prime_rollover("polymarket", base_slug, full_slug)
 
     def _run_dispatcher(self) -> None:
         try:
@@ -207,15 +256,12 @@ class Engine:
     def _enqueue_trade(self, exchange: str, symbol: str, t: Trade) -> None:
         self.queue.put(TradeEvent(exchange=exchange, symbol=symbol, trade=t))
 
-    def _enqueue_rollover(
-        self, exchange: str, base_slug: str, full_slug: str, asset_id: str
-    ) -> None:
+    def _enqueue_rollover(self, exchange: str, base_slug: str, full_slug: str) -> None:
         self.queue.put(
             RolloverEvent(
                 exchange=exchange,
                 base_slug=base_slug,
                 full_slug=full_slug,
-                asset_id=asset_id,
             )
         )
 

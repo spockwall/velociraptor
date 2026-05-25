@@ -62,51 +62,61 @@ class FillOnceStrategy(Strategy):
         # fire as soon as the safe-mid guard passes; everything after
         # the first send is a no-op via the `_sent_this_window` latch.
         dispatcher.register_quote(
-            "polymarket",
-            self.window.base_slug,
-            self._on_quote,
-            min_interval_ms=0,
+            "polymarket", self.window.base_slug, self._on_quote, min_interval_ms=0
         )
         dispatcher.register_rollover(
             "polymarket", self.window.base_slug, self._on_rollover
+        )
+        dispatcher.register_bootstrap(
+            "polymarket", self.window.base_slug, self._on_bootstrap
         )
         dispatcher.register_order_update(self._on_order_update)
         dispatcher.register_fill(self._on_fill)
 
     # ── handlers ──
 
-    def _on_rollover(self, full_slug: str, asset_id: str) -> None:
-        # The zmq_server scheduler now spawns each window only AT the
-        # boundary (no pre-spawn), so a rollover event corresponds 1:1
-        # to a real window transition — no flap, no re-emit.
+    def _on_bootstrap(self, full_slug: str) -> None:
+        # No-op for now. MarketState.on_bootstrap already populated
+        # asset_ids for `full_slug`; the engine pre-stamps
+        # `self.window.full_slug` before enqueuing the BootstrapEvent.
+        # Override here if you need one-time init that should NOT
+        # happen on real rollovers.
+        pass
+
+    def _on_rollover(self, full_slug: str) -> None:
+        # MarketState.on_rollover already resolved UP/DOWN asset_ids
+        # for `full_slug` via Gamma (the dispatcher calls it before
+        # firing this callback). The strategy just promotes
+        # window-scoped state and reads `self._asset_id(...)` later.
         prev_full = self.window.full_slug
         self.window.full_slug = full_slug
-        self.window.up_asset_id = asset_id
         self._sent_this_window = False
         self._filled_this_window = False
-        log.info(
-            f"[{self.label}] rollover {prev_full!r} → {full_slug!r} "
-            f"asset={asset_id}"
-        )
+        log.info(f"[{self.label}] rollover {prev_full!r} → {full_slug!r}")
 
     def _on_quote(self, q: Quote) -> None:
         if self._sent_this_window:
             return
-        asset_id = self.window.up_asset_id
+        # Guard: skip until the engine has resolved UP asset_id via
+        # Gamma. Without it we can't place an order.
+        asset_id = self._asset_id("up")
         if asset_id is None:
+            log.debug(f"[{self.label}] no UP asset_id resolved yet; skip")
             return
 
-        if (
-            safe_mid_guard(
-                self.market,
-                "polymarket",
-                self.window.base_slug,
-                low=self.safe_mid_low,
-                high=self.safe_mid_high,
-                pin_px=self.pin_px,
-            )
-            is not None
-        ):
+        reason = safe_mid_guard(
+            self.market,
+            "polymarket",
+            self.window.base_slug,
+            low=self.safe_mid_low,
+            high=self.safe_mid_high,
+            pin_px=self.pin_px,
+        )
+        if reason is not None:
+            # Visible at DEBUG so operators can see why an apparent
+            # "nothing happens" run isn't placing orders (e.g. mid
+            # outside the safe band, book pinned at floor, etc.).
+            log.debug(f"[{self.label}] skip: safe_mid_guard={reason}")
             return
 
         # Freshness gate: only fire after seeing at least one valid
@@ -114,6 +124,7 @@ class FillOnceStrategy(Strategy):
         # BUY we send USDC notional, and the venue walks the asks
         # itself.
         if q.best_ask is None and q.mid is None:
+            log.debug(f"[{self.label}] skip: no best_ask / mid in latest quote")
             return
 
         # Polymarket market BUY: `qty` is USDC notional, rounded to 2
@@ -121,6 +132,7 @@ class FillOnceStrategy(Strategy):
         # passes (it rejects >2 decimal places).
         target_qty_usdc = round(self.order_notional_usd, 2)
         if target_qty_usdc <= 0:
+            log.debug(f"[{self.label}] skip: target_qty_usdc <= 0")
             return
 
         slug = self.window.full_slug or self.window.base_slug
@@ -170,10 +182,8 @@ class FillOnceStrategy(Strategy):
         oid = ev.get("exchange_oid")
         if oid is None:
             return
-        if (
-            self.window.up_asset_id is not None
-            and self.window.up_asset_id == ev.get("symbol")
-        ):
+        up_asset_id = self._asset_id("up")
+        if up_asset_id is not None and up_asset_id == ev.get("symbol"):
             self._filled_this_window = True
             log.info(
                 f"[{self.label}] FILL_ONCE filled "

@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import abc
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from ...io import OrderRouter
 from ...market import MarketState
@@ -102,3 +102,28 @@ class Strategy(abc.ABC):
 
     def teardown(self) -> None:
         """Called on shutdown. Cancel any live orders. Default no-op."""
+
+    # ── asset_id reader (Polymarket rolling windows) ──
+
+    def _asset_id(self, side: Literal["up", "down"]) -> Optional[str]:
+        """Return the asset_id for the current window's `side`
+        (`"up"` = YES token, `"down"` = NO). Returns `None` if:
+          - no window is set,
+          - no rollover has been seen yet,
+          - or Gamma resolve failed (stored as `None` by
+            `MarketState.on_rollover`).
+
+        Strategies MUST guard on `None` and refuse to trade.
+
+        The dispatcher refreshes the `(full_slug → (up, down))` map on
+        every `RolloverEvent` (real or synthetic) via
+        `MarketState.on_rollover`, so the strategy never calls Gamma
+        directly.
+        """
+        if self.window is None or self.window.full_slug is None:
+            return None
+        entry = self.market.asset_ids(self.window.full_slug)
+        if entry is None:
+            return None
+        up, down = entry
+        return up if side == "up" else down
