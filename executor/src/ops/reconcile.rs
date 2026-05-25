@@ -1,11 +1,13 @@
-//! Boot-time reconciliation of live exchange orders against the local audit log.
+//! Boot-time reconciliation of live exchange orders against the
+//! executor's [`OrderRegistry`].
 //!
 //! For each exchange:
-//!   1. Read the most recent N audit entries from the on-disk file to recover
-//!      `(client_oid, exchange_oid)` pairs we *think* are live.
-//!   2. Call `client.get_orders()` and compare.
-//!   3. Surface mismatches as `Synthetic { op: "reconcile_*" }` audit events.
-//!      The executor never auto-cancels — the operator decides.
+//!   1. The registry must have been rehydrated from the audit log
+//!      already (`Executor::rehydrate_registry`).
+//!   2. Call `client.get_orders()` and compare against
+//!      `registry.live_set(exchange)`.
+//!   3. Surface mismatches as `Synthetic { op: "reconcile_*" }` audit
+//!      events. The executor never auto-cancels — the operator decides.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,17 +18,19 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use crate::ops::AuditSink;
+use crate::registry::OrderRegistry;
 use crate::rest::RestOrderClient;
 
-/// Cross-check live `get_orders()` against `known_live` (`exchange_oid`s the
-/// audit log says should still exist). Logs synthetic events; returns a count
-/// of unknown-on-exchange and lost-locally-known orders.
+/// Cross-check live `get_orders()` against the registry's `live_set`.
+/// Logs synthetic events; returns `(unknown_on_exchange, lost_locally)`.
 pub async fn reconcile_one(
     audit: &AuditSink,
     exchange: ExchangeName,
     client: Arc<dyn RestOrderClient>,
-    known_live: &HashSet<String>,
+    registry: &OrderRegistry,
 ) -> (usize, usize) {
+    let known_live: HashSet<String> = registry.live_set(exchange);
+
     let live: Vec<OrderAck> = match client.get_orders().await {
         Ok(v) => v,
         Err(e) => {
@@ -57,7 +61,7 @@ pub async fn reconcile_one(
     }
 
     let mut lost = 0;
-    for oid in known_live {
+    for oid in &known_live {
         if !live_set.contains(oid) {
             lost += 1;
             audit
@@ -111,7 +115,12 @@ mod tests {
             unimplemented!()
         }
         async fn cancel(&self, _exchange_oid: &str) -> Result<OrderAck, OrderError> {
-            unimplemented!()
+            Ok(OrderAck {
+                client_oid: "".into(),
+                exchange_oid: "".into(),
+                status: OrderStatus::Canceled,
+                ts_ns: 0,
+            })
         }
         async fn cancel_all(&self) -> Result<u32, OrderError> {
             Ok(0)
@@ -135,6 +144,10 @@ mod tests {
 
     #[tokio::test]
     async fn reports_unknown_and_lost() {
+        use crate::registry::{IdemKind, OrderEntry};
+        use libs::protocol::orders::OrderResponse;
+        use std::time::{Duration, Instant};
+
         let dir = tempdir().unwrap();
         let audit = AuditSink::open(dir.path().to_path_buf(), None, 1000)
             .await
@@ -147,9 +160,28 @@ mod tests {
                 ts_ns: 0,
             }],
         });
-        let mut known = HashSet::new();
-        known.insert("known-but-gone".to_string());
-        let (unknown, lost) = reconcile_one(&audit, ExchangeName::Kalshi, client, &known).await;
+
+        // Registry knows about a "known-but-gone" exchange_oid.
+        let registry = OrderRegistry::with_capacity(8);
+        registry.seed(
+            "known-but-gone".to_string(),
+            OrderEntry {
+                exchange: ExchangeName::Kalshi,
+                symbol: Some("X".into()),
+                response: OrderResponse {
+                    req_id: 0,
+                    result: Err(OrderError::Timeout),
+                },
+                exchange_oid: Some("known-but-gone".into()),
+                status: OrderStatus::New,
+                placed_at: Instant::now(),
+                kind: IdemKind::Place,
+                idem_expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+
+        let (unknown, lost) =
+            reconcile_one(&audit, ExchangeName::Kalshi, client, &registry).await;
         assert_eq!(unknown, 1);
         assert_eq!(lost, 1);
     }

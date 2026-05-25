@@ -1,19 +1,21 @@
 //! In-process ZMQ DEALER → ROUTER round-trip smoke test.
 //!
-//! Spawns the executor's `Gateway` against an in-memory stub client, sends a
-//! msgpack `OrderRequest`, and asserts the typed `OrderResponse` round-trips.
+//! Spawns the executor's `Gateway` (built on top of an `Executor`
+//! orchestrator) against an in-memory stub client, sends a msgpack
+//! `OrderRequest`, and asserts the typed `OrderResponse` round-trips.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use executor::control::{ControlState, ShutdownState};
-use executor::gateway::idempotency::IdempotencyCache;
 use executor::gateway::{ClientMap, Gateway, GatewayConfig};
-use executor::ops::AuditSink;
+use executor::ops::{AuditSink, Metrics};
 use executor::rest::RestOrderClient;
+use executor::{Executor, ExecutorBuild};
 use libs::protocol::orders::{
     HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest, OrderResponse,
     OrderResult, OrderStatus, PlaceOne, Side, Tif,
@@ -74,7 +76,6 @@ impl RestOrderClient for StubClient {
     }
 }
 
-/// Build the full executor stack against a stub Kalshi client.
 async fn make_gateway(bind: &str) -> (Gateway, Arc<StubClient>, Arc<ShutdownState>) {
     let dir = tempdir().unwrap();
     let audit = Arc::new(
@@ -91,24 +92,27 @@ async fn make_gateway(bind: &str) -> (Gateway, Arc<StubClient>, Arc<ShutdownStat
         stub.clone() as Arc<dyn RestOrderClient>,
     );
     let control = Arc::new(ControlState::default());
-    let idem = Arc::new(IdempotencyCache::with_capacity(64));
     let shutdown = Arc::new(ShutdownState::default());
+    let executor = Arc::new(Executor::new(ExecutorBuild {
+        clients,
+        audit,
+        metrics: Arc::new(Metrics::new()),
+        control,
+        shutdown: shutdown.clone(),
+        redis: None,
+        config_path: PathBuf::from("/tmp/nonexistent.yaml"),
+    }));
     let gw = Gateway::new(
         GatewayConfig {
             bind: bind.to_string(),
         },
-        Arc::new(clients),
-        audit,
-        control,
-        idem,
-        shutdown.clone(),
+        executor,
     );
     (gw, stub, shutdown)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dealer_router_heartbeat() {
-    // Pick a random-ish port; bind/connect via TCP.
     let port = 5557 + (std::process::id() % 1000);
     let bind = format!("tcp://127.0.0.1:{port}");
     let connect = format!("tcp://127.0.0.1:{port}");
@@ -116,7 +120,6 @@ async fn dealer_router_heartbeat() {
     let (gw, _stub, shutdown) = make_gateway(&bind).await;
     let gw_handle = tokio::spawn(async move { gw.run().await });
 
-    // Give the ROUTER a tick to bind.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let connect_clone = connect.clone();
@@ -133,7 +136,6 @@ async fn dealer_router_heartbeat() {
             action: OrderAction::Heartbeat,
         };
         let payload = rmp_serde::to_vec_named(&req)?;
-        // DEALER → ROUTER frame: send empty-delim then payload.
         dealer.send(&[][..], zmq::SNDMORE)?;
         dealer.send(&payload[..], 0)?;
 

@@ -1,5 +1,6 @@
-//! Executor binary entrypoint. Wires REST clients, ZMQ ROUTER gateway,
-//! redis control plane, audit sink, metrics, and graceful shutdown.
+//! Executor binary entrypoint. Builds the `Executor` orchestrator, wires
+//! the ZMQ gateway + redis-backed control thread + metrics server, runs
+//! boot-time reconcile, then drains gracefully on SIGINT.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,22 +10,19 @@ use std::time::Duration;
 
 use clap::Parser;
 use executor::control::{drain, run_watcher, ControlState, ShutdownState};
-use executor::gateway::idempotency::IdempotencyCache;
 use executor::gateway::{ClientMap, Gateway, GatewayConfig};
 use executor::ops::{ensure_owner_only, AuditSink, Metrics};
 use executor::rest::polymarket::PolymarketRestClient;
 use executor::rest::RestOrderClient;
+use executor::{Executor, ExecutorBuild, ExecutorControlCallbacks};
 use libs::configs::Config;
 use libs::credentials::PolymarketCredentials;
 use libs::endpoints::polymarket::polymarket as poly_ep;
-use libs::protocol::ExchangeName;
 use libs::logging::init_logging;
+use libs::protocol::ExchangeName;
 use libs::redis_client::RedisHandle;
 use tracing::{info, warn};
 
-/// Executor CLI. All runtime settings come from `--config` (the `executor:`
-/// and `redis:` sections of a Velociraptor YAML config). Only path-to-config
-/// and credentials path remain as CLI flags.
 #[derive(Parser, Debug)]
 #[command(name = "executor", about = "Velociraptor order executor")]
 struct Args {
@@ -45,7 +43,6 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Load config first so `logging:` settings can drive tracing setup.
     let cfg = Config::load(&args.config);
     let _guards = init_logging(
         "executor",
@@ -54,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
         cfg.logging.json,
     );
 
-    // ── Effective settings (all from config) ─────────────────────────────
     let exec_cfg = &cfg.executor;
     let router_endpoint = exec_cfg.router_endpoint.clone();
     let audit_dir = exec_cfg.audit_dir.clone();
@@ -78,9 +74,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Build per-exchange REST clients ──────────────────────────────────
+    // ── REST clients ─────────────────────────────────────────────────────
     let mut clients: ClientMap = HashMap::new();
-
     let poly_creds = PolymarketCredentials::load(&args.credentials);
     let poly_base = match polymarket_env.as_str() {
         "testnet" | "preprod" | "amoy" => poly_ep::TESTNET_BASE_URL,
@@ -109,12 +104,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // ── Audit ────────────────────────────────────────────────────────────
+    // ── Audit + metrics ──────────────────────────────────────────────────
+    let audit_dir_path = PathBuf::from(&audit_dir);
     let audit = Arc::new(
-        AuditSink::open(PathBuf::from(&audit_dir), redis.clone(), audit_stream_cap).await?,
+        AuditSink::open(audit_dir_path.clone(), redis.clone(), audit_stream_cap).await?,
     );
-
-    // ── Metrics ──────────────────────────────────────────────────────────
     let metrics = Arc::new(Metrics::new());
     let metrics_addr: std::net::SocketAddr = metrics_addr_str.parse()?;
     let metrics_clone = metrics.clone();
@@ -124,74 +118,61 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // ── Control plane ────────────────────────────────────────────────────
+    // ── Control + shutdown state ─────────────────────────────────────────
     let control = Arc::new(ControlState::default());
     let shutdown = Arc::new(ShutdownState::default());
     let watcher_shutdown = Arc::new(AtomicBool::new(false));
 
+    // ── Build the Executor orchestrator ──────────────────────────────────
+    let executor = Arc::new(Executor::new(ExecutorBuild {
+        clients,
+        audit: audit.clone(),
+        metrics: metrics.clone(),
+        control: control.clone(),
+        shutdown: shutdown.clone(),
+        redis: redis.clone(),
+        config_path: PathBuf::from(&args.config),
+    }));
+
+    // Boot-time registry rehydrate + per-exchange reconcile.
+    executor.rehydrate_registry(&audit_dir_path).await;
+    for ex in executor.exchanges() {
+        if let Some(client) = executor.clients().get(&ex) {
+            let (_unknown, _lost) =
+                executor::ops::reconcile::reconcile_one(audit.as_ref(), ex, client.clone(), executor.registry())
+                    .await;
+        }
+    }
+
+    // ── Control watcher (only when Redis is up) ──────────────────────────
     if let Some(r) = redis.clone() {
-        let exchanges: Vec<_> = clients.keys().copied().collect();
+        let exchanges: Vec<_> = executor.exchanges();
         let control_for_watcher = control.clone();
         let watcher_shutdown_clone = watcher_shutdown.clone();
-        let clients_for_cancel = clients.clone();
-        let audit_for_cancel = audit.clone();
+        let callbacks: Arc<dyn executor::control::ControlCallbacks> =
+            Arc::new(ExecutorControlCallbacks {
+                executor: executor.clone(),
+            });
         tokio::spawn(async move {
             run_watcher(
                 control_for_watcher,
                 r,
                 exchanges,
                 watcher_shutdown_clone,
-                move || {
-                    let clients = clients_for_cancel.clone();
-                    let audit = audit_for_cancel.clone();
-                    async move {
-                        for (ex, c) in clients.iter() {
-                            match c.cancel_all().await {
-                                Ok(n) => {
-                                    audit
-                                        .log_synthetic(
-                                            "cancel_all_fired",
-                                            serde_json::json!({
-                                                "exchange": ex.to_str(),
-                                                "count": n,
-                                            }),
-                                        )
-                                        .await;
-                                }
-                                Err(e) => {
-                                    audit
-                                        .log_synthetic(
-                                            "cancel_all_error",
-                                            serde_json::json!({
-                                                "exchange": ex.to_str(),
-                                                "error": format!("{e:?}"),
-                                            }),
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-                },
+                callbacks,
             )
             .await;
         });
     }
 
-    // ── Gateway ──────────────────────────────────────────────────────────
-    let idem = Arc::new(IdempotencyCache::default());
+    // ── Gateway: ZMQ ROUTER transport ────────────────────────────────────
     let gateway = Gateway::new(
         GatewayConfig {
             bind: router_endpoint.clone(),
         },
-        Arc::new(clients),
-        audit.clone(),
-        control.clone(),
-        idem,
-        shutdown.clone(),
+        executor.clone(),
     );
 
-    // ── Run gateway + Ctrl-C handler concurrently ────────────────────────
     let gateway_handle = tokio::spawn(async move { gateway.run().await });
 
     tokio::signal::ctrl_c().await?;

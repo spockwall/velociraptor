@@ -262,6 +262,124 @@ async fn place_market_order() {
     );
 }
 
+/// Flatten every open position on the account with FOK market sells.
+///
+/// Steps:
+///   1. GET `https://data-api.polymarket.com/positions?user=<address>` to
+///      list every (token, size) currently held by this wallet.
+///   2. For each non-zero size, place a `Side::Sell` FOK market order with
+///      `qty = size` (Polymarket market SELLs expect SHARES — see the
+///      `to_market_amount` doc-comment in `executor::rest::polymarket`).
+///   3. Print one line per attempted sell so the operator can audit.
+///
+/// Run:
+///
+///   cargo test -p executor --test polymarket_mainnet \
+///     -- --ignored --nocapture sell_all_positions
+///
+/// **Real money on mainnet.** This unwinds every position on the wallet,
+/// at whatever the top bid is when each FOK lands. There is no
+/// per-position confirmation — once you start, it runs. Cap positions
+/// you're willing to lose precision on (FOK requires the full size to
+/// fill on the first matching pass; if liquidity is thin it will reject
+/// rather than partial-fill, which is the safer failure mode here).
+#[tokio::test]
+#[ignore = "flattens EVERY open Polymarket position on this account — run manually"]
+async fn sell_all_positions() {
+    // ── Step 1: list positions via the Polymarket data API ──
+    let creds = PolymarketCredentials::load(creds_path());
+    let address = creds.address.clone();
+    assert!(!address.is_empty(), "polymarket address missing");
+
+    let url = format!(
+        "https://data-api.polymarket.com/positions?user={}&sizeThreshold=0",
+        address
+    );
+
+    #[derive(serde::Deserialize, Debug)]
+    struct PolyPosition {
+        asset: String,
+        size: f64,
+        #[serde(default)]
+        outcome: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    }
+
+    let positions: Vec<PolyPosition> = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("data-api GET")
+        .error_for_status()
+        .expect("data-api non-2xx")
+        .json()
+        .await
+        .expect("data-api json decode");
+
+    eprintln!(
+        "positions: {} entry/entries (address={address})",
+        positions.len()
+    );
+
+    // Filter out anything with size <= 0 — Polymarket sometimes returns
+    // stale rows with zero size, and we never want to send a zero-qty
+    // order (the venue rejects with 400).
+    let to_sell: Vec<&PolyPosition> = positions.iter().filter(|p| p.size > 0.0).collect();
+    if to_sell.is_empty() {
+        eprintln!("sell_all_positions: nothing to sell — exiting");
+        return;
+    }
+    for p in &to_sell {
+        eprintln!(
+            "  candidate: size={:.6} outcome={:?} title={:?} asset={}",
+            p.size, p.outcome, p.title, p.asset
+        );
+    }
+
+    // ── Step 2: fire one FOK market sell per non-zero position ──
+    let client = build_client().await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    for (i, pos) in to_sell.iter().enumerate() {
+        // Round shares to 4 decimals — Polymarket's taker-amount precision
+        // cap for market sells. Anything stricter than that is excess.
+        let qty_shares = (pos.size * 10_000.0).floor() / 10_000.0;
+        if qty_shares <= 0.0 {
+            eprintln!(
+                "  [{i}] skip: rounded qty {qty_shares} <= 0 (raw size {})",
+                pos.size
+            );
+            continue;
+        }
+
+        let order = PlaceOne {
+            client_oid: format!("polymarket_mainnet-sell-all-{now_ms}-{i}"),
+            symbol: pos.asset.clone(),
+            side: Side::Sell,
+            kind: OrderKind::Market,
+            px: 0.0, // ignored for market orders
+            qty: qty_shares,
+            tif: Tif::Fok,
+        };
+
+        eprintln!(
+            "  [{i}] sell qty={qty_shares} asset={} outcome={:?}",
+            order.symbol, pos.outcome
+        );
+        match client.place(&order).await {
+            Ok(ack) => eprintln!(
+                "  [{i}] ACK oid={} status={:?}",
+                ack.exchange_oid, ack.status
+            ),
+            // Don't abort on the first failure — try the rest of the book.
+            // The operator can re-run the test after fixing whatever
+            // tripped (insufficient liquidity, paused market, etc.).
+            Err(e) => eprintln!("  [{i}] ERR {e:?}"),
+        }
+    }
+}
+
 /// `RestOrderClient::cancel` — cancels by exchange-side oid. Edit the const
 /// `OID` to whatever you want to cancel (read it from `place_order`'s output
 /// or `get_orders_returns_array`).

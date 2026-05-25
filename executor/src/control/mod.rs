@@ -8,54 +8,56 @@
 //!   - `executor:kill_switch`           — global kill flag (poll @ 250ms)
 //!   - `executor:kill_switch:{exchange}` — per-exchange flag
 //!   - `executor:cancel_all`             — one-shot trigger; consumed (DEL) after firing
+//!   - `executor:reload_config`          — one-shot trigger; consumed (DEL) after firing
 //!   - `executor:backend_heartbeat`      — dead-man switch; if stale >30s, engage local kill
 //!
-//! `ControlState` is the single source of truth read by the gateway. The
-//! watcher task mutates it; readers are lock-free `AtomicBool`s + a `DashMap`.
+//! This module owns **only operational signals**. Risk-domain state
+//! (open-order counts, place-time windows, the active `RiskConfig`)
+//! lives in `pretrade::PretradeState`. The watcher invokes the executor
+//! via [`ControlCallbacks`] for the two actions that cross the boundary
+//! (cancel-all + reload-risk) so the control thread remains genuinely
+//! standalone.
 
 pub mod shutdown;
 pub use shutdown::{drain, ShutdownState};
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use dashmap::DashMap;
 use libs::protocol::ExchangeName;
-use libs::redis_client::RedisHandle;
 use libs::redis_client::keys::Executor;
+use libs::redis_client::RedisHandle;
 use redis::AsyncCommands;
 use tracing::{info, warn};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DEADMAN_THRESHOLD_SECS: i64 = 30;
 
+/// Operational signals only. No risk-domain state.
+#[derive(Default)]
 pub struct ControlState {
     pub kill_switch: AtomicBool,
+    pub paused: AtomicBool,
     pub deadman_engaged: AtomicBool,
     pub per_exchange_kill: DashMap<ExchangeName, bool>,
     /// Last seen `executor:backend_heartbeat` value (unix seconds).
     pub last_heartbeat_secs: AtomicI64,
 }
 
-impl Default for ControlState {
-    fn default() -> Self {
-        Self {
-            kill_switch: AtomicBool::new(false),
-            deadman_engaged: AtomicBool::new(false),
-            per_exchange_kill: DashMap::new(),
-            last_heartbeat_secs: AtomicI64::new(0),
-        }
-    }
-}
-
 impl ControlState {
     /// Effective gate: blocks all non-cancel actions if any of:
     ///   - global kill set
+    ///   - paused
     ///   - dead-man engaged
     ///   - per-exchange kill set
     pub fn is_blocked(&self, exchange: ExchangeName) -> bool {
         if self.kill_switch.load(Ordering::Relaxed) {
+            return true;
+        }
+        if self.paused.load(Ordering::Relaxed) {
             return true;
         }
         if self.deadman_engaged.load(Ordering::Relaxed) {
@@ -68,21 +70,29 @@ impl ControlState {
     }
 }
 
-/// Long-running watcher task. Returns when `shutdown` flips to `true`.
+/// What the watcher calls back into when a one-shot control key fires.
 ///
-/// `on_cancel_all` is invoked once per detected `executor:cancel_all` trigger;
-/// the watcher then `DEL`s the key. The callback should return after enqueuing
-/// the cancel-all on every configured client (it does not need to wait for ack).
-pub async fn run_watcher<F, Fut>(
+/// Implementations are not assumed to be cheap and the watcher does NOT
+/// await per-call completion guarantees beyond the boundary of one tick:
+/// if a callback hangs, the watcher still advances on the next iteration.
+#[async_trait]
+pub trait ControlCallbacks: Send + Sync {
+    /// `executor:cancel_all` fired. Implementation should flatten every
+    /// exchange and clear any in-process open-order bookkeeping.
+    async fn cancel_all_now(&self);
+    /// `executor:reload_config` fired. Implementation should re-parse the
+    /// YAML and swap the active risk limits.
+    async fn reload_config(&self);
+}
+
+/// Long-running watcher task. Returns when `shutdown` flips to `true`.
+pub async fn run_watcher(
     state: Arc<ControlState>,
     redis: RedisHandle,
     exchanges: Vec<ExchangeName>,
     shutdown: Arc<AtomicBool>,
-    on_cancel_all: F,
-) where
-    F: Fn() -> Fut + Send + Sync,
-    Fut: std::future::Future<Output = ()> + Send,
-{
+    callbacks: Arc<dyn ControlCallbacks>,
+) {
     info!("control: watcher started ({} exchanges)", exchanges.len());
 
     loop {
@@ -100,20 +110,41 @@ pub async fn run_watcher<F, Fut>(
             info!("control: kill_switch -> {}", kill);
         }
 
+        // Pause (separate signal — kill is "block + cancel", pause is
+        // "block only"; both surface through is_blocked).
+        let v: Option<String> = conn.get(Executor::PAUSE).await.ok().flatten();
+        let paused = v.as_deref() == Some("1");
+        let prev = state.paused.swap(paused, Ordering::Relaxed);
+        if paused != prev {
+            info!("control: paused -> {}", paused);
+        }
+
         // Per-exchange kills.
         for ex in &exchanges {
             let key = Executor::kill_switch_exchange(ex.to_str());
             let v: Option<String> = conn.get(&key).await.ok().flatten();
-            state.per_exchange_kill.insert(*ex, v.as_deref() == Some("1"));
+            state
+                .per_exchange_kill
+                .insert(*ex, v.as_deref() == Some("1"));
         }
 
         // Cancel-all trigger (one-shot; consume after firing).
         let v: Option<String> = conn.get(Executor::CANCEL_ALL).await.ok().flatten();
         if v.as_deref() == Some("1") {
             info!("control: cancel_all triggered");
-            on_cancel_all().await;
+            callbacks.cancel_all_now().await;
             if let Err(e) = conn.del::<_, ()>(Executor::CANCEL_ALL).await {
                 warn!("control: failed to DEL cancel_all key: {e}");
+            }
+        }
+
+        // Config reload trigger (one-shot).
+        let v: Option<String> = conn.get(Executor::RELOAD_CONFIG).await.ok().flatten();
+        if v.as_deref() == Some("1") {
+            info!("control: reload_config triggered");
+            callbacks.reload_config().await;
+            if let Err(e) = conn.del::<_, ()>(Executor::RELOAD_CONFIG).await {
+                warn!("control: failed to DEL reload_config key: {e}");
             }
         }
 
@@ -151,6 +182,13 @@ mod tests {
         s.kill_switch.store(true, Ordering::Relaxed);
         assert!(s.is_blocked(ExchangeName::Kalshi));
         assert!(s.is_blocked(ExchangeName::Polymarket));
+    }
+
+    #[test]
+    fn blocked_when_paused() {
+        let s = ControlState::default();
+        s.paused.store(true, Ordering::Relaxed);
+        assert!(s.is_blocked(ExchangeName::Kalshi));
     }
 
     #[test]

@@ -244,11 +244,31 @@ fn to_sdk_market_order_type(t: Tif) -> Result<OrderType, OrderError> {
     }
 }
 
-// `qty` is share count for both sides:
-//   Buy  → walks asks until cumulative shares >= qty
-//   Sell → walks bids until cumulative shares >= qty
-fn to_market_amount(qty: f64) -> Result<Amount, OrderError> {
-    Amount::shares(dec(qty)?).map_err(|e| OrderError::Internal {
+// Side-specific market-order amount semantics on Polymarket:
+//
+//   Buy  → `qty` is USDC NOTIONAL. The SDK back-computes share count by
+//          walking the ask book; `maker = qty`, `taker = qty / cutoff_price`.
+//          We must use `Amount::usdc` because the venue requires the maker
+//          amount to have ≤ 2 USDC decimals — using `Amount::shares` on a
+//          buy yields a fractional USDC notional that fails the precision
+//          check (`maker buy orders ... max accuracy of 2 decimals`).
+//
+//   Sell → `qty` is SHARE COUNT. The SDK back-computes USDC by walking
+//          the bid book; `maker = qty` shares, `taker = qty * cutoff_price`
+//          USDC. The SDK explicitly rejects `Amount::usdc` for sells
+//          (`Sell Orders must specify their amounts in shares`), so this
+//          path is non-negotiable.
+//
+// Net effect on the trading-engine API:
+//   `place_market(side="buy",  qty=N)` → spend N USDC
+//   `place_market(side="sell", qty=N)` → sell N shares
+fn to_market_amount(qty: f64, side: Side) -> Result<Amount, OrderError> {
+    let d = dec(qty)?;
+    let res = match side {
+        Side::Buy => Amount::usdc(d),
+        Side::Sell => Amount::shares(d),
+    };
+    res.map_err(|e| OrderError::Internal {
         message: format!("polymarket market order: amount build failed: {e}"),
     })
 }
@@ -301,7 +321,7 @@ impl RestOrderClient for PolymarketRestClient {
                 .market_order()
                 .token_id(parse_token_id(&p.symbol)?)
                 .side(to_sdk_side(p.side))
-                .amount(to_market_amount(p.qty)?)
+                .amount(to_market_amount(p.qty, p.side)?)
                 .order_type(to_sdk_market_order_type(p.tif)?)
                 .build_sign_and_post(self.signer.as_ref())
                 .await

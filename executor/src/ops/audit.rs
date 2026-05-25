@@ -1,25 +1,33 @@
-//! Dual-sink audit log: redis stream + on-disk length-prefixed mpack file.
+//! Dual-sink audit log: redis stream + on-disk CSV file.
 //!
-//! Each entry carries:
-//!   - `seq`: monotonic counter (per executor process).
-//!   - `prev_hash`: BLAKE3 of the previous entry's encoded bytes (32 bytes,
-//!     hex-encoded as a string for serde simplicity).
-//!   - `ts_ns`: chrono::Utc::now timestamp in nanos.
-//!   - `payload`: tagged enum (`Request` / `Response` / `Synthetic`).
+//! Each row carries:
+//!   - `seq`         — monotonic counter (per executor process).
+//!   - `prev_hash`   — BLAKE3 of the previous row's encoded bytes (32 bytes,
+//!                     hex-encoded), so tampering can be detected later.
+//!   - `ts_iso`      — RFC3339 timestamp.
+//!   - `ts_ns`       — same instant in nanos since UNIX epoch.
+//!   - `kind`        — `request` | `response` | `synthetic`.
+//!   - `req_id`      — for request/response rows; empty for synthetic.
+//!   - `op`          — request action / response result kind / synthetic op.
+//!   - `exchange`    — request exchange; empty for response/synthetic.
+//!   - `payload_json`— JSON-encoded full payload (the variable bits).
 //!
-//! Both sinks see the *same* encoded bytes; encode-once, fan out.
-//! Sink failures are logged at `warn!` and do not block the order path.
+//! Files are `dir/{YYYY-MM-DD}.csv`. The Redis stream sink still carries the
+//! mpack bytes for backwards compatibility with downstream consumers; the
+//! file sink is the human-readable copy.
 
 use std::path::PathBuf;
 
 use chrono::Utc;
 use libs::protocol::orders::{OrderError, OrderRequest, OrderResult};
-use libs::redis_client::RedisHandle;
 use libs::redis_client::keys::Executor;
+use libs::redis_client::RedisHandle;
 use serde::{Deserialize, Serialize};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
+
+use crate::utils::audit_csv;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -50,7 +58,6 @@ struct State {
     /// BLAKE3 hex of the most recent encoded entry; "0"*64 at startup.
     prev_hash: String,
     file: Option<tokio::fs::File>,
-    /// True if any non-critical entry is buffered and a flush is pending.
     dirty: bool,
 }
 
@@ -61,7 +68,7 @@ pub struct AuditSink {
 }
 
 impl AuditSink {
-    /// Open `dir/{date}.mpack` and connect to the redis stream. Either sink
+    /// Open `dir/{date}.csv` and connect to the redis stream. Either sink
     /// may be absent (passing `redis: None` skips the stream sink).
     pub async fn open(
         dir: PathBuf,
@@ -70,12 +77,19 @@ impl AuditSink {
     ) -> anyhow::Result<Self> {
         tokio::fs::create_dir_all(&dir).await?;
         let date = Utc::now().format("%Y-%m-%d");
-        let path = dir.join(format!("{date}.mpack"));
-        let file = OpenOptions::new()
+        let path = dir.join(format!("{date}.csv"));
+        let existed = tokio::fs::metadata(&path)
+            .await
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+        let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .await?;
+        if !existed {
+            file.write_all(audit_csv::CSV_HEADER).await?;
+        }
         Ok(Self {
             redis,
             stream_cap,
@@ -93,7 +107,7 @@ impl AuditSink {
         self.append(Payload::Request { req: req.clone() }, false).await;
     }
 
-    /// Append a `Response` entry. `critical` triggers fsync (e.g. on errors).
+    /// Append a `Response` entry. `critical` triggers fsync.
     pub async fn log_response(
         &self,
         req_id: u64,
@@ -110,8 +124,7 @@ impl AuditSink {
         .await;
     }
 
-    /// Append a `Synthetic` event (kill-switch transitions, cancel-all
-    /// triggers, reconciliation). Always fsynced.
+    /// Append a `Synthetic` event. Always fsynced.
     pub async fn log_synthetic(&self, op: impl Into<String>, detail: serde_json::Value) {
         self.append(
             Payload::Synthetic {
@@ -125,25 +138,39 @@ impl AuditSink {
 
     async fn append(&self, payload: Payload, critical: bool) {
         let mut g = self.inner.lock().await;
+        let now = Utc::now();
+        let ts_ns = now.timestamp_nanos_opt().unwrap_or(0);
         let entry = AuditEntry {
             seq: g.seq,
             prev_hash: g.prev_hash.clone(),
-            ts_ns: Utc::now().timestamp_nanos_opt().unwrap_or(0),
-            payload,
+            ts_ns,
+            payload: payload.clone(),
         };
-        let bytes = match rmp_serde::to_vec_named(&entry) {
+        // mpack bytes still drive the Redis stream + the hash chain so the
+        // chain semantics are unchanged.
+        let mpack = match rmp_serde::to_vec_named(&entry) {
             Ok(b) => b,
             Err(e) => {
-                warn!("audit: encode failed: {e}");
+                warn!("audit: mpack encode failed: {e}");
                 return;
             }
         };
-        // Update chain state for the next entry.
-        g.seq += 1;
-        g.prev_hash = blake3::hash(&bytes).to_hex().to_string();
+        let next_hash = blake3::hash(&mpack).to_hex().to_string();
 
-        // Sink 1: redis stream — issue XADD via raw command since the workspace
-        // redis crate isn't built with the `streams` feature.
+        // Render a CSV row (one line; payload JSON quoted by csv::Writer).
+        let csv_line = match audit_csv::render_row(&entry, &now.to_rfc3339()) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("audit: csv encode failed: {e}");
+                return;
+            }
+        };
+
+        // Update chain state.
+        g.seq += 1;
+        g.prev_hash = next_hash;
+
+        // Sink 1: redis stream (unchanged — mpack bytes).
         if let Some(redis) = &self.redis {
             let mut conn = redis.raw();
             let cap = self.stream_cap.to_string();
@@ -154,7 +181,7 @@ impl AuditSink {
                 .arg(&cap)
                 .arg("*")
                 .arg("payload")
-                .arg(bytes.as_slice())
+                .arg(mpack.as_slice())
                 .query_async::<String>(&mut conn)
                 .await;
             if let Err(e) = res {
@@ -162,12 +189,9 @@ impl AuditSink {
             }
         }
 
-        // Sink 2: append-only mpack file (length-prefixed u32 LE | bytes).
+        // Sink 2: append-only CSV file.
         if let Some(file) = g.file.as_mut() {
-            let mut frame = Vec::with_capacity(4 + bytes.len());
-            frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-            frame.extend_from_slice(&bytes);
-            if let Err(e) = file.write_all(&frame).await {
+            if let Err(e) = file.write_all(csv_line.as_bytes()).await {
                 warn!("audit: file write failed: {e}");
             } else if critical {
                 if let Err(e) = file.sync_data().await {
@@ -178,6 +202,19 @@ impl AuditSink {
                 g.dirty = true;
             }
         }
+    }
+
+    /// Read today's audit CSV. Best-effort: a malformed row ends the scan;
+    /// earlier rows are returned. Returns an empty Vec if the file is
+    /// missing.
+    pub async fn replay_today(dir: &std::path::Path) -> Vec<AuditEntry> {
+        let date = Utc::now().format("%Y-%m-%d");
+        let path = dir.join(format!("{date}.csv"));
+        let raw = match tokio::fs::read(&path).await {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+        audit_csv::parse_rows(&raw)
     }
 
     /// Flush+fsync the file buffer. Call periodically and at shutdown.
@@ -203,12 +240,12 @@ impl AuditSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libs::protocol::ExchangeName;
     use libs::protocol::orders::{OrderAction, OrderRequest};
+    use libs::protocol::ExchangeName;
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn writes_file_frame() {
+    async fn writes_csv_row() {
         let dir = tempdir().unwrap();
         let sink = AuditSink::open(dir.path().to_path_buf(), None, 1000)
             .await
@@ -221,12 +258,17 @@ mod tests {
         .await;
         sink.flush().await;
         let date = chrono::Utc::now().format("%Y-%m-%d");
-        let path = dir.path().join(format!("{date}.mpack"));
-        let raw = std::fs::read(&path).unwrap();
-        // 4-byte length prefix + at least 1 mpack byte.
-        assert!(raw.len() > 4);
-        let len = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
-        assert_eq!(raw.len(), 4 + len);
+        let path = dir.path().join(format!("{date}.csv"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines = raw.lines();
+        assert!(lines
+            .next()
+            .unwrap()
+            .starts_with("seq,prev_hash,ts_iso,ts_ns,kind,"));
+        let row = lines.next().expect("data row");
+        assert!(row.contains("request"));
+        assert!(row.contains("heartbeat"));
+        assert!(row.contains("kalshi"));
     }
 
     #[tokio::test]
@@ -247,5 +289,26 @@ mod tests {
         };
         assert_ne!(h1, h2);
         assert_eq!(h1.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn replay_round_trip() {
+        let dir = tempdir().unwrap();
+        let sink = AuditSink::open(dir.path().to_path_buf(), None, 1000)
+            .await
+            .unwrap();
+        sink.log_request(&OrderRequest {
+            req_id: 7,
+            exchange: ExchangeName::Polymarket,
+            action: OrderAction::Heartbeat,
+        })
+        .await;
+        sink.flush().await;
+        let entries = AuditSink::replay_today(dir.path()).await;
+        assert_eq!(entries.len(), 1);
+        match &entries[0].payload {
+            Payload::Request { req } => assert_eq!(req.req_id, 7),
+            _ => panic!("expected request"),
+        }
     }
 }
