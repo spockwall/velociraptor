@@ -138,11 +138,18 @@ class OrderRouter:
         """Place a market order. Returns the inner OrderAck dict on success;
         raises `RuntimeError` on Err.
 
-        Semantics (Polymarket-specific):
-          - `qty` is **share count**. Buy walks asks, sell walks bids,
-            until cumulative size >= qty.
-          - `tif` must be `"IOC"` (FAK) or `"FOK"`. GTC/GTD are rejected by
-            the executor because they don't make sense for a market order.
+        Semantics (Polymarket-specific, side-dependent):
+          - `side="buy"`  → `qty` is **USDC notional to spend**. The venue
+            walks the ask book until cumulative `qty / cutoff_price` shares
+            are filled. Required because the venue rejects buys whose
+            implied USDC has >2 decimals — `Amount::shares` on a buy
+            triggers this; `Amount::usdc` does not.
+          - `side="sell"` → `qty` is **share count to sell**. The venue
+            walks the bid book until `qty` shares are sold. Sells in USDC
+            are not allowed by Polymarket.
+          - `tif` must be `"IOC"` (FAK) or `"FOK"`. GTC/GTD are rejected
+            by the executor because they don't make sense for a market
+            order.
           - `px` is unused by the exchange but the protocol still carries
             it; we send 0.0 so the audit row remains well-formed.
         """
@@ -174,11 +181,11 @@ class OrderRouter:
                 side=side,
                 symbol=symbol,
                 qty=qty,
-                tif=tif_u,
                 client_oid=client_oid,
                 ok=False,
                 latency_ms=latency_ms,
                 error=str(err),
+                extra={"tif": tif_u},
             )
             raise RuntimeError(f"place_market failed: {err}")
         ack = unwrap(resp)
@@ -189,11 +196,11 @@ class OrderRouter:
             side=side,
             symbol=symbol,
             qty=qty,
-            tif=tif_u,
             client_oid=client_oid,
             exchange_oid=ack.get("exchange_oid"),
             ok=True,
             latency_ms=latency_ms,
+            extra={"tif": tif_u},
         )
         return ack
 

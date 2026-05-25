@@ -54,6 +54,10 @@ log = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class Quote:
+    """Best-bid / best-ask snapshot only. Mirrors the `bba:*` ZMQ
+    topic payload shape — no depth. Strategies that need the ladder
+    should register an `on_snapshot` callback for the full `Snapshot`."""
+
     exchange: str
     symbol: str
     best_bid: Optional[float]
@@ -69,6 +73,41 @@ class Quote:
     @property
     def is_two_sided(self) -> bool:
         return self.best_bid is not None and self.best_ask is not None
+
+
+@dataclasses.dataclass
+class Snapshot:
+    """Full orderbook snapshot — every depth level the publisher sent.
+
+    Mirrors `libs::protocol::OrderbookSnapshot`. Bids are sorted high
+    → low, asks low → high; the publisher does the sorting so callers
+    can trust the order.
+    """
+
+    exchange: str
+    symbol: str
+    best_bid: Optional[float]
+    best_ask: Optional[float]
+    mid: Optional[float]
+    sequence: int
+    received_ns: int
+    full_slug: Optional[str] = None
+    bids: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+    asks: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+
+    def as_quote(self) -> "Quote":
+        """Cheap BBA view used by the snapshot → quote fan-out in
+        `MarketFeed._handle_snapshot`."""
+        return Quote(
+            exchange=self.exchange,
+            symbol=self.symbol,
+            best_bid=self.best_bid,
+            best_ask=self.best_ask,
+            mid=self.mid,
+            sequence=self.sequence,
+            received_ns=self.received_ns,
+            full_slug=self.full_slug,
+        )
 
 
 @dataclasses.dataclass
@@ -97,6 +136,7 @@ QuoteHandler = Callable[[str, str, Quote], None]
 TradeHandler = Callable[[str, str, Trade], None]
 RolloverHandler = Callable[[str, str, str, str], None]
 # Args: (exchange, base_slug, new_full_slug, asset_id)
+SnapshotHandler = Callable[[str, str, "Snapshot"], None]
 
 
 # ZMQ topic suffix the snapshot publisher appends for last-trade events
@@ -116,16 +156,20 @@ class MarketFeed:
         on_quote: Optional[QuoteHandler] = None,
         on_trade: Optional[TradeHandler] = None,
         on_rollover: Optional[RolloverHandler] = None,
+        on_snapshot: Optional[SnapshotHandler] = None,
     ):
         self._pub = pub_endpoint
         self._router = router_endpoint
         self._sub_type = sub_type
         # Producer callbacks. Invoked on the SUB thread; the Engine wires
-        # them to enqueue (QuoteEvent / TradeEvent / RolloverEvent) onto
-        # the dispatcher's queue. None = drop silently.
+        # them to enqueue (QuoteEvent / TradeEvent / RolloverEvent /
+        # SnapshotEvent) onto the dispatcher's queue. None = drop silently.
+        # `on_snapshot` carries depth; `on_quote` is BBA-only and fired
+        # off the same publisher frame.
         self._on_quote = on_quote
         self._on_trade = on_trade
         self._on_rollover = on_rollover
+        self._on_snapshot = on_snapshot
         # Last-seen full_slug per (exchange, base_slug) — drives rollover
         # detection. None = no frame yet.
         self._last_full_slug: dict[tuple[str, str], Optional[str]] = {}
@@ -337,10 +381,15 @@ class MarketFeed:
         full_slug = snap.get("full_slug")
         # For rolling topics the payload's `symbol` carries the real
         # per-window asset_id, which differs from the topic_id (= the
-        # stable base_slug). Use it as the Quote.symbol; otherwise fall
-        # back to topic_id.
+        # stable base_slug). Use it as the Snapshot.symbol; otherwise
+        # fall back to topic_id.
         payload_symbol = snap.get("symbol") or topic_id
-        q = Quote(
+        # Depth — `bids` / `asks` arrive as lists of `[price, size]`
+        # tuples (msgpack pairs). Coerce to `(float, float)` and drop
+        # malformed entries silently.
+        bids = _coerce_levels(snap.get("bids"))
+        asks = _coerce_levels(snap.get("asks"))
+        s = Snapshot(
             exchange=exchange,
             symbol=payload_symbol,
             best_bid=bid_px,
@@ -349,7 +398,13 @@ class MarketFeed:
             sequence=int(snap.get("sequence", 0)),
             received_ns=received_ns,
             full_slug=full_slug if isinstance(full_slug, str) else None,
+            bids=bids,
+            asks=asks,
         )
+        # Derived BBA view — pure projection of `s`. The Engine wires
+        # this to `register_quote` callbacks (e.g. signal logic that
+        # only cares about touch).
+        q = s.as_quote()
 
         # Rollover detection: fire BEFORE the quote so the strategy's
         # rollover handler can reset its window-scoped state before the
@@ -364,6 +419,21 @@ class MarketFeed:
                         self._on_rollover(exchange, topic_id, full_slug, payload_symbol)
                     except Exception:  # noqa: BLE001
                         log.exception("on_rollover handler raised")
+
+        # Snapshot first (depth-aware consumers), then the derived BBA
+        # quote. Same dual-keying for rolling topics. Both callbacks
+        # see the same publisher frame; consumers pick whichever shape
+        # they need.
+        if self._on_snapshot is not None:
+            try:
+                self._on_snapshot(exchange, topic_id, s)
+            except Exception:  # noqa: BLE001
+                log.exception("on_snapshot handler raised")
+            if payload_symbol != topic_id:
+                try:
+                    self._on_snapshot(exchange, payload_symbol, s)
+                except Exception:  # noqa: BLE001
+                    log.exception("on_snapshot handler raised (asset_id key)")
 
         if self._on_quote is None:
             return
@@ -423,3 +493,20 @@ class MarketFeed:
                 self._on_trade(exchange, payload_symbol, t)
             except Exception:  # noqa: BLE001
                 log.exception("on_trade handler raised (asset_id key)")
+
+
+def _coerce_levels(raw: object) -> list[tuple[float, float]]:
+    """Convert an `OrderbookSnapshot.bids`/`asks` payload into a clean
+    `list[(px, qty)]`. Each level is `[price, size]` in the msgpack
+    encoding. Drops malformed entries silently (best-effort)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[float, float]] = []
+    for lvl in raw:
+        if not isinstance(lvl, (list, tuple)) or len(lvl) < 2:
+            continue
+        try:
+            out.append((float(lvl[0]), float(lvl[1])))
+        except (TypeError, ValueError):
+            continue
+    return out

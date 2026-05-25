@@ -44,13 +44,14 @@ from typing import Optional
 from .cli import parse_args
 from .io import OrderRouter, UserFeed
 from .io.event_log import EventLog
-from .market import MarketFeed, MarketState, Quote, Trade
+from .market import MarketFeed, MarketState, Quote, Snapshot, Trade
 from .trading import Dispatcher, Strategy, make_strategy
 from .typings.events import (
     FillEvent,
     OrderUpdateEvent,
     QuoteEvent,
     RolloverEvent,
+    SnapshotEvent,
     TradeEvent,
 )
 from .typings.state import StrategyState
@@ -101,6 +102,7 @@ class Engine:
             on_quote=self._enqueue_quote,
             on_trade=self._enqueue_trade,
             on_rollover=self._enqueue_rollover,
+            on_snapshot=self._enqueue_snapshot,
         )
         # Observer doesn't need a connected executor or user feed.
         self._needs_orders = args.strategy != "observe"
@@ -198,6 +200,9 @@ class Engine:
 
     def _enqueue_quote(self, exchange: str, symbol: str, q: Quote) -> None:
         self.queue.put(QuoteEvent(exchange=exchange, symbol=symbol, quote=q))
+
+    def _enqueue_snapshot(self, exchange: str, symbol: str, s: Snapshot) -> None:
+        self.queue.put(SnapshotEvent(exchange=exchange, symbol=symbol, snapshot=s))
 
     def _enqueue_trade(self, exchange: str, symbol: str, t: Trade) -> None:
         self.queue.put(TradeEvent(exchange=exchange, symbol=symbol, trade=t))

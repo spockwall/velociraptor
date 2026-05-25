@@ -10,12 +10,13 @@ Window discovery lives in `utils/windows.py`; the window dataclasses
 (`PolymarketWindow` / `KalshiWindow`) live in `typings/window.py`.
 """
 
-from .feed import MarketFeed, Quote, Trade
+from .feed import MarketFeed, Quote, Snapshot, Trade
 from .state import MarketState
 
 __all__ = [
     "MarketFeed",
     "MarketState",
     "Quote",
+    "Snapshot",
     "Trade",
 ]

@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Optional
 
-from ...market import Quote, Trade
+from ...market import Quote, Snapshot, Trade
 from ..dispatcher import Dispatcher
 from .base import Strategy
 
@@ -34,8 +34,11 @@ log = logging.getLogger(__name__)
 
 
 # Tunables — sensible defaults; not exposed to CLI.
-_PER_STREAM_MIN_MS = 5_000.0  # log a "tick" line per stream at most every 5s
+_PER_STREAM_MIN_MS = 5_000.0  # log a "tick" block per stream at most every 5s
 _TABLE_MIN_MS = 5_000.0  # dump the unified table at most every 5s
+# How many depth levels to print per side in `_make_quote_cb`. Set to 0
+# to fall back to the one-line bid/ask/mid output (legacy behaviour).
+_DEPTH_LEVELS = 10
 
 
 class ObserverStrategy(Strategy):
@@ -80,10 +83,18 @@ class ObserverStrategy(Strategy):
     def setup(self, dispatcher: Dispatcher) -> None:
         for ex, sym, kind in self.required_topics():
             if kind == "snapshot":
+                # BBA-only one-liner.
                 dispatcher.register_quote(
                     ex,
                     sym,
                     self._make_quote_cb(ex, sym),
+                    min_interval_ms=_PER_STREAM_MIN_MS,
+                )
+                # Full-depth ladder (carries `bids` / `asks`).
+                dispatcher.register_snapshot(
+                    ex,
+                    sym,
+                    self._make_snapshot_cb(ex, sym),
                     min_interval_ms=_PER_STREAM_MIN_MS,
                 )
             else:
@@ -119,11 +130,31 @@ class ObserverStrategy(Strategy):
     # ── callbacks ──
 
     def _make_quote_cb(self, exchange: str, symbol: str):
+        """BBA-only logger. One-line summary per topic per
+        `_PER_STREAM_MIN_MS`."""
+
         def _cb(q: Quote) -> None:
             log.info(
                 f"[{exchange}:{symbol}] bid={_fp(q.best_bid)} ask={_fp(q.best_ask)} "
                 f"mid={_fp(q.mid)} full_slug={q.full_slug or '—'} seq={q.sequence}"
             )
+
+        return _cb
+
+    def _make_snapshot_cb(self, exchange: str, symbol: str):
+        """Depth logger. Prints up to `_DEPTH_LEVELS` levels per side
+        in a side-by-side ladder. Throttled by `_PER_STREAM_MIN_MS`."""
+
+        def _cb(s: Snapshot) -> None:
+            header = (
+                f"[{exchange}:{symbol}] SNAPSHOT seq={s.sequence} "
+                f"bid={_fp(s.best_bid)} ask={_fp(s.best_ask)} mid={_fp(s.mid)} "
+                f"full_slug={s.full_slug or '—'} "
+                f"(top {_DEPTH_LEVELS} of {len(s.bids)} bids / {len(s.asks)} asks)"
+            )
+            log.info(header)
+            for line in _format_depth(s.bids, s.asks, _DEPTH_LEVELS):
+                log.info(f"  {line}")
 
         return _cb
 
@@ -166,6 +197,30 @@ class ObserverStrategy(Strategy):
 
 def _fp(v: Optional[float]) -> str:
     return f"{v:.6f}" if isinstance(v, (int, float)) else "—"
+
+
+def _format_depth(
+    bids: list[tuple[float, float]],
+    asks: list[tuple[float, float]],
+    levels: int,
+) -> list[str]:
+    """Render a side-by-side ladder with up to `levels` rows.
+
+    Bids are sorted high → low, asks low → high by the publisher; we
+    just take the first `levels` of each. The output keeps both
+    columns aligned even when one side is shorter than the other."""
+    bids = bids[:levels]
+    asks = asks[:levels]
+    rows: list[str] = []
+    n = max(len(bids), len(asks))
+    rows.append(f"{'BIDS':>22s}    │    {'ASKS':<22s}")
+    for i in range(n):
+        b = bids[i] if i < len(bids) else None
+        a = asks[i] if i < len(asks) else None
+        b_str = f"{b[1]:>10.4f} @ {b[0]:<8.4f}" if b is not None else " " * 22
+        a_str = f"{a[0]:<8.4f} @ {a[1]:<10.4f}" if a is not None else ""
+        rows.append(f"{b_str}    │    {a_str}")
+    return rows
 
 
 def _format_row(symbol: str, q: Optional[Quote], t: Optional[Trade]) -> str:

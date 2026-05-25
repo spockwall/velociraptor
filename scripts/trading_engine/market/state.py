@@ -33,7 +33,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Deque, Optional
 
-from .feed import Quote, Trade
+from .feed import Quote, Snapshot, Trade
 
 _DEFAULT_TRADE_HISTORY = 64
 
@@ -43,8 +43,10 @@ class MarketState:
 
     def __init__(self, trade_history: int = _DEFAULT_TRADE_HISTORY) -> None:
         self._trade_history = trade_history
-        # Latest snapshot per (exchange, symbol).
+        # Latest BBA quote per (exchange, symbol).
         self._quotes: dict[tuple[str, str], Quote] = {}
+        # Latest full snapshot (with depth) per (exchange, symbol).
+        self._snapshots: dict[tuple[str, str], Snapshot] = {}
         # Latest single trade (mirrors old `latest_trade`).
         self._trades: dict[tuple[str, str], Trade] = {}
         # Bounded trade history per (exchange, symbol). Strategies that
@@ -60,6 +62,11 @@ class MarketState:
 
     def quote(self, exchange: str, symbol: str) -> Optional[Quote]:
         return self._quotes.get((exchange, symbol))
+
+    def snapshot(self, exchange: str, symbol: str) -> Optional[Snapshot]:
+        """Full-depth orderbook snapshot, if a `SnapshotEvent` has
+        landed for this (exchange, symbol). `None` until then."""
+        return self._snapshots.get((exchange, symbol))
 
     def trade(self, exchange: str, symbol: str) -> Optional[Trade]:
         return self._trades.get((exchange, symbol))
@@ -110,6 +117,9 @@ class MarketState:
 
     def _update_quote(self, exchange: str, symbol: str, q: Quote) -> None:
         self._quotes[(exchange, symbol)] = q
+
+    def _update_snapshot(self, exchange: str, symbol: str, s: Snapshot) -> None:
+        self._snapshots[(exchange, symbol)] = s
 
     def _update_trade(self, exchange: str, symbol: str, t: Trade) -> None:
         self._trades[(exchange, symbol)] = t

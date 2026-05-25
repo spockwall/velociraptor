@@ -56,6 +56,7 @@ from ..typings.events import (
     QuoteEvent,
     RolloverEvent,
     ShutdownEvent,
+    SnapshotEvent,
     TradeEvent,
 )
 
@@ -63,6 +64,7 @@ log = logging.getLogger(__name__)
 
 
 QuoteCallback = Callable[..., None]  # signature: (Quote) -> None
+SnapshotCallback = Callable[..., None]  # signature: (Snapshot) -> None
 TradeCallback = Callable[..., None]  # signature: (Trade) -> None
 RolloverCallback = Callable[..., None]  # signature: (full_slug, asset_id) -> None
 UserCallback = Callable[..., None]  # signature: (ev_dict) -> None
@@ -102,6 +104,7 @@ class Dispatcher:
         # Per-topic registrations. Lists so multiple callbacks can
         # subscribe to the same (exchange, symbol).
         self._quote_regs: dict[tuple[str, str], list[_Registration]] = {}
+        self._snapshot_regs: dict[tuple[str, str], list[_Registration]] = {}
         self._trade_regs: dict[tuple[str, str], list[_Registration]] = {}
         self._rollover_regs: dict[tuple[str, str], list[_Registration]] = {}
         # User-channel registrations are global (one queue per kind).
@@ -123,6 +126,22 @@ class Dispatcher:
         fire on every quote (e.g. an entry-decision callback that must
         react to every tick)."""
         self._quote_regs.setdefault((exchange, symbol), []).append(
+            _Registration(callback=cb, min_interval_ns=int(min_interval_ms * 1e6))
+        )
+
+    def register_snapshot(
+        self,
+        exchange: str,
+        symbol: str,
+        cb: SnapshotCallback,
+        *,
+        min_interval_ms: float = DEFAULT_MIN_INTERVAL_MS,
+    ) -> None:
+        """Register a callback that receives the FULL `Snapshot`
+        (bids/asks ladders). Fired off the same publisher frame as
+        the BBA-only `QuoteEvent` — register both if you need both,
+        otherwise pick the lighter one."""
+        self._snapshot_regs.setdefault((exchange, symbol), []).append(
             _Registration(callback=cb, min_interval_ns=int(min_interval_ms * 1e6))
         )
 
@@ -184,6 +203,13 @@ class Dispatcher:
         if isinstance(ev, QuoteEvent):
             self._market._update_quote(ev.exchange, ev.symbol, ev.quote)
             self._fire(self._quote_regs.get((ev.exchange, ev.symbol)), now_ns, ev.quote)
+        elif isinstance(ev, SnapshotEvent):
+            self._market._update_snapshot(ev.exchange, ev.symbol, ev.snapshot)
+            self._fire(
+                self._snapshot_regs.get((ev.exchange, ev.symbol)),
+                now_ns,
+                ev.snapshot,
+            )
         elif isinstance(ev, TradeEvent):
             self._market._update_trade(ev.exchange, ev.symbol, ev.trade)
             self._fire(self._trade_regs.get((ev.exchange, ev.symbol)), now_ns, ev.trade)

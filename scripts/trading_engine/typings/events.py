@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Union
 
-from ..market import Quote, Trade
+from ..market import Quote, Snapshot, Trade
 
 
 @dataclasses.dataclass(frozen=True)
@@ -28,6 +28,17 @@ class QuoteEvent:
     exchange: str
     symbol: str
     quote: Quote
+
+
+@dataclasses.dataclass(frozen=True)
+class SnapshotEvent:
+    """Full orderbook snapshot (depth). Fired off the same publisher
+    frame as `QuoteEvent`; consumers that don't need depth ignore
+    this and register against `QuoteEvent` instead."""
+
+    exchange: str
+    symbol: str
+    snapshot: Snapshot
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,5 +79,11 @@ class ShutdownEvent:
 
 
 Event = Union[
-    QuoteEvent, TradeEvent, RolloverEvent, FillEvent, OrderUpdateEvent, ShutdownEvent
+    QuoteEvent,
+    SnapshotEvent,
+    TradeEvent,
+    RolloverEvent,
+    FillEvent,
+    OrderUpdateEvent,
+    ShutdownEvent,
 ]

@@ -56,6 +56,8 @@ _ACTION_COLS = [
     "latency_ms",
     "error",
     "count",
+    # `place_market` only — passed via `extra={"tif": ...}`.
+    "tif",
 ]
 
 _EVENT_COLS = [
