@@ -1,4 +1,4 @@
-"""Observer — passive multi-exchange orderbook watcher.
+"""Observe — passive multi-exchange orderbook watcher.
 
 A regular `Strategy` in the new event-driven model. Subscribes to a
 configurable set of (exchange, symbol) snapshot + trade streams,
@@ -16,7 +16,7 @@ Never places or cancels orders. The contract:
      arrive after the throttle expires (or the first quote we see at
      all, when nothing more specific is configured).
 
-This replaces the old standalone `trading/observer.py` and runs
+This replaces the old standalone `trading/observe.py` and runs
 through the same `Dispatcher` as the trading strategies.
 """
 
@@ -41,7 +41,7 @@ _TABLE_MIN_MS = 5_000.0  # dump the unified table at most every 5s
 _DEPTH_LEVELS = 10
 
 
-class ObserverStrategy(Strategy):
+class ObserveStrategy(Strategy):
     name = "observe"
 
     def __init__(
@@ -53,7 +53,7 @@ class ObserverStrategy(Strategy):
         kalshi_series: Optional[list[str]] = None,
         **kwargs,
     ):
-        # Observer doesn't use `window` even though the base accepts it.
+        # Observe doesn't use `window` even though the base accepts it.
         super().__init__(**kwargs)
         self.binance_symbols = list(binance_symbols or [])
         self.binance_spot_symbols = list(binance_spot_symbols or [])
@@ -123,7 +123,7 @@ class ObserverStrategy(Strategy):
 
         if not self.required_topics():
             log.warning(
-                "observer: no streams configured — pass --binance-symbols / "
+                "observe: no streams configured — pass --binance-symbols / "
                 "--base-slugs / --kalshi-series / --binance-spot-symbols"
             )
 
@@ -179,7 +179,7 @@ class ObserverStrategy(Strategy):
         if not quotes and not trades:
             return
 
-        log.info("─── observer snapshot ─────────────────────────────────────")
+        log.info("─── observe snapshot ─────────────────────────────────────")
         keys = sorted(set(quotes) | set(trades))
         last_exchange: Optional[str] = None
         for key in keys:

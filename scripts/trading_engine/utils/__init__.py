@@ -1,6 +1,6 @@
 """Shared, dependency-light helpers for the trading engine.
 
-- `formatting`: status-line formatters for the observer's snapshot table.
+- `formatting`: status-line formatters for the observe's snapshot table.
 - `windows`:    active Polymarket/Kalshi window discovery helpers.
 """
 

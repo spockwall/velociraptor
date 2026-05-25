@@ -28,7 +28,7 @@ from .io import (
 from .market import MarketFeed, MarketState, Quote, Trade
 from .trading import (
     Dispatcher,
-    ObserverStrategy,
+    ObserveStrategy,
     Strategy,
     WindowStrategy,
     available_strategies,
@@ -50,7 +50,7 @@ __all__ = [
     "MarketFeed",
     "MarketState",
     "MarketWindow",
-    "ObserverStrategy",
+    "ObserveStrategy",
     "OrderLedger",
     "OrderRecord",
     "OrderRouter",

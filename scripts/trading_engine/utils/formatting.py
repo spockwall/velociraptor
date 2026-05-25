@@ -1,8 +1,8 @@
-"""Status-line formatting helpers for the observer's snapshot table.
+"""Status-line formatting helpers for the observe's snapshot table.
 
 Pure presentation: turn a `Quote` / `Trade` into one aligned status row.
-Kept out of `observer.py` so the formatting can be reused and unit-tested
-without the observer's threading/subscription machinery, and decoupled
+Kept out of `observe.py` so the formatting can be reused and unit-tested
+without the observe's threading/subscription machinery, and decoupled
 from `TrackedSymbol` — `format_row` takes the label + optional window end
 directly rather than the tracker object.
 """

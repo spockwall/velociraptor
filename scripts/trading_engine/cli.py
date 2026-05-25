@@ -44,14 +44,14 @@ def parse_args() -> argparse.Namespace:
 
     # ── Markets to track / trade ──
     # Window strategies require exactly one --base-slugs value.
-    # Observer accepts the full list and watches all of them.
+    # Observe accepts the full list and watches all of them.
     p.add_argument(
         "--base-slugs",
         nargs="+",
         default=["btc-updown-15m", "eth-updown-15m"],
         help=(
             "Polymarket base slugs. Window strategies (probe/fill_once/"
-            "one_shot/momentum) require exactly one value. Observer "
+            "one_shot/momentum) require exactly one value. Observe"
             "watches all."
         ),
     )
@@ -59,19 +59,19 @@ def parse_args() -> argparse.Namespace:
         "--kalshi-series",
         nargs="+",
         default=["KXBTC15M", "KXETH15M"],
-        help="Kalshi series (observer only)",
+        help="Kalshi series (observe only)",
     )
     p.add_argument(
         "--binance-symbols",
         nargs="+",
         default=["btcusdt", "ethusdt"],
-        help="Binance USDT-margined futures symbols (observer only)",
+        help="Binance USDT-margined futures symbols (observe only)",
     )
     p.add_argument(
         "--binance-spot-symbols",
         nargs="+",
         default=["btcusdt", "ethusdt"],
-        help="Binance Spot symbols (observer only)",
+        help="Binance Spot symbols (observe only)",
     )
 
     # ── Endpoints ──

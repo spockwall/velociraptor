@@ -20,7 +20,7 @@ from .dispatcher import Dispatcher
 from .strategies import (
     FillOnceStrategy,
     MomentumStrategy,
-    ObserverStrategy,
+    ObserveStrategy,
     OneShotStrategy,
     ProbeStrategy,
     Strategy,
@@ -35,7 +35,7 @@ __all__ = [
     "Dispatcher",
     "FillOnceStrategy",
     "MomentumStrategy",
-    "ObserverStrategy",
+    "ObserveStrategy",
     "OneShotStrategy",
     "ProbeStrategy",
     "Strategy",

@@ -27,13 +27,13 @@ from ..helpers import (
 from .base import Strategy
 from .fill_once import FillOnceStrategy
 from .momentum import MomentumStrategy
-from .observer import ObserverStrategy
+from .observe import ObserveStrategy
 from .one_shot import OneShotStrategy
 from .probe import ProbeStrategy
 
 # Name → class registry. Order here is the order shown in --help.
 _REGISTRY: dict[str, Type[Strategy]] = {
-    ObserverStrategy.name: ObserverStrategy,
+    ObserveStrategy.name: ObserveStrategy,
     ProbeStrategy.name: ProbeStrategy,
     FillOnceStrategy.name: FillOnceStrategy,
     OneShotStrategy.name: OneShotStrategy,
@@ -62,7 +62,7 @@ __all__ = [
     "FillOnceStrategy",
     "MIN_PX",
     "MomentumStrategy",
-    "ObserverStrategy",
+    "ObserveStrategy",
     "OneShotStrategy",
     "PIN_PX",
     "ProbeStrategy",

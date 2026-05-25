@@ -11,7 +11,7 @@ Two layers live here:
     caller used to inline — swallow+log errors (returning **None**, vs `[]`
     for "answered, nothing live") and drop already-ended windows.
 
-The engine (`app.py`) and the observer call the active helpers; what they
+The engine (`app.py`) and the observe call the active helpers; what they
 DO with the windows — manage strategies vs. manage subscriptions — stays
 in each of them.
 """

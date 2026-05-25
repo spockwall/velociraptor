@@ -51,7 +51,7 @@ Older versions held `dict[base_slug, Strategy]` and looped a tick over every ent
 - The engine builds **exactly one** Strategy at startup. Every event goes to that one strategy. There is no routing layer between the dispatcher and the strategy.
 - Trading two markets = two engine processes. Each gets its own Python, its own ZMQ context, its own MarketState, its own log directory.
 - Window strategies (`probe` / `fill_once` / `one_shot` / `momentum`) enforce exactly one `--base-slugs` at startup; the engine errors out with a clear message if you pass more.
-- Observer is the deliberate exception. It registers callbacks for an arbitrary number of (exchange, symbol) pairs but never trades — so the "one strategy" contract is preserved even when it touches many topics.
+- Observe is the deliberate exception. It registers callbacks for an arbitrary number of (exchange, symbol) pairs but never trades — so the "one strategy" contract is preserved even when it touches many topics.
 
 What you give up: cross-market coordination inside one Python process. If strategy A's fill should influence strategy B, they coordinate via the executor's Redis state, not shared memory. For the strategies in this repo, none of them need that.
 
@@ -89,7 +89,7 @@ The cost: callbacks must not block. A long-running REST call inside `on_quote` s
 
 When a Binance feed bursts at 200 quotes/sec, the strategy usually doesn't want to react 200×/sec — but it does want the *latest* mid the next time it does react. The dispatcher implements both halves.
 
-The default throttle for `register_quote(...)` / `register_trade(...)` is **2000 ms** (`DEFAULT_MIN_INTERVAL_MS` in `dispatcher.py`). Strategies that need to fire on every frame must opt out explicitly with `min_interval_ms=0` — this matches what `probe`, `one_shot`, `fill_once`, and `momentum`'s Polymarket leg do today, since each places or amends orders on every quote. The default exists to protect new strategies that don't think about cadence yet (and the observer, which sets its own ~5s throttle on top).
+The default throttle for `register_quote(...)` / `register_trade(...)` is **2000 ms** (`DEFAULT_MIN_INTERVAL_MS` in `dispatcher.py`). Strategies that need to fire on every frame must opt out explicitly with `min_interval_ms=0` — this matches what `probe`, `one_shot`, `fill_once`, and `momentum`'s Polymarket leg do today, since each places or amends orders on every quote. The default exists to protect new strategies that don't think about cadence yet (and the observe, which sets its own ~5s throttle on top).
 
 ```python
 def _dispatch(self, ev):
@@ -273,7 +273,7 @@ class Strategy(abc.ABC):
         # when full_slug is None (bootstrap window).
 ```
 
-`router` is `None` for observer-shaped strategies (the engine skips both `OrderRouter` and `UserFeed` when `--strategy observe`).
+`router` is `None` for observe-shaped strategies (the engine skips both `OrderRouter` and `UserFeed` when `--strategy observe`).
 
 ### `StrategyState` + `OrderLedger` — `typings/state.py`
 
@@ -425,9 +425,9 @@ SUBs the `zmq_server` user PUB and pretty-prints every event. Useful as a side-b
 | `--strategy`             | `probe`                                  | `observe` / `probe` / `one_shot` / `fill_once` / `momentum`                   |
 | `--step`                 | _(deprecated)_                           | Legacy: `0→observe`, `1→probe`, `2→fill_once`. Prints a warning.              |
 | `--base-slugs`           | `btc-updown-15m eth-updown-15m`          | Polymarket base slugs. Window strategies require exactly **one**.             |
-| `--kalshi-series`        | `KXBTC15M KXETH15M`                      | Kalshi series to track (observer only)                                        |
-| `--binance-symbols`      | `btcusdt ethusdt`                        | Binance USDT-M futures symbols (observer only)                                |
-| `--binance-spot-symbols` | `btcusdt ethusdt`                        | Binance spot symbols (observer only)                                          |
+| `--kalshi-series`        | `KXBTC15M KXETH15M`                      | Kalshi series to track (observe only)                                        |
+| `--binance-symbols`      | `btcusdt ethusdt`                        | Binance USDT-M futures symbols (observe only)                                |
+| `--binance-spot-symbols` | `btcusdt ethusdt`                        | Binance spot symbols (observe only)                                          |
 | `--order-notional-usd`   | `10.0`                                   | Per-order notional cap (`fill_once`)                                          |
 | `--safe-mid-low`         | `0.30`                                   | Skip placing on a side whose mid is below this                                |
 | `--safe-mid-high`        | `0.70`                                   | Skip placing on a side whose mid is above this                                |
@@ -439,7 +439,7 @@ SUBs the `zmq_server` user PUB and pretty-prints every event. Useful as a side-b
 | `--engine-log-dir`       | `/syslog/trading_engine/`                | Directory for the append-only action + event log (daily-rotated CSV). **Mandatory** — engine refuses to start if this dir isn't writable. |
 | `--log-level`            | `info`                                   | `debug` / `info` / `warning` / `error`                                        |
 
-`--tick-secs` / `--rediscover-secs` / `--report-secs` are **gone** — the engine has no tick loop or backend poller, and observer's report cadence is internal.
+`--tick-secs` / `--rediscover-secs` / `--report-secs` are **gone** — the engine has no tick loop or backend poller, and observe's report cadence is internal.
 
 ## Recipes
 
@@ -521,7 +521,7 @@ scripts/trading_engine/
     └── strategies/
         ├── __init__.py     # make_strategy(name, ...) + available_strategies()
         ├── base.py         # Strategy abstract base (required_topics / setup / teardown)
-        ├── observer.py     # ObserverStrategy
+        ├── observe.py      # ObserveStrategy
         ├── probe.py        # ProbeStrategy
         ├── fill_once.py    # FillOnceStrategy
         ├── one_shot.py     # OneShotStrategy

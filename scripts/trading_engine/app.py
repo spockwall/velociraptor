@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 
 
 # Strategies that need a Polymarket window (and therefore exactly one
-# --base-slug). Observer is the exception — it works with N inputs.
+# --base-slug). Observe is the exception — it works with N inputs.
 _WINDOW_STRATEGIES = {"probe", "fill_once", "one_shot", "momentum"}
 
 
@@ -104,7 +104,7 @@ class Engine:
             on_rollover=self._enqueue_rollover,
             on_snapshot=self._enqueue_snapshot,
         )
-        # Observer doesn't need a connected executor or user feed.
+        # Observe doesn't need a connected executor or user feed.
         self._needs_orders = args.strategy != "observe"
         self.user_feed = (
             UserFeed(args.user_pub, on_event=self._enqueue_user_event)
@@ -125,7 +125,7 @@ class Engine:
         name = self.args.strategy
         kwargs: dict = {
             "market": self.market,
-            "router": self.router,  # may be None for observer
+            "router": self.router,  # may be None for observe
             "state": StrategyState(),
         }
         if name == "observe":

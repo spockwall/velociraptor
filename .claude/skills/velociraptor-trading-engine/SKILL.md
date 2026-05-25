@@ -58,7 +58,7 @@ scripts/trading_engine/
     └── strategies/
         ├── __init__.py             # _REGISTRY + make_strategy + available_strategies
         ├── base.py                 # Strategy abstract base (required_topics / setup / teardown)
-        ├── observer.py             # ObserverStrategy (passive multi-exchange watcher)
+        ├── observe.py             # ObserveStrategy (passive multi-exchange watcher)
         ├── probe.py                # ProbeStrategy
         ├── fill_once.py            # FillOnceStrategy
         ├── one_shot.py             # OneShotStrategy
@@ -162,7 +162,7 @@ Per-window strategies receive a partially-filled window at construction (`base_s
 
 ```python
 _REGISTRY: dict[str, Type[Strategy]] = {
-    ObserverStrategy.name: ObserverStrategy,
+    ObserveStrategy.name: ObserveStrategy,
     ProbeStrategy.name: ProbeStrategy,
     FillOnceStrategy.name: FillOnceStrategy,
     OneShotStrategy.name: OneShotStrategy,
@@ -198,15 +198,15 @@ def run(self) -> int:
     # teardown happens inside _run_dispatcher's finally
 ```
 
-Observer bypasses the executor + user feed (it places no orders), so `--strategy observe` runs against a stack with no executor.
+Observe bypasses the executor + user feed (it places no orders), so `--strategy observe` runs against a stack with no executor.
 
 ## CLI surface
 
 `scripts/trading_engine/cli.py`. Key flags:
 
 - `--strategy` (`observe`/`probe`/`one_shot`/`fill_once`/`momentum`).
-- `--base-slugs` (window strategies → exactly one; observer → many).
-- `--binance-symbols` / `--binance-spot-symbols` / `--kalshi-series` (observer only).
+- `--base-slugs` (window strategies → exactly one; observe → many).
+- `--binance-symbols` / `--binance-spot-symbols` / `--kalshi-series` (observe only).
 - `--order-notional-usd`, `--safe-mid-low`, `--safe-mid-high`.
 - `--engine-log-dir` / `--no-engine-log`.
 

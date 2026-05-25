@@ -101,7 +101,7 @@ class MarketState:
         return list(hist)[-n:]
 
     def snapshot_all(self) -> dict[tuple[str, str], Quote]:
-        """Copy of every Quote currently held. Used by observer-style
+        """Copy of every Quote currently held. Used by observe-style
         callbacks that print a unified table."""
         return dict(self._quotes)
 

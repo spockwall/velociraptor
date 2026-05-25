@@ -27,7 +27,7 @@ from a quote callback that already fires on the relevant topic.
 Helpers (clamp_px, qty_for_notional, MIN_PX, safe_mid_guard, …) live
 in `helpers.py`; strategies import what they need.
 
-Concrete strategies registered today: observer, probe, fill_once,
+Concrete strategies registered today: observe, probe, fill_once,
 one_shot, momentum.
 """
 
@@ -64,7 +64,7 @@ class Strategy(abc.ABC):
         self.router = router
         self.state = state
         # `window` is only set for per-Polymarket-window strategies
-        # (probe / fill_once / one_shot / momentum). Observer leaves it
+        # (probe / fill_once / one_shot / momentum). Observe leaves it
         # None and walks topics it owns directly.
         self.window = window
 
