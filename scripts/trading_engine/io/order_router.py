@@ -124,6 +124,79 @@ class OrderRouter:
         )
         return ack
 
+    def place_market(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        client_oid: Optional[str] = None,
+        tif: str = "IOC",
+        # Attribution for the event log.
+        strategy: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> dict:
+        """Place a market order. Returns the inner OrderAck dict on success;
+        raises `RuntimeError` on Err.
+
+        Semantics (Polymarket-specific):
+          - `qty` is **share count**. Buy walks asks, sell walks bids,
+            until cumulative size >= qty.
+          - `tif` must be `"IOC"` (FAK) or `"FOK"`. GTC/GTD are rejected by
+            the executor because they don't make sense for a market order.
+          - `px` is unused by the exchange but the protocol still carries
+            it; we send 0.0 so the audit row remains well-formed.
+        """
+        tif_u = tif.upper()
+        if tif_u not in {"IOC", "FOK"}:
+            raise ValueError(
+                f"place_market: tif must be 'IOC' or 'FOK', got {tif!r}"
+            )
+        if client_oid is None:
+            client_oid = f"te-mkt-{int(time.time() * 1000)}-{symbol[:6]}"
+        req = _place_req(
+            self._exchange,
+            client_oid=client_oid,
+            symbol=symbol,
+            side=side,
+            px=0.0,
+            qty=qty,
+            kind="market",
+            tif=tif_u,
+        )
+        resp = self._cli.send(req)
+        latency_ms = resp.get("_meta", {}).get("latency_ms")
+        if not is_ok(resp):
+            err = resp.get("result", {}).get("Err", {})
+            self._record(
+                "place_market",
+                strategy=strategy,
+                label=label,
+                side=side,
+                symbol=symbol,
+                qty=qty,
+                tif=tif_u,
+                client_oid=client_oid,
+                ok=False,
+                latency_ms=latency_ms,
+                error=str(err),
+            )
+            raise RuntimeError(f"place_market failed: {err}")
+        ack = unwrap(resp)
+        self._record(
+            "place_market",
+            strategy=strategy,
+            label=label,
+            side=side,
+            symbol=symbol,
+            qty=qty,
+            tif=tif_u,
+            client_oid=client_oid,
+            exchange_oid=ack.get("exchange_oid"),
+            ok=True,
+            latency_ms=latency_ms,
+        )
+        return ack
+
     def cancel(
         self,
         exchange_oid: str,

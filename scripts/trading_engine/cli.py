@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     # to start if the directory isn't writable.
     p.add_argument(
         "--engine-log-dir",
-        default="/syslog/trading_engine/",
+        default="./data/syslog/trading_engine/",
         help=(
             "Directory for the engine's append-only action + event log. "
             "Daily-rotated CSV: {dir}/actions/<YYYY-MM-DD>.csv + "

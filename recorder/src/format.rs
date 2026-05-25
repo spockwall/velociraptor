@@ -189,6 +189,7 @@ impl UserEventRecord {
                 qty,
                 fee,
                 ts_ns,
+                trade_status,
                 maker_orders,
             } => Self {
                 ts_ns: *ts_ns,
@@ -199,7 +200,7 @@ impl UserEventRecord {
                 px: *px,
                 qty: *qty,
                 filled: None,
-                status: None,
+                status: trade_status.clone(), // MATCHED/MINED/CONFIRMED
                 fee: Some(*fee),
                 taker_oid: taker_oid.clone(),
                 client_oid: client_oid.clone(),

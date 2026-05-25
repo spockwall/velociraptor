@@ -86,6 +86,14 @@ pub enum UserEvent {
         qty: f64,
         fee: f64,
         ts_ns: i64,
+        /// Exchange-specific trade-lifecycle status. For Polymarket this is
+        /// the on-chain settlement progression: `MATCHED` → `MINED` →
+        /// `CONFIRMED`, or `RETRYING` / `FAILED`. Stored as the raw
+        /// upper-case string the venue emits so new venue states pass
+        /// through without a code change. `None` for venues that don't
+        /// publish per-trade status.
+        #[serde(default)]
+        trade_status: Option<String>,
         /// Exchange-specific extension data, JSON-encoded. Polymarket
         /// populates this with the trade's `maker_orders` list (a
         /// `Vec<PolyMakerOrder>`). Other exchanges set `None`.
@@ -120,6 +128,7 @@ mod tests {
             qty: 10.0,
             fee: 0.01,
             ts_ns: 1_700_000_000_000_000_000,
+            trade_status: Some("MATCHED".into()),
             maker_orders: Some(serde_json::json!([
                 {"order_id": "m1", "matched_amount": "10.0", "price": "0.42"}
             ])),

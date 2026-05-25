@@ -323,6 +323,15 @@ impl PolymarketMessageParser {
             serde_json::to_value(&t.maker_orders).ok()
         };
 
+        // Trade lifecycle status (MATCHED → MINED → CONFIRMED, or
+        // RETRYING / FAILED). Kept as the raw venue string so new
+        // states surface without a code change.
+        let trade_status = if t.status.is_empty() {
+            None
+        } else {
+            Some(t.status.clone())
+        };
+
         Some(StreamMessage::UserEvent(UserEvent::Fill {
             exchange: "polymarket".into(),
             taker_oid,
@@ -337,6 +346,7 @@ impl PolymarketMessageParser {
             qty,
             fee: 0.0, // Polymarket does not include fee in the trade event
             ts_ns: now_ns(),
+            trade_status,
             maker_orders,
         }))
     }
