@@ -367,8 +367,6 @@ impl PolymarketMessageParser {
         Some(StreamMessage::LastTradePrice(LastTradePrice {
             exchange: self.exchange_name,
             symbol: e.asset_id,
-            // Stamped later by the per-window forwarding hook in
-            // zmq_server/src/setup.rs::spawn_polymarket_window.
             full_slug: None,
             price: e.price.parse().ok()?,
             size: e.size.parse().ok()?,
