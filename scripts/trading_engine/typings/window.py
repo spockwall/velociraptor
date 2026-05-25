@@ -23,22 +23,24 @@ import typing
 class PolymarketWindow:
     """One rolling Polymarket window.
 
-    Only `base_slug` is required — the rest is populated from incoming
-    snapshot payloads (the server stamps `full_slug` per frame, and the
-    payload `symbol` IS the current up_asset_id). `down_asset_id` is
-    intentionally unused now that the server forwards only the UP side
-    (down is the mirror image of the same orderbook). Kept as an
-    `Optional[str]` field for back-compat with code that imports it.
+    Only `base_slug` is required. `full_slug` is updated on each
+    rollover (the payload `symbol` field IS the full_slug under the
+    current wire contract).
+
+    `up_asset_id` / `down_asset_id` are **deprecated** here — the
+    canonical source for per-token asset_ids is
+    `MarketState.asset_ids(full_slug)`, populated by strategies on
+    rollover via `market.fetch_asset_ids`. The fields stay for one
+    transitional cycle so any straggling reader doesn't crash; new
+    code should read via `MarketState`.
     """
 
     base_slug: str  # e.g. "btc-updown-15m"
-    full_slug: typing.Optional[str] = None  # filled from payload on first snapshot
+    full_slug: typing.Optional[str] = None
     window_start: typing.Optional[int] = None
     interval_secs: typing.Optional[int] = None
-    up_asset_id: typing.Optional[str] = None
-    down_asset_id: typing.Optional[str] = (
-        None  # vestigial — never set under static-topic forwarding
-    )
+    up_asset_id: typing.Optional[str] = None  # deprecated; see MarketState
+    down_asset_id: typing.Optional[str] = None  # deprecated; see MarketState
 
     @property
     def window_end(self) -> typing.Optional[int]:

@@ -50,14 +50,17 @@ class TradeEvent:
 
 @dataclasses.dataclass(frozen=True)
 class RolloverEvent:
-    """Fired by `MarketFeed` when a rolling topic's `full_slug` differs
-    from the last seen value for (exchange, base_slug). For Polymarket
-    `base_slug` is the topic id; for Kalshi it's the series."""
+    """Fired by `MarketFeed` when the payload `full_slug` field on a
+    rolling topic differs from the last seen value, and also synthesised
+    once by the engine at startup so the bootstrap path goes through
+    the same dispatcher code. Carries `(exchange, base_slug,
+    full_slug)`; per-token asset_ids are resolved by
+    `MarketState.on_rollover` (Gamma) before strategy callbacks
+    fire, then read via `MarketState.asset_ids`."""
 
     exchange: str
     base_slug: str
     full_slug: str
-    asset_id: str
 
 
 @dataclasses.dataclass(frozen=True)
