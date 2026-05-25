@@ -214,6 +214,54 @@ async fn place_batch_orders() {
     }
 }
 
+/// `RestOrderClient::place` with `OrderKind::Market` — places a FOK market
+/// order. `qty` is share count for both Buy and Sell (Polymarket CLOB v2
+/// walks the opposite-side book until cumulative shares >= qty). `px` is
+/// ignored. `tif` must be `Ioc` (→ FAK) or `Fok` (→ FOK).
+///
+///   cargo test -p executor --test polymarket_mainnet \
+///     -- --ignored --nocapture place_market_order
+///
+/// **Real money on mainnet.** Will fill immediately against resting liquidity.
+#[tokio::test]
+#[ignore = "places a real market order on Polymarket mainnet — run manually"]
+async fn place_market_order() {
+    // Edit these to target a different market / size.
+    let token_id =
+        "60105229286427884692660113868141858131134689149752564702347657042086215753173".to_string();
+    let side = Side::Buy;
+    // Polymarket enforces a $1 USDC min notional for marketable orders.
+    // qty * top-ask-price must exceed $1, otherwise the API returns
+    // 400 "invalid amount for a marketable BUY order".
+    let qty = 20.0; // shares
+
+    let client = build_client().await;
+    let client_oid = format!(
+        "polymarket_mainnet-market-{}",
+        chrono::Utc::now().timestamp_millis()
+    );
+
+    let order = PlaceOne {
+        client_oid: client_oid.clone(),
+        symbol: token_id,
+        side,
+        kind: OrderKind::Market,
+        px: 0.0, // ignored for market orders
+        qty,
+        tif: Tif::Fok,
+    };
+
+    eprintln!("place_market: {order:?}");
+    let ack = client
+        .place(&order)
+        .await
+        .expect("place market should succeed");
+    eprintln!(
+        "place_market: ACK exchange_oid={} status={:?} client_oid={}",
+        ack.exchange_oid, ack.status, ack.client_oid
+    );
+}
+
 /// `RestOrderClient::cancel` — cancels by exchange-side oid. Edit the const
 /// `OID` to whatever you want to cancel (read it from `place_order`'s output
 /// or `get_orders_returns_array`).

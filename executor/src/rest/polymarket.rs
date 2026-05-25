@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use libs::credentials::polymarket::PolymarketCredentials;
 use libs::protocol::orders::{
-    HeartbeatAck, OrderAck, OrderError, OrderStatus, PlaceOne, Side, Tif,
+    HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
 };
 use polymarket_client_sdk_v2::auth::state::Authenticated;
 use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
@@ -30,7 +30,7 @@ use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
 type PrivKeySigner = LocalSigner<k256::ecdsa::SigningKey>;
 use polymarket_client_sdk_v2::clob::types::request::{CancelMarketOrderRequest, OrdersRequest};
 use polymarket_client_sdk_v2::clob::types::{
-    OrderStatusType, OrderType, Side as SdkSide, SignatureType,
+    Amount, OrderStatusType, OrderType, Side as SdkSide, SignatureType,
 };
 use polymarket_client_sdk_v2::clob::{Client, Config};
 use polymarket_client_sdk_v2::types::{Address, Decimal, U256};
@@ -233,6 +233,26 @@ fn to_sdk_order_type(t: Tif) -> OrderType {
     }
 }
 
+// Market orders on Polymarket CLOB v2 only accept FAK or FOK.
+fn to_sdk_market_order_type(t: Tif) -> Result<OrderType, OrderError> {
+    match t {
+        Tif::Fok => Ok(OrderType::FOK),
+        Tif::Ioc => Ok(OrderType::FAK),
+        Tif::Gtc | Tif::Gtd => Err(OrderError::Internal {
+            message: format!("polymarket market order: unsupported tif {t:?} (use IOC/FOK)"),
+        }),
+    }
+}
+
+// `qty` is share count for both sides:
+//   Buy  → walks asks until cumulative shares >= qty
+//   Sell → walks bids until cumulative shares >= qty
+fn to_market_amount(qty: f64) -> Result<Amount, OrderError> {
+    Amount::shares(dec(qty)?).map_err(|e| OrderError::Internal {
+        message: format!("polymarket market order: amount build failed: {e}"),
+    })
+}
+
 fn map_status(s: &OrderStatusType) -> OrderStatus {
     match s {
         OrderStatusType::Live => OrderStatus::New,
@@ -261,20 +281,32 @@ fn now_ns() -> i64 {
 #[async_trait]
 impl RestOrderClient for PolymarketRestClient {
     async fn place(&self, p: &PlaceOne) -> Result<OrderAck, OrderError> {
-        // Canonical SDK flow: `limit_order()` -> typestate builder ->
-        // `build_sign_and_post(&signer)`. The SDK handles the EIP-712 v2
-        // domain, struct hash, secp256k1 signing, and JSON envelope.
-        let resp = self
-            .client
-            .limit_order()
-            .token_id(parse_token_id(&p.symbol)?)
-            .side(to_sdk_side(p.side))
-            .price(dec(p.px)?)
-            .size(dec(p.qty)?)
-            .order_type(to_sdk_order_type(p.tif))
-            .build_sign_and_post(self.signer.as_ref())
-            .await
-            .map_err(map_sdk_err)?;
+        // Canonical SDK flow: `limit_order()` / `market_order()` -> typestate
+        // builder -> `build_sign_and_post(&signer)`. The SDK handles the
+        // EIP-712 v2 domain, struct hash, secp256k1 signing, and JSON envelope.
+        let resp = match p.kind {
+            OrderKind::Limit => self
+                .client
+                .limit_order()
+                .token_id(parse_token_id(&p.symbol)?)
+                .side(to_sdk_side(p.side))
+                .price(dec(p.px)?)
+                .size(dec(p.qty)?)
+                .order_type(to_sdk_order_type(p.tif))
+                .build_sign_and_post(self.signer.as_ref())
+                .await
+                .map_err(map_sdk_err)?,
+            OrderKind::Market => self
+                .client
+                .market_order()
+                .token_id(parse_token_id(&p.symbol)?)
+                .side(to_sdk_side(p.side))
+                .amount(to_market_amount(p.qty)?)
+                .order_type(to_sdk_market_order_type(p.tif)?)
+                .build_sign_and_post(self.signer.as_ref())
+                .await
+                .map_err(map_sdk_err)?,
+        };
 
         Ok(OrderAck {
             client_oid: p.client_oid.clone(),
