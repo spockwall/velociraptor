@@ -3,13 +3,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Slim best-bid-ask payload stored in Redis and served by the backend.
+///
+/// `symbol` is the venue asset id; `full_slug` carries the window
+/// identity for rolling Polymarket / Kalshi topics (mirrors
+/// [`crate::protocol::OrderbookSnapshot`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BbaPayload {
     pub exchange: String,
     pub symbol: String,
-    /// Current window full_slug for rolling markets (mirrors
-    /// `OrderbookSnapshot.full_slug`). `#[serde(default)]` keeps back-compat
-    /// with older encoded BBAs in Redis.
     #[serde(default)]
     pub full_slug: Option<String>,
     pub sequence: u64,

@@ -80,19 +80,19 @@ pub type PriceLevelTuple = (f64, f64);
 
 /// Materialized orderbook snapshot broadcast to subscribers.
 ///
-/// `symbol` is the exchange-native asset id (Polymarket: the per-window
-/// asset/token id; Binance: e.g. `btcusdt`). For rolling markets `full_slug`
-/// carries the current window identity (e.g. `btc-updown-15m-1715423400`) so
-/// a subscriber on the stable rolling topic `polymarket:{base_slug}` can tell
-/// which window a frame belongs to without parsing the topic string. Static
-/// exchanges leave it `None`.
+/// `symbol` is always the **venue asset id** (Polymarket: per-window
+/// clobTokenId; Binance: e.g. `btcusdt`). For rolling Polymarket /
+/// Kalshi topics the per-window forward hook also stamps
+/// `full_slug` (e.g. `btc-updown-15m-1715423400`) so subscribers on
+/// the stable rolling topic `polymarket:{base_slug}` can detect
+/// rollovers without parsing the topic string. Static exchanges leave
+/// `full_slug` as `None`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrderbookSnapshot {
     pub exchange: ExchangeName,
     pub symbol: String,
-    /// Current window full_slug for rolling markets; `None` otherwise.
-    /// `#[serde(default)]` so older encoded snapshots without the field
-    /// still decode cleanly (back-compat for Redis values and recorded files).
+    /// Window identifier for rolling markets. `None` for static
+    /// exchanges and for older encoded snapshots (back-compat).
     #[serde(default)]
     pub full_slug: Option<String>,
     pub sequence: u64,
@@ -129,11 +129,11 @@ impl From<&OrderbookSnapshot> for BbaPayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LastTradePrice {
     pub exchange: ExchangeName,
-    /// Asset / token ID (Polymarket: the YES/NO token ID).
+    /// Venue asset id (Polymarket: the YES/NO token id).
+    /// See [`OrderbookSnapshot::symbol`] for the symbol/full_slug split.
     pub symbol: String,
-    /// Current window full_slug for rolling markets (see
-    /// `OrderbookSnapshot.full_slug`); `None` otherwise. `#[serde(default)]`
-    /// keeps back-compat with older encoded trades.
+    /// Window identifier for rolling markets; `None` for static.
+    /// See [`OrderbookSnapshot::full_slug`].
     #[serde(default)]
     pub full_slug: Option<String>,
     pub price: f64,

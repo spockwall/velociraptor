@@ -92,10 +92,15 @@ mod tests {
         let decoded: OrderbookSnapshot = super::super::decode(&bytes).unwrap();
         assert_eq!(decoded.symbol, "btcusdt");
         assert_eq!(decoded.sequence, 42);
+        assert!(decoded.full_slug.is_none());
     }
 
     #[test]
-    fn rolling_snapshot_topic_uses_base_slug_and_preserves_full_slug() {
+    fn rolling_snapshot_topic_uses_base_slug_and_stamps_full_slug() {
+        // Rolling forward hooks set `full_slug` to the window identity;
+        // `symbol` stays as the venue asset_id. Topic stays the stable
+        // base_slug so subscribers don't need to resubscribe across
+        // rollovers.
         let mut s = snap();
         s.exchange = ExchangeName::Polymarket;
         s.symbol = "0xabc-asset-id".into();
@@ -104,7 +109,6 @@ mod tests {
             base_slug: "btc-updown-15m",
             snap: &s,
         };
-        // Static topic — does NOT include the asset_id (which would change at rollover).
         assert_eq!(t.topic(), "polymarket:btc-updown-15m");
         let bytes = t.encode().unwrap();
         let decoded: OrderbookSnapshot = super::super::decode(&bytes).unwrap();
@@ -117,9 +121,8 @@ mod tests {
 
     #[test]
     fn decode_old_snapshot_missing_full_slug_yields_none() {
-        // Encode a snapshot WITHOUT full_slug set (None) and confirm it
-        // round-trips with full_slug == None — pins backward compatibility
-        // for already-encoded Redis values / recorded files.
+        // Back-compat: snapshots encoded BEFORE we added full_slug
+        // round-trip with `None` thanks to `#[serde(default)]`.
         let s = snap();
         assert!(s.full_slug.is_none());
         let bytes = rmp_serde::to_vec_named(&s).unwrap();

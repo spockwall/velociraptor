@@ -232,6 +232,9 @@ fn forward_snapshot(ctx: &RollingHookCtx, snap: &OrderbookSnapshot) {
     if libs::time::now_secs() < ctx.window_start {
         return;
     }
+    // Stamp `full_slug` so subscribers on the stable rolling topic
+    // `polymarket:{base_slug}` know which window the frame belongs to.
+    // `symbol` is left as the venue asset_id — never overwritten.
     let mut stamped = snap.clone();
     stamped.full_slug = Some(ctx.full_slug.clone());
     ctx.bus.publish(StreamEvent::RollingSnapshot {
@@ -267,6 +270,8 @@ fn forward_trade(ctx: &RollingHookCtx, trade: &LastTradePrice) {
     if libs::time::now_secs() < ctx.window_start {
         return;
     }
+    // See `forward_snapshot` — stamp `full_slug`, leave `symbol`
+    // (= venue asset_id) untouched.
     let mut stamped = trade.clone();
     stamped.full_slug = Some(ctx.full_slug.clone());
     ctx.bus.publish(StreamEvent::RollingLastTradePrice {
