@@ -93,6 +93,8 @@ impl Executor {
     pub const KILL_SWITCH: &'static str = "executor:kill_switch";
     /// Pub/sub channel for sub-ms kill-switch propagation.
     pub const KILL_SWITCH_CHAN: &'static str = "executor:kill_switch_chan";
+    /// Soft pause: blocks new places but does NOT cancel resting orders.
+    pub const PAUSE: &'static str = "executor:pause";
     /// One-shot trigger: executor calls cancel_all on every client and DELs the key.
     pub const CANCEL_ALL: &'static str = "executor:cancel_all";
     /// One-shot trigger: executor re-reads its YAML config and swaps the
