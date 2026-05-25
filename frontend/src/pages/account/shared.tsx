@@ -22,12 +22,25 @@ export function fmtTimeNs(ns: number): string {
 
 export function statusVariant(status: string): "gray" | "green" | "red" | "yellow" {
     switch (status) {
+        // Order-lifecycle (UserOrderUpdate.status, lowercase).
         case "filled":
             return "green";
         case "canceled":
         case "expired":
             return "yellow";
         case "rejected":
+            return "red";
+        // Polymarket trade-lifecycle (UserFill.trade_status, UPPERCASE).
+        // MATCHED is the initial off-chain match; MINED is the on-chain
+        // mining; CONFIRMED is final settlement; RETRYING / FAILED are
+        // problem states.
+        case "CONFIRMED":
+            return "green";
+        case "MINED":
+        case "MATCHED":
+            return "yellow";
+        case "RETRYING":
+        case "FAILED":
             return "red";
         default:
             return "gray";
@@ -103,13 +116,14 @@ export function FillsTable({
                     <tr className={`text-text-muted text-left ${HEADER_TEXT}`}>
                         <th className="py-1.5 pr-3 font-medium whitespace-nowrap">time</th>
                         <th className="py-1.5 pr-3 font-medium whitespace-nowrap">exchange</th>
+                        <th className="py-1.5 pr-3 font-medium whitespace-nowrap">status</th>
                         <th className="py-1.5 pr-3 font-medium whitespace-nowrap">side</th>
                         <th className="py-1.5 pr-3 font-medium text-right whitespace-nowrap">px</th>
                         <th className="py-1.5 pr-3 font-medium text-right whitespace-nowrap">qty</th>
                         <th className="py-1.5 pr-3 font-medium text-right whitespace-nowrap">fee</th>
                         <th className="py-1.5 pr-3 font-medium">symbol</th>
                         <th className="py-1.5 pr-3 font-medium">order id</th>
-                        <th className="py-1.5 font-medium">client id</th>
+                        {/*<th className="py-1.5 font-medium">client id</th>*/}
                     </tr>
                 </thead>
                 <tbody>
@@ -118,6 +132,13 @@ export function FillsTable({
                             <tr key={`${ev.exchange_oid}-${ev.ts_ns}-${i}`} className="border-t border-border-strong">
                                 <td className="py-1 pr-3 text-text-muted whitespace-nowrap">{fmtTimeNs(ev.ts_ns)}</td>
                                 <td className="py-1 pr-3 text-text-muted whitespace-nowrap">{ev.exchange}</td>
+                                <td className="py-1 pr-3 whitespace-nowrap">
+                                    {ev.trade_status ? (
+                                        <Badge label={ev.trade_status} variant={statusVariant(ev.trade_status)} />
+                                    ) : (
+                                        <span className="text-text-muted">—</span>
+                                    )}
+                                </td>
                                 <td className="py-1 pr-3 whitespace-nowrap">
                                     <Badge label={ev.side} variant={ev.side === "buy" ? "green" : "red"} />
                                 </td>
@@ -132,12 +153,14 @@ export function FillsTable({
                                 <td className="py-1 pr-3 text-text-muted truncate max-w-[28ch]" title={ev.exchange_oid}>
                                     {ev.exchange_oid}
                                 </td>
+                                {/*
                                 <td
                                     className="py-1 text-text-muted truncate max-w-[24ch]"
                                     title={ev.client_oid ?? ""}
                                 >
                                     {ev.client_oid ?? ""}
                                 </td>
+                                 */}
                             </tr>
                         ) : null,
                     )}
@@ -197,10 +220,7 @@ export function OrdersTable({
                                 <td className="py-1 pr-3 text-text-muted truncate max-w-[28ch]" title={ev.exchange_oid}>
                                     {ev.exchange_oid}
                                 </td>
-                                <td
-                                    className="py-1 text-text-muted truncate max-w-[24ch]"
-                                    title={ev.client_oid ?? ""}
-                                >
+                                <td className="py-1 text-text-muted truncate max-w-[24ch]" title={ev.client_oid ?? ""}>
                                     {ev.client_oid ?? ""}
                                 </td>
                             </tr>

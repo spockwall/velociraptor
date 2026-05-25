@@ -122,6 +122,10 @@ export type OrderStatus =
 /// `taker_oid` is the taker's order id; `client_oid` is whatever client_oid
 /// the taker passed at place time, when known. `maker_orders` is the raw
 /// exchange-specific maker-list payload (Polymarket today).
+///
+/// `trade_status` is the venue's trade-lifecycle string. Polymarket emits
+/// `MATCHED`, `MINED`, `CONFIRMED`, `RETRYING`, or `FAILED` for on-chain
+/// settlement progress. `null` for venues that don't publish one.
 export interface UserFill {
     type: "fill";
     exchange: string;
@@ -134,6 +138,7 @@ export interface UserFill {
     qty: number;
     fee: number;
     ts_ns: number;
+    trade_status: string | null;
     maker_orders: unknown | null;
 }
 
