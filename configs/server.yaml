@@ -50,3 +50,19 @@ hyperliquid:
   coins: # uppercase coin names
     - "BTC"
     - "ETH"
+
+# ── Pre-trade risk gate (executor) ───────────────────────────────────────────
+# Disabled by default. See configs/example.yaml for the full annotated shape.
+# Hot-reload via: SET executor:reload_config 1 (or the frontend "reload risk").
+risk:
+  enabled: false
+  exchanges:
+    polymarket:
+      default:
+        max_qty: 100
+        max_notional: 500
+      symbols: {}
+    kalshi:
+      default:
+        max_qty: 200
+      symbols: {}

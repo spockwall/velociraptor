@@ -82,3 +82,31 @@ executor:
   audit_dir: "/app/data/executor"
   audit_stream_cap: 100000
   polymarket_env: "prod"
+
+# ── Pre-trade risk gate (executor) ───────────────────────────────────────────
+# Disabled by default. See configs/example.yaml for the full annotated shape.
+# Hot-reload via: SET executor:reload_config 1 (or the frontend "reload risk").
+# Six rules (all optional under `default` / `<symbol>`):
+#   min_qty | max_qty | max_notional | price_ref_max_deviation_pct
+#   max_orders_per_min | max_open_orders
+risk:
+  enabled: false
+  exchanges:
+    polymarket:
+      default:
+        min_qty: 1
+        max_qty: 100
+        max_notional: 500
+        price_ref_max_deviation_pct: 20
+        max_orders_per_min: 30
+        max_open_orders: 10
+      symbols: {}
+    kalshi:
+      default:
+        min_qty: 1
+        max_qty: 200
+        max_notional: 500
+        price_ref_max_deviation_pct: 20
+        max_orders_per_min: 30
+        max_open_orders: 10
+      symbols: {}

@@ -89,3 +89,48 @@ polymarket:
     #  slug: "will-btc-reach-100k-in-2025"
     #  interval_secs: 0
 
+
+# ── Pre-trade risk gate (executor) ───────────────────────────────────────────
+# Disabled by default. When enabled, every Place (and each PlaceBatch leg) is
+# checked against the resolved limits for its (exchange, symbol). A symbol
+# override is per-field merged over the exchange `default`; an exchange with
+# no entry is unrestricted. Hot-reload: SET executor:reload_config 1 (or click
+# "reload risk" in the frontend Control page) after editing this block — no
+# executor restart needed.
+#
+# Every field under `default` / `<symbol>` is optional. Leave a field unset
+# (or comment it out) to disable that rule for the scope. The six rules:
+#   min_qty                       — reject qty below this floor
+#   max_qty                       — reject qty above this ceiling
+#   max_notional                  — reject px*qty above this
+#   price_ref_max_deviation_pct   — reject |px - bba_mid| / bba_mid > pct
+#                                   (fails open if no bba mid available)
+#   max_orders_per_min            — rolling 60s placement rate per (ex, sym)
+#   max_open_orders               — best-effort concurrent open-order cap
+risk:
+  enabled: false
+  exchanges:
+    polymarket:
+      default:
+        min_qty: 1                          # floor (Polymarket min is 5 USDC notional anyway)
+        max_qty: 100                        # ceiling per single order
+        max_notional: 500                   # per-order $ cap
+        price_ref_max_deviation_pct: 20     # fat-finger guard vs bba mid
+        max_orders_per_min: 30              # rolling 60s, per (exchange,symbol)
+        max_open_orders: 10                 # best-effort concurrent cap
+      symbols: {}
+        # Per-token-id override; per-field merged over `default` above.
+        # "21742633143463906290569050155826241533067272736897614950488156847949938836455":
+        #   max_qty: 50
+        #   max_notional: 100
+    kalshi:
+      default:
+        min_qty: 1
+        max_qty: 200
+        max_notional: 500
+        price_ref_max_deviation_pct: 20
+        max_orders_per_min: 30
+        max_open_orders: 10
+      symbols: {}
+        # "KXBTC15M-26MAY2510-T100000":
+        #   max_qty: 100
