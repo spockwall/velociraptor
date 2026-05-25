@@ -17,6 +17,7 @@ If you only need to subscribe to market data or send a single order from a one-o
 - **MarketState owns the live world.** Producers enqueue events; the dispatcher updates MarketState *before* firing callbacks. Strategies read state via methods (`market.quote`, `market.mid`, …) instead of poking the transport.
 - **Per-callback throttling, default 2s.** `register_quote(..., min_interval_ms=N)` drops callback fires under the threshold. Default is `DEFAULT_MIN_INTERVAL_MS = 2000` ms — strategies that need every-frame cadence (probe / one_shot / fill_once / momentum's Polymarket leg) must pass `min_interval_ms=0` explicitly. State is updated on the dropped event, so the next non-throttled call sees fresh data.
 - **Pre-start gating is server-side.** The new Polymarket / Kalshi window doesn't publish until its boundary, so the engine never sees a pre-start frame and doesn't need to filter for it.
+- **Bootstrap ≠ rollover.** A fresh engine emits one `BootstrapEvent` per window-strategy at startup so `MarketState` is primed (Polymarket asset_ids resolved via Gamma) BEFORE the first quote arrives. Real wire `RolloverEvent`s only fire when the payload `full_slug` actually changes. The two event types fan out to **separate** callback sets — `_on_bootstrap` vs `_on_rollover` — so cold-start init doesn't accidentally run rollover side-effects (flatten, reset latches).
 
 ## Architecture
 
@@ -42,10 +43,14 @@ scripts/trading_engine/
 │
 ├── market/
 │   ├── feed.py                     # ZMQ SUB transport; producer cbs enqueue Events
+│   ├── gamma.py                    # Polymarket Gamma REST helpers: fetch_asset_ids,
+│   │                               #   current_full_slug, interval_secs_from_base_slug
 │   └── state.py                    # MarketState — live cross-source quotes/trades/mid/history
+│                                   #   + per-window asset_ids dict + on_bootstrap/on_rollover
 │
 ├── typings/
-│   ├── events.py                   # QuoteEvent / TradeEvent / RolloverEvent / FillEvent / OrderUpdateEvent / ShutdownEvent
+│   ├── events.py                   # BootstrapEvent / QuoteEvent / SnapshotEvent / TradeEvent
+│   │                               #   RolloverEvent / FillEvent / OrderUpdateEvent / ShutdownEvent
 │   ├── state.py                    # StrategyState + OrderLedger + OrderRecord
 │   └── window.py                   # PolymarketWindow / KalshiWindow
 │
@@ -71,14 +76,18 @@ Defined in `typings/events.py` — pure data, immutable dataclasses:
 
 | Event              | Producer            | Fields                                          |
 |--------------------|---------------------|-------------------------------------------------|
+| `BootstrapEvent`   | Engine (once, at startup, window-strategies only) | `exchange`, `base_slug`, `full_slug` — slug computed from clock via `market.gamma.current_full_slug` |
 | `QuoteEvent`       | MarketFeed snapshot | `exchange`, `symbol`, `quote: Quote`            |
+| `SnapshotEvent`    | MarketFeed snapshot | `exchange`, `symbol`, `snapshot: Snapshot` (full depth) |
 | `TradeEvent`       | MarketFeed trade    | `exchange`, `symbol`, `trade: Trade`            |
-| `RolloverEvent`    | MarketFeed snapshot | `exchange`, `base_slug`, `full_slug`, `asset_id` (fires when `full_slug` changes) |
+| `RolloverEvent`    | MarketFeed snapshot | `exchange`, `base_slug`, `full_slug` — fires when wire `full_slug` changes (per-token asset_ids are NOT on this event; consumers read them via `MarketState.asset_ids`) |
 | `FillEvent`        | UserFeed            | `topic`, `ev: dict`                             |
 | `OrderUpdateEvent` | UserFeed            | `topic`, `ev: dict`                             |
 | `ShutdownEvent`    | signal handler      | sentinel — dispatcher returns when popped       |
 
 **No `TimerEvent`.** Periodic logic must be triggered by a real data event.
+
+**Two-event split for window startup vs. transition.** `BootstrapEvent` is emitted by the Engine once per window-strategy at startup; the dispatcher routes it to `MarketState.on_bootstrap()` (which advances `_current_full_slug` and resolves Polymarket asset_ids via Gamma) and fires `_bootstrap_regs` callbacks (`Strategy._on_bootstrap`). `RolloverEvent` is emitted by `MarketFeed` only when the wire `full_slug` actually changes; it routes to `MarketState.on_rollover()` (same shared work) and fires `_rollover_regs` callbacks (`Strategy._on_rollover`). The Engine also calls `MarketFeed.prime_rollover(...)` after enqueuing the bootstrap so the first wire frame carrying that same `full_slug` does NOT re-fire as a spurious rollover.
 
 ## Dispatcher (the rate limiter)
 
@@ -93,7 +102,7 @@ def run(self) -> None:
         self._dispatch(ev)
 ```
 
-Throttling lives here — `_Registration` carries `min_interval_ns` + `last_fired_ns`; `_dispatch` updates `MarketState` unconditionally, then calls only the registrations whose throttle window has elapsed. Order/fill/rollover events bypass throttling (rare + critical).
+Throttling lives here — `_Registration` carries `min_interval_ns` + `last_fired_ns`; `_dispatch` updates `MarketState` unconditionally, then calls only the registrations whose throttle window has elapsed. Order/fill/rollover/bootstrap events bypass throttling (rare + critical).
 
 Registration API:
 
@@ -101,11 +110,15 @@ Registration API:
 # Default min_interval_ms = DEFAULT_MIN_INTERVAL_MS (2000.0).
 # Strategies that want every-frame cadence must pass min_interval_ms=0.
 dispatcher.register_quote(exchange, symbol, cb, *, min_interval_ms=2000.0)
+dispatcher.register_snapshot(exchange, symbol, cb, *, min_interval_ms=2000.0)
 dispatcher.register_trade(exchange, symbol, cb, *, min_interval_ms=2000.0)
-dispatcher.register_rollover(exchange, base_slug, cb)
+dispatcher.register_rollover(exchange, base_slug, cb)   # wire full_slug change
+dispatcher.register_bootstrap(exchange, base_slug, cb)  # once at engine start
 dispatcher.register_order_update(cb)
 dispatcher.register_fill(cb)
 ```
+
+Bootstrap and rollover route to **separate** callback sets. A strategy that needs to react to "process started, window known" provides `_on_bootstrap`; transition logic that should only run between windows provides `_on_rollover`. The two never cross.
 
 `stop()` enqueues a `ShutdownEvent` — safe from any thread. The dispatcher drains everything in front of it first (fills arriving on Ctrl-C are not lost).
 
@@ -115,14 +128,20 @@ dispatcher.register_fill(cb)
 
 Reads:
 - `quote(ex, sym) -> Optional[Quote]`
+- `snapshot(ex, sym) -> Optional[Snapshot]` (full depth)
 - `trade(ex, sym) -> Optional[Trade]`
 - `mid(ex, sym) -> Optional[float]` (Quote.mid, else `(bid+ask)/2`)
 - `best_bid(ex, sym)` / `best_ask(ex, sym)`
 - `recent_trades(ex, sym, n)` — bounded deque (default 64)
 - `snapshot_all()` / `trades_all()`
-- `current_asset_id(ex, base_slug)` — the live full_slug-side asset for a rolling topic
+- `current_full_slug(ex, base_slug)` — last-seen `full_slug` for a rolling topic
+- `asset_ids(full_slug) -> Optional[tuple[Optional[str], Optional[str]]]` — Polymarket UP/DOWN clobTokenIds for a specific window (`None` until that window's bootstrap/rollover has resolved; `(None, None)` if Gamma resolve failed and trading should be refused)
 
-Writes (`_update_*`) are private — only the dispatcher calls them.
+Writes (`_update_*`) are private — the dispatcher calls them on Quote/Snapshot/Trade events. Window mutations go through two public entry points the dispatcher invokes:
+- `on_bootstrap(ex, base_slug, full_slug)` — engine `BootstrapEvent` path. Advances `_current_full_slug` and (Polymarket only) resolves asset_ids via `gamma.fetch_asset_ids`, logging with `bootstrap:` prefix.
+- `on_rollover(ex, base_slug, full_slug)` — wire `RolloverEvent` path. Same shared work via private `_refresh_window`, logged with `rollover:` prefix so operators can distinguish the trigger.
+
+`set_asset_ids(full_slug, up, down)` is exposed for tests and any external resolver (e.g. backend pre-seed).
 
 ## Strategy lifecycle
 
@@ -148,13 +167,27 @@ The engine builds the Strategy once, calls `required_topics()` to subscribe ZMQ 
 
 `Strategy.label` returns the human-friendly tag (`window.full_slug or window.base_slug`, or `name` if no window). `_attribution()` returns `{"strategy": name, "label": label}` for the order event log.
 
-## Windows + rollover
+## Windows + bootstrap + rollover
 
-`PolymarketWindow` / `KalshiWindow` (in `typings/window.py`) carry per-window identity: `base_slug` (stable) + `full_slug` (per-window) + `up_asset_id` (per-window) + `window_start` / `window_end`.
+`PolymarketWindow` / `KalshiWindow` (in `typings/window.py`) carry per-window identity: `base_slug` (stable) + `full_slug` (per-window) + `window_start` / `window_end`. The `up_asset_id` / `down_asset_id` fields on `PolymarketWindow` are **deprecated** — the canonical source for per-token asset_ids is `MarketState.asset_ids(full_slug)`, populated by `MarketState.on_bootstrap` / `on_rollover` via Gamma.
 
-Per-window strategies receive a partially-filled window at construction (`base_slug` set, rest None). The first incoming snapshot for that base_slug triggers a `RolloverEvent` that the strategy uses to fill in `full_slug` / `up_asset_id`. Subsequent rollovers (every 15 min for `*-updown-15m`) fire another `RolloverEvent`; the strategy resets its window-scoped state and trades the new `asset_id` without a restart.
+Lifecycle of a window-strategy:
 
-**Always register a rollover handler in `setup()` if the strategy holds window-scoped state.**
+1. **Engine startup** — `Engine._enqueue_bootstrap()` infers `interval_secs` from the base_slug suffix (`market.gamma.interval_secs_from_base_slug`), computes the current `full_slug` (`market.gamma.current_full_slug`), pre-stamps `strategy.window.full_slug` / `interval_secs`, and pushes a `BootstrapEvent` onto the queue. It also calls `MarketFeed.prime_rollover(...)` so the first wire frame with the same slug doesn't re-fire as a rollover.
+2. **Bootstrap dispatch** — `MarketState.on_bootstrap` resolves Gamma; `_bootstrap_regs` callbacks fire. Strategies' `_on_bootstrap(full_slug)` runs (typically a no-op stub since the engine already pre-stamped state).
+3. **First quote** — `Strategy._on_quote` reads `self._asset_id("up")` / `_asset_id("down")` from MarketState; asset_ids are already populated.
+4. **Wire rollover** — server publishes a snapshot with a new `full_slug`; `MarketFeed._handle_snapshot` fires `RolloverEvent`; dispatcher calls `MarketState.on_rollover` (Gamma) then `_rollover_regs` callbacks. Strategy's `_on_rollover(full_slug)` resets window-scoped state (latches, position) and trades the new window.
+
+**Strategies hold window-scoped state should register BOTH `_on_bootstrap` and `_on_rollover` in `setup()`.** Bootstrap is for one-time init that should NOT happen on transitions; rollover is for window-transition side effects. Existing built-in strategies (`fill_once`, `probe`, `one_shot`, `momentum`) all register both — `_on_bootstrap` is currently a no-op stub since the engine pre-stamps `window.full_slug` and Gamma resolution happens in `MarketState.on_bootstrap` ahead of the callback.
+
+The `Strategy` base class exposes one reader:
+
+```python
+def _asset_id(self, side: Literal["up", "down"]) -> Optional[str]:
+    # Reads MarketState.asset_ids(self.window.full_slug).
+    # Returns None if no window, no bootstrap yet, or Gamma resolve failed.
+    # Strategies MUST guard on None and refuse to trade.
+```
 
 ## Strategy registry
 
@@ -180,6 +213,7 @@ def __init__(self, args):
     self.queue = queue.Queue()
     self.market_feed = MarketFeed(args.market_pub, args.market_router,
         on_quote=self._enqueue_quote,
+        on_snapshot=self._enqueue_snapshot,
         on_trade=self._enqueue_trade,
         on_rollover=self._enqueue_rollover)
     self.user_feed = UserFeed(args.user_pub, on_event=self._enqueue_user_event)
@@ -192,6 +226,9 @@ def run(self) -> int:
     self.market_feed.start()
     self._subscribe_required_topics()       # ZMQ subscribe per strategy.required_topics()
     self.strategy.setup(self.dispatcher)
+    self._enqueue_bootstrap()               # synth BootstrapEvent for window-strategies
+                                            # + market_feed.prime_rollover() so the first
+                                            # wire frame with the same slug doesn't re-fire
     self.user_feed.start()
     with self.router:
         self.dispatcher.run()               # blocks main thread
@@ -241,14 +278,34 @@ def _on_poly_quote(self, q):
         self._force_close()
 ```
 
-### Rollover reset
+### Bootstrap vs. rollover handlers
 
 ```python
-def _on_rollover(self, full_slug, asset_id):
+def setup(self, dispatcher):
+    ...
+    dispatcher.register_rollover("polymarket", self.window.base_slug, self._on_rollover)
+    dispatcher.register_bootstrap("polymarket", self.window.base_slug, self._on_bootstrap)
+
+def _on_bootstrap(self, full_slug):
+    # Fired ONCE at engine startup. MarketState.on_bootstrap already
+    # resolved Gamma; the engine pre-stamped self.window.full_slug.
+    # Override only if you need one-time init that should NOT happen
+    # on real rollovers.
+    pass
+
+def _on_rollover(self, full_slug):
+    # Fires when the wire `full_slug` actually changes. Reset any
+    # window-scoped state and trade the new window. NEVER fires at
+    # startup.
     self.window.full_slug = full_slug
-    self.window.up_asset_id = asset_id
     self._live_oid = None
     self._filled_this_window = False
+
+def _on_quote(self, q):
+    asset_id = self._asset_id("up")          # or "down" for NO token
+    if asset_id is None:                     # Gamma not resolved yet
+        return
+    self.router.place_market(symbol=asset_id, ...)
 ```
 
 ## Diagnostics (subcommands in the same package)
