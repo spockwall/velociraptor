@@ -15,8 +15,9 @@ use libs::protocol::{ExchangeName, OrderbookSnapshot};
 use libs::redis_client::{keys::RedisKey, RedisHandle};
 use orderbook::connection::{ClientConfig, ClientTrait, SystemControl};
 use orderbook::exchanges::polymarket::{
-    resolve_assets_with_labels, run_rolling_scheduler as polymarket_rolling,
-    PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder, WindowTask as PolymarketWindowTask,
+    PolymarketLabeledAsset, resolve_assets_with_labels,
+    run_rolling_scheduler as polymarket_rolling, PolymarketSubMsgBuilder,
+    PolymarketUserSubMsgBuilder, WindowTask as PolymarketWindowTask,
 };
 use orderbook::types::endpoints::polymarket as poly_endpoints;
 use orderbook::types::orderbook::StreamMessage;
@@ -50,24 +51,29 @@ pub fn spawn_polymarket_schedulers(
             tokio::spawn(async move {
                 let base_slug = market.slug.clone();
                 let interval_secs = market.interval_secs;
-                polymarket_rolling(base_slug.clone(), interval_secs, move |full_slug| {
-                    let base_slug = base_slug.clone();
-                    let redis = redis.clone();
-                    let main_bus = main_bus.clone();
-                    async move {
-                        spawn_polymarket_window(
-                            base_slug,
-                            full_slug,
-                            depth,
-                            interval_secs,
-                            redis,
-                            snapshot_cap,
-                            trade_cap,
-                            main_bus,
-                        )
-                        .await
-                    }
-                })
+                polymarket_rolling(
+                    base_slug.clone(),
+                    interval_secs,
+                    move |full_slug, prefetched| {
+                        let base_slug = base_slug.clone();
+                        let redis = redis.clone();
+                        let main_bus = main_bus.clone();
+                        async move {
+                            spawn_polymarket_window(
+                                base_slug,
+                                full_slug,
+                                prefetched,
+                                depth,
+                                interval_secs,
+                                redis,
+                                snapshot_cap,
+                                trade_cap,
+                                main_bus,
+                            )
+                            .await
+                        }
+                    },
+                )
                 .await;
             })
         })
@@ -77,6 +83,7 @@ pub fn spawn_polymarket_schedulers(
 async fn spawn_polymarket_window(
     slug: String,
     full_slug: String,
+    prefetched: Option<Vec<PolymarketLabeledAsset>>,
     depth: usize,
     interval_secs: u64,
     redis: Option<RedisHandle>,
@@ -84,17 +91,24 @@ async fn spawn_polymarket_window(
     trade_cap: usize,
     main_bus: Option<StreamEngineBus>,
 ) -> Option<PolymarketWindowTask> {
-    let single = vec![PolymarketMarketConfig {
-        enabled: true,
-        slug: full_slug.clone(),
-        interval_secs: 0,
-    }];
-    let labeled = tokio::task::spawn_blocking({
-        let single = single.clone();
-        move || resolve_assets_with_labels(&single)
-    })
-    .await
-    .ok()?;
+    // Use the scheduler's prefetched tokens when available; otherwise
+    // fall back to the inline blocking REST resolve (cold start, or
+    // prefetch failed and we hit the retry path).
+    let labeled = if let Some(p) = prefetched {
+        p
+    } else {
+        let single = vec![PolymarketMarketConfig {
+            enabled: true,
+            slug: full_slug.clone(),
+            interval_secs: 0,
+        }];
+        tokio::task::spawn_blocking({
+            let single = single.clone();
+            move || resolve_assets_with_labels(&single)
+        })
+        .await
+        .ok()?
+    };
 
     if labeled.is_empty() {
         warn!(full_slug = %full_slug, "No tokens resolved — market not open yet?");

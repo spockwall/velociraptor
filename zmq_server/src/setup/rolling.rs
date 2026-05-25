@@ -213,9 +213,12 @@ pub(super) struct RollingHookCtx {
     /// `ticker` for Kalshi. Lets subscribers detect rollover from the
     /// payload without resubscribing.
     pub full_slug: String,
-    /// Unix seconds of the new window's boundary. The hook drops every
-    /// frame with `now_secs() < window_start` — this is what keeps
-    /// pre-started windows quiet during the ~10s overlap.
+    /// Unix seconds of this window's start. The hook drops every frame
+    /// with `now_secs() < window_start` as a defence-in-depth check
+    /// against the WS bootstrap firing before the scheduler intended
+    /// (rare). The scheduler now spawns each window AT the boundary
+    /// rather than pre-spawning, so the lower-gate is rarely hit in
+    /// practice — but it's a cheap safety net.
     pub window_start: u64,
     pub snapshot_cap: usize,
     pub trade_cap: usize,
