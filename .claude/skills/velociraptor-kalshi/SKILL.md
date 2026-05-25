@@ -175,19 +175,25 @@ Per series, independent loop:
 
 ## Redis integration
 
-Mirrors Polymarket architecture — scheduler owns lifecycle, per-window engine owns Redis writes, watchdog handles cleanup at shutdown.
+Mirrors Polymarket architecture — scheduler owns lifecycle, per-window engine writes Redis via an inline forward hook, watchdog handles label cleanup at shutdown.
 
 ### Key schema
 
-| Key | Type | Lifetime |
-|---|---|---|
-| `ob:kalshi:{ticker}` | string (msgpack) | overwritten each tick |
-| `bba:kalshi:{ticker}` | string (msgpack) | overwritten each tick |
-| `snapshots:kalshi:{ticker}` | list | LPUSH+LTRIM to `snapshot_cap` |
-| `trades:kalshi:{ticker}` | list | LPUSH+LTRIM to `trade_cap` |
-| `kalshi:label:{ticker}` | hash | one per live ticker |
-| `kalshi:label:index` | set of `ticker` | mirrors live labels |
-| `kalshi:series:{series}:tickers` | set of `ticker` | per series |
+Storage keys are keyed by **`series`**, not `ticker`. Overwritten by every snapshot, including across ticker rollovers — subscribers see a continuous series.
+
+| Key | Type | Lifetime | Written by |
+|---|---|---|---|
+| `ob:kalshi:{series}` | string (msgpack) | overwritten each tick | per-window forward hook |
+| `bba:kalshi:{series}` | string (msgpack) | overwritten each tick | per-window forward hook |
+| `snapshots:kalshi:{series}` | list | LPUSH+LTRIM to `snapshot_cap` | per-window forward hook |
+| `trades:kalshi:{series}` | list | LPUSH+LTRIM to `trade_cap` | per-window forward hook |
+| `kalshi:label:{ticker}` | hash | one per live ticker | window setup |
+| `kalshi:label:index` | set of `ticker` | mirrors live labels | window setup |
+| `kalshi:series:{series}:tickers` | set of `ticker` | per series | window setup |
+
+The current window's `ticker` is carried inside the msgpack payload as `OrderbookSnapshot.full_slug: Option<String>` so subscribers detect rollover from the payload — no resubscribe needed.
+
+**Do not** call `attach_redis(&mut engine, ...)` on per-window engines. It would key by `snap.symbol` (= ticker) and re-introduce ticker-keyed storage. It's attached only to the main engine for static exchanges.
 
 No UP/DOWN pairing in Redis — Kalshi has one combined two-sided book per market, so each window contributes exactly **one** label.
 
@@ -201,20 +207,20 @@ interval_secs  = "900"
 
 > **`window_start` derivation.** Kalshi windows are clock-aligned and always 15 min, so `window_start = (now + 30) / interval * interval`. The `+30` jumps past the pre-start overlap so the value resolves to the new window's boundary. No ticker parsing needed (unlike Polymarket).
 
-### Window setup (`spawn_kalshi_window`)
+### Window setup (`spawn_kalshi_window`, `zmq_server/src/setup.rs`)
 
 1. Build connection config with resolved ticker, WS URL, signed creds.
-2. Evict expired prior-window keys for this series (same logic as Polymarket).
+2. Evict expired prior-window **labels** for this series (same logic as Polymarket). Does NOT touch ob/bba/snapshots/trades — those are keyed by `series` and reused across rollovers.
 3. Register new ticker under `kalshi:series:{series}:tickers`.
 4. Write `kalshi:label:{ticker}`, add to `kalshi:label:index`.
-5. Spin up per-window `StreamEngine`, `attach_redis(...)`.
-6. Watchdog task polling `SystemControl.is_shutdown()` for independent cleanup.
+5. Spin up per-window `StreamEngine`. Register a forward hook on `OrderbookSnapshot` / `LastTradePrice` that stamps `full_slug = Some(ticker.clone())`, `bus.publish(StreamEvent::RollingSnapshot { base_slug: series, snap })`, and writes the same payload to Redis under `ob:kalshi:{series}` etc.
+6. Watchdog task polling `SystemControl.is_shutdown()` removes only the LABEL this window owned. Storage keys stay live for the next window.
 
 ### Backend read path (`GET /api/kalshi/markets`)
 
 1. Read `kalshi:label:index`.
 2. Load label hash; empty → orphan, SREM and skip.
-3. Lazy expiry if `window_start + interval_secs <= now` → DEL all keys, SREM.
+3. Lazy expiry if `window_start + interval_secs <= now` → `DEL kalshi:label:{ticker}` + `SREM kalshi:label:index`. Does NOT touch ob/bba/snapshots/trades.
 4. Sort by `(series, window_start, ticker)`.
 
 Response:
@@ -233,4 +239,4 @@ Steady-state: `COUNT label == # enabled series`, transient +1/series during pre-
 
 ## Frontend
 
-`/kalshi` (`frontend/src/pages/Kalshi.tsx`) polls `/api/kalshi/markets` every 5s, renders one panel per live ticker with best bid / spread / best ask + depth-bar of top-12 levels per side. Header shows series + window close (UTC).
+`/kalshi` (`frontend/src/pages/Kalshi.tsx`) polls `/api/kalshi/markets` every 5s, renders one panel per live series with best bid / spread / best ask + depth-bar of top-12 levels per side. Panels are keyed by `series` (not `ticker`), so the React component instance — and its `usePolling` state — **survives ticker rollover**. The panel's title comes from `snap.full_slug` (the live ticker), which flips when the new window's first snapshot arrives. Backend fetcher uses `api.orderbook("kalshi", market.series)` — i.e. the series, since that's the stable Redis key.

@@ -26,14 +26,31 @@ All payloads are **msgpack** (`rmp-serde` on Rust, `msgpack` on Python). All IPC
 
 ## Market PUB — `MARKET_DATA_SOCKET`
 
-Frame: `[topic_bytes, msgpack_payload]`. Topic: `"{exchange}:{symbol}"` — e.g. `binance:btcusdt`, `polymarket:<token_id>`.
+Frame: `[topic_bytes, msgpack_payload]`. Topic is the STABLE identifier — so subscribers don't have to resubscribe on rollover:
+
+| Exchange class | Topic format | Example |
+|---|---|---|
+| Static (`binance`/`binance_spot`/`okx`/`hyperliquid`) | `{exchange}:{symbol}` | `binance:btcusdt` |
+| Polymarket rolling | `polymarket:{base_slug}` | `polymarket:btc-updown-15m` |
+| Kalshi rolling | `kalshi:{series}` | `kalshi:KXBTC15M` |
+| Last-trade variant | `{topic}:last_trade` | `polymarket:btc-updown-15m:last_trade` |
+
+For rolling markets, only the UP side is published (Polymarket DOWN tokens are a mirror image of UP; Kalshi has no up/down split). The current window's per-window identifier is carried inside the payload as `full_slug` — see below — so a subscriber on the stable topic detects rollover from the payload, no resubscribe needed.
 
 Clients set a ZMQ `SUBSCRIBE` filter AND send a subscribe request on ROUTER so the server records the payload type. Two payload types, selected at subscribe via the `"type"` field:
 
 **`snapshot` (OrderbookSnapshot):**
 ```
 exchange   : ExchangeName    # single-key map e.g. {"binance": 0}
-symbol     : str
+symbol     : str             # exchange-native unit:
+                             #   static — the symbol
+                             #   Polymarket — asset_id of the UP token
+                             #   Kalshi — the current window's ticker
+full_slug  : str | null      # rolling markets only — current window's
+                             # full_slug (Polymarket) or ticker (Kalshi).
+                             # null/absent for static exchanges.
+                             # Encoded as `#[serde(default)] Option<String>`
+                             # so old captures decode under the new schema.
 sequence   : u64
 timestamp  : DateTime<Utc>
 best_bid   : [price, qty] | null
@@ -49,12 +66,28 @@ asks       : [[price, qty]]
 ```
 exchange   : str             # plain string
 symbol     : str
+full_slug  : str | null      # mirrors OrderbookSnapshot.full_slug
 sequence   : u64
 timestamp  : DateTime<Utc>
 best_bid   : [price, qty] | null
 best_ask   : [price, qty] | null
 spread     : f64 | null
 ```
+
+**`last_trade` (LastTradePrice):** same `full_slug` field; published on the `:last_trade` topic suffix above.
+
+### Internal event variants
+
+The Rust-side `StreamEvent` enum carries the dispatch info needed to pick the static topic. Don't remove the rolling variants — server dispatch (`zmq_server/src/server.rs`) needs `base_slug` from the variant to pick `RollingSnapshotTopic` / `RollingLastTradeTopic` over the per-symbol topic:
+
+```rust
+StreamEvent::OrderbookSnapshot(OrderbookSnapshot)       // static exchanges
+StreamEvent::RollingSnapshot { base_slug, snap }        // rolling — publishes on `{exchange}:{base_slug}`
+StreamEvent::LastTradePrice(LastTradePrice)             // static
+StreamEvent::RollingLastTradePrice { base_slug, trade } // rolling — publishes on `{exchange}:{base_slug}:last_trade`
+```
+
+The per-window forward hook in `spawn_polymarket_window` / `spawn_kalshi_window` is what stamps `full_slug` into the payload and publishes the rolling variant via `engine_bus.publish(...)`. Static exchanges go through the engine's normal hook path.
 
 ---
 

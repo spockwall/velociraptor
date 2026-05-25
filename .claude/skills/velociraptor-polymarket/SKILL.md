@@ -90,19 +90,25 @@ storage: { depth: 10, base_path: "./data", flush_interval: 1000, zstd_level: 3 }
 
 ## Redis integration (orderbook_server)
 
-When `redis.enabled: true`, every window publishes live state. The architecture has a **scheduler** owning window lifecycle and a **per-window engine** owning Redis writes/cleanup.
+When `redis.enabled: true`, every window publishes live state. Architecture: a **scheduler** owns window lifecycle, a **per-window engine** ingests both UP and DOWN WS streams (needed for full orderbook materialisation), and a forward hook on that engine writes Redis + publishes to the bus **for the UP side only** (the DOWN token is a mirror image of UP: buying YES at p = selling NO at 1-p).
 
 ### Key schema
 
+Storage keys are keyed by **`base_slug`**, not `asset_id`. The same key is overwritten by every snapshot, including across window rollovers — the card/subscriber sees a continuous time-series.
+
 | Key | Type | Lifetime | Written by |
 |---|---|---|---|
-| `ob:polymarket:{asset_id}` | string (msgpack) | overwritten each tick | per-window snapshot hook |
-| `bba:polymarket:{asset_id}` | string (msgpack) | overwritten each tick | per-window snapshot hook |
-| `snapshots:polymarket:{asset_id}` | list (msgpack) | `LPUSH + LTRIM` to `snapshot_cap` | per-window snapshot hook |
-| `trades:polymarket:{asset_id}` | list (msgpack) | `LPUSH + LTRIM` to `trade_cap` | per-window trade hook |
-| `polymarket:label:{asset_id}` | hash | one per live asset | window setup |
+| `ob:polymarket:{base_slug}` | string (msgpack) | overwritten each tick | per-window forward hook (UP only) |
+| `bba:polymarket:{base_slug}` | string (msgpack) | overwritten each tick | per-window forward hook (UP only) |
+| `snapshots:polymarket:{base_slug}` | list (msgpack) | `LPUSH + LTRIM` to `snapshot_cap` | per-window forward hook (UP only) |
+| `trades:polymarket:{base_slug}` | list (msgpack) | `LPUSH + LTRIM` to `trade_cap` | per-window forward hook (UP only) |
+| `polymarket:label:{asset_id}` | hash | one per live (asset, side) | window setup |
 | `polymarket:label:index` | set of `asset_id` | mirrors live labels | window setup |
 | `polymarket:base:{base_slug}:assets` | set of `asset_id` | per base slug | window setup |
+
+The current window's per-window identifier is carried INSIDE the msgpack payload as `OrderbookSnapshot.full_slug: Option<String>` (and the same on `BbaPayload` / `LastTradePrice`). Subscribers detect rollover from the payload — no resubscribe needed.
+
+**Do not** call `attach_redis(&mut engine, ...)` on per-window engines. That generic hook keys by `snap.symbol` (= asset_id) and would re-introduce the stale-asset_id storage problem. It's attached only to the main engine, which handles static exchanges where `symbol` IS the stable id.
 
 `polymarket:label:{asset_id}` hash:
 
@@ -116,56 +122,58 @@ interval_secs  = "900"            # 0 = static, never expires
 
 > **`window_start` invariant.** Must parse from `full_slug`, **not** from `now`. Window setup runs ~10s before the previous window ends; `now / interval * interval` would yield the *current* window's start and the new window would be flagged stale immediately.
 
-### Window setup (`spawn_polymarket_window`)
+### Window setup (`spawn_polymarket_window`, `zmq_server/src/setup.rs`)
 
 When scheduler fires for a new `full_slug`:
 
 1. Resolve token IDs via Gamma → `Vec<(asset_id, base_slug, full_slug, is_up)>`.
-2. **Evict expired prior-window keys** for this `base_slug`. For each `asset_id` in the base-slug set NOT in the freshly resolved set: read label, treat stale if `interval_secs==0` or `window_start+interval_secs<=now`. If stale: DEL label/ob/bba/snapshots/trades; SREM from index and base set. **Active overlapping windows are skipped** (owned by their own task).
-3. Register new assets under `polymarket:base:{base_slug}:assets`.
-4. Write `polymarket:label:{asset_id}` per new asset, add to `polymarket:label:index`.
-5. Spin up a **per-window** `StreamEngine` (separate from main) and `attach_redis(...)`.
-6. Spawn a **watchdog task** polling `SystemControl.is_shutdown()`. `WindowTask::stop()` → `handle.abort()` cancels anything awaiting past it — cleanup CANNOT live inline after `system.run().await`. The watchdog runs independently and DEL/SREMs every key the window owned.
+2. **Evict expired prior-window LABELS** for this `base_slug`. For each `asset_id` in the base-slug set NOT in the freshly resolved set: read label hash; treat stale if `interval_secs==0` or `window_start+interval_secs<=now`. If stale: `DEL polymarket:label:{asset_id}`, `SREM polymarket:label:index`, `SREM polymarket:base:{base_slug}:assets`. **Active overlapping windows are skipped** (owned by their own task).
+3. **No per-asset_id ob/bba/snapshots/trades deletes.** Those keys live at `base_slug` granularity and are overwritten by the next window's first snapshot.
+4. Register new assets under `polymarket:base:{base_slug}:assets`.
+5. Write `polymarket:label:{asset_id}` per new asset, add to `polymarket:label:index`.
+6. Spin up a per-window `StreamEngine`. Register a forward hook on `OrderbookSnapshot` / `LastTradePrice` that:
+   - Skips the frame if `is_up_by_asset.get(&snap.symbol) != Some(true)`.
+   - Stamps `snap.full_slug = Some(full_slug.clone())`.
+   - `bus.publish(StreamEvent::RollingSnapshot { base_slug, snap })` for ZMQ.
+   - Writes the same payload to Redis: `set_orderbook("polymarket", &base_slug, ...)`, `lpush_capped(RedisKey::snapshots(...), ...)`, `set_bba(...)`. Trade-hook parallels.
+7. Spawn a watchdog task polling `SystemControl.is_shutdown()`. On shutdown it removes only the LABELS this window owned (label hash + index + base-slug set membership). The ob/bba/snapshots/trades stay — they're still live data the next window will reuse.
 
 ### Backend read path (`GET /api/polymarket/markets`)
 
 1. Read `polymarket:label:index`.
 2. For each asset, load label hash. Empty → orphan, SREM and skip.
-3. **Lazy expiry:** if `interval_secs > 0 && window_start + interval_secs <= now` → DEL all keys, remove from index. Backstop for crashed processes.
-4. Sort by `(base_slug, window_start, side)` and return.
+3. **Lazy expiry:** if `interval_secs > 0 && window_start + interval_secs <= now` → `DEL polymarket:label:{asset_id}` + `SREM polymarket:label:index`. Backstop for crashed processes that never ran their watchdog. Does NOT touch ob/bba/snapshots/trades.
+4. Returns one row per (asset_id, side). Frontend filters `side === "up"` so each market shows as one card keyed by `base_slug`.
+5. Sort by `(base_slug, window_start, side)`.
 
 ### Cleanup paths
 
-| Path | Trigger | Owner | Purpose |
+| Path | Trigger | Owner | Affects |
 |---|---|---|---|
-| Eviction in window setup | New window starts | Scheduler | Remove previous window's keys at rollover |
-| Watchdog | `SystemControl.shutdown()` | Per-window task | Clean up when scheduler stops this window |
-| Backend lazy expiry | API hit on stale label | Backend handler | Backstop if process killed before watchdog ran |
+| Eviction in window setup | New window starts | Scheduler | Stale LABELS only (storage keys are reused) |
+| Watchdog | `SystemControl.shutdown()` | Per-window task | LABELS this window owned |
+| Backend lazy expiry | API hit on stale label | Backend `expire_label` | LABEL hash + index-set membership |
+
+No path tears down `ob:polymarket:{base_slug}` etc. They live as long as the base_slug is configured. If the orderbook server crashes mid-stream, the last snapshot stays in Redis for post-mortem inspection.
 
 Steady-state invariant:
 
 ```
-COUNT polymarket:label:* == SCARD polymarket:label:index
-                         == COUNT ob:polymarket:*
-                         == COUNT bba:polymarket:*
-                         == COUNT snapshots:polymarket:*
-                         == COUNT trades:polymarket:*
+SCARD polymarket:label:index == 2 × (# enabled rolling markets)   # up + down
+COUNT polymarket:label:*     == SCARD polymarket:label:index
+COUNT ob:polymarket:*        == # enabled rolling markets (one per base_slug, UP only)
+COUNT bba:polymarket:*       == # enabled rolling markets
 ```
-
-Live keys = `2 × (# enabled rolling markets)` + transient overlap of one extra window during pre-start.
 
 ### Health check
 
 ```bash
 docker compose exec -T redis sh -c '
-labels=$(redis-cli SMEMBERS polymarket:label:index | sort)
-for prefix in ob bba snapshots trades; do
-  ids=$(redis-cli --scan --pattern "$prefix:polymarket:*" | sed "s|$prefix:polymarket:||" | sort)
-  echo "--- orphan $prefix (no label) ---"; comm -23 <(echo "$ids") <(echo "$labels")
-done
-echo "--- label has no ob ---"
-obs=$(redis-cli --scan --pattern "ob:polymarket:*" | sed "s|ob:polymarket:||" | sort)
-comm -13 <(echo "$obs") <(echo "$labels")
+echo "--- labels ---"; redis-cli SCARD polymarket:label:index
+echo "--- base_slug-keyed orderbook keys (expect one per market) ---"
+redis-cli --scan --pattern "ob:polymarket:*"
+echo "--- legacy asset_id-keyed keys (expect none) ---"
+redis-cli --scan --pattern "ob:polymarket:*" | awk -F: '\''{print $3}'\'' | grep -E "^[0-9]{60,}$" || echo "(none)"
 '
 ```
 
