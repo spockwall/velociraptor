@@ -417,14 +417,19 @@ fn spawn_market_scheduler(
     let bounds_base_slug = base_slug.clone();
 
     tokio::spawn(async move {
-        run_rolling_scheduler(base_slug, interval_secs, move |full_slug| {
+        run_rolling_scheduler(base_slug, interval_secs, move |full_slug, _prefetched| {
             let args = args.clone();
             let bounds_base_slug = bounds_base_slug.clone();
             async move {
                 // For static markets (interval_secs == 0), win_start/end are 0.
                 // For windowed markets derive the file interval from the
-                // scheduler's target slug, not from `now`, so early-started
-                // tasks write into the correct future window.
+                // scheduler's target slug, not from `now`, so windows write
+                // into the correct file.
+                //
+                // The recorder doesn't need the pre-resolved tokens (it
+                // wraps `spawn_window`, which re-runs the resolver itself
+                // because it captures more than just the IDs). `_prefetched`
+                // is intentionally ignored.
                 let (win_start, win_end) = if interval_secs == 0 {
                     (0u64, 0u64)
                 } else {

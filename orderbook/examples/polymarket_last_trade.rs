@@ -151,11 +151,15 @@ async fn main() -> Result<()> {
         let ctrl_clone = ctrl.clone();
 
         let handle = tokio::spawn(async move {
-            run_rolling_scheduler(base_slug.clone(), market_clone.interval_secs, |full_slug| {
-                let m = market_clone.clone();
-                let base = base_slug.clone();
-                async move { spawn_trade_task(&m, base, full_slug).await }
-            })
+            run_rolling_scheduler(
+                base_slug.clone(),
+                market_clone.interval_secs,
+                |full_slug, _prefetched| {
+                    let m = market_clone.clone();
+                    let base = base_slug.clone();
+                    async move { spawn_trade_task(&m, base, full_slug).await }
+                },
+            )
             .await;
             ctrl_clone.shutdown();
         });

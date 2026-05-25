@@ -2,8 +2,11 @@
 //!
 //! The scheduler owns the market lifecycle:
 //!   - At startup, resolves the current window's token IDs and starts a MarketTask.
-//!   - `EARLY_START_SECS` before each window boundary, starts the next window's task.
-//!   - When a window expires, shuts down the old task and the new one takes over.
+//!   - During each window the scheduler prefetches the next window's
+//!     token IDs (inline future driven by the runtime alongside the
+//!     boundary `sleep`).
+//!   - At the window boundary, the old task is stopped and a new
+//!     MarketTask is started with the prefetched tokens — no overlap.
 //!   - The render loop reads from a shared SnapStore and draws at a fixed interval.
 //!
 //! Config is read from `configs/polymarket.yaml`.
@@ -158,12 +161,18 @@ fn spawn_scheduler(
             ui.ensure(&base_slug);
         }
 
-        run_rolling_scheduler(base_slug.clone(), market.interval_secs, move |full_slug| {
-            let market = market.clone();
-            let base_slug = base_slug.clone();
-            let store = store.clone();
-            async move { spawn_market_task(&market, base_slug, full_slug, store, depth).await }
-        })
+        run_rolling_scheduler(
+            base_slug.clone(),
+            market.interval_secs,
+            move |full_slug, _prefetched| {
+                // Example uses its own `spawn_market_task`, which re-runs the
+                // resolver. The scheduler's prefetched tokens are unused here.
+                let market = market.clone();
+                let base_slug = base_slug.clone();
+                let store = store.clone();
+                async move { spawn_market_task(&market, base_slug, full_slug, store, depth).await }
+            },
+        )
         .await;
     })
 }

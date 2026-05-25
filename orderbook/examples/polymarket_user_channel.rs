@@ -209,7 +209,7 @@ async fn main() -> Result<()> {
             let base = m.slug.clone();
             let interval = m.interval_secs;
             tokio::spawn(async move {
-                run_rolling_scheduler(base.clone(), interval, move |full_slug| {
+                run_rolling_scheduler(base.clone(), interval, move |full_slug, _prefetched| {
                     let creds = creds.clone();
                     let base = base.clone();
                     async move { spawn_user_channel_task(base, full_slug, creds).await }

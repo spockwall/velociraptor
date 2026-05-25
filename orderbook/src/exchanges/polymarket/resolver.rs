@@ -1,6 +1,19 @@
-//! Polymarket token resolution — calls the Gamma REST API at startup to convert
-//! slug-based config entries into `clobTokenIds` for WebSocket subscription,
-//! and spawns a rotator task that re-resolves tokens as rolling windows expire.
+//! Polymarket token resolution — calls the Gamma REST API to convert
+//! slug-based config entries into `clobTokenIds` for WebSocket
+//! subscription.
+//!
+//! Surface:
+//! - [`build_slug`] — slug → window-stamped slug.
+//! - [`resolve_assets_with_labels`] — resolve a list of market configs
+//!   synchronously (used by startup paths that need many markets).
+//! - [`resolve_one_slug_async`] — resolve a single already-stamped slug
+//!   async (used by the rolling-window scheduler to prefetch the next
+//!   window's tokens while the current one is still running).
+//!
+//! Both resolver entry points return [`PolymarketLabeledAsset`] tuples
+//! and share one private blocking core, [`resolve_one_blocking`], so
+//! the index→`is_up` mapping (Polymarket Gamma returns
+//! `["Yes", "No"]`, in that order) lives in exactly one place.
 
 use libs::configs::PolymarketMarketConfig;
 use libs::time::now_secs;
@@ -8,25 +21,44 @@ use tracing::{info, warn};
 
 const GAMMA_BASE: &str = "https://gamma-api.polymarket.com/markets/slug";
 
+/// One resolved Polymarket asset: `(token_id, base_slug, full_slug, is_up)`.
+///   - `base_slug` — the original slug from config (no timestamp)
+///   - `full_slug` — the fully-resolved slug with timestamp
+///   - `is_up`     — true = Up/Yes outcome, false = Down/No outcome
+pub type PolymarketLabeledAsset = (String, String, String, bool);
+
 // ── Slug computation ──────────────────────────────────────────────────────────
 
-/// Compute full slugs for a market entry.
-/// - Static market (`interval_secs == 0`): returns the slug as-is.
-/// - Rolling market: computes the current window-end timestamp and appends it,
-///   plus `prefetch_windows` future windows.
+/// Compute the full slug for a market entry.
+///   - Static market (`interval_secs == 0`): returns the slug as-is.
+///   - Rolling market: appends the current window's start timestamp.
 pub fn build_slug(base_slug: &str, interval_secs: u64) -> String {
     if interval_secs == 0 {
         return base_slug.to_string();
     }
     let now = now_secs();
-    // Current window start = floor(now / interval) * interval.
     let base_ts = (now / interval_secs) * interval_secs;
-    format!("{base_slug}-{base_ts}") // slug 
+    format!("{base_slug}-{base_ts}")
 }
 
-// ── REST resolution ───────────────────────────────────────────────────────────
+// ── REST helpers (blocking) ───────────────────────────────────────────────────
 
-/// Fetch `clobTokenIds` for a single slug. Returns an empty vec on 404.
+fn build_rest_client() -> Option<reqwest::blocking::Client> {
+    match reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => Some(c),
+        Err(e) => {
+            warn!("Failed to build HTTP client for Polymarket: {e}");
+            None
+        }
+    }
+}
+
+/// Fetch `clobTokenIds` for a single slug. Returns an empty vec on 404
+/// or any other failure (callers treat empty as "not open yet, retry").
 fn fetch_token_ids(client: &reqwest::blocking::Client, slug: &str) -> Vec<String> {
     let url = format!("{GAMMA_BASE}/{slug}");
     let result = client
@@ -59,54 +91,67 @@ fn fetch_token_ids(client: &reqwest::blocking::Client, slug: &str) -> Vec<String
     }
 }
 
-fn build_rest_client() -> Option<reqwest::blocking::Client> {
-    match reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => Some(c),
-        Err(e) => {
-            warn!("Failed to build HTTP client for Polymarket: {e}");
-            None
-        }
+/// **Shared core.** Resolve one (`base_slug`, `full_slug`) pair into
+/// labeled assets. Index 0 in Gamma's `clobTokenIds` is Yes/Up; index 1
+/// is No/Down. All other resolver entry points are thin wrappers around
+/// this function so the labelling lives in exactly one place.
+///
+/// Returns an empty vec on any failure (no tokens, REST error, 404).
+fn resolve_one_blocking(
+    client: &reqwest::blocking::Client,
+    base_slug: &str,
+    full_slug: &str,
+) -> Vec<PolymarketLabeledAsset> {
+    let ids = fetch_token_ids(client, full_slug);
+    if ids.is_empty() {
+        return Vec::new();
     }
-}
-
-// ── Startup resolution ────────────────────────────────────────────────────────
-
-/// Call the Gamma REST API to resolve token IDs for all enabled polymarket entries.
-/// Runs synchronously at startup — not on the hot path.
-pub fn resolve_assets(markets: &[PolymarketMarketConfig]) -> Vec<String> {
-    resolve_assets_with_labels(markets)
-        .into_iter()
-        .map(|(id, _, _, _)| id)
+    info!(
+        slug = full_slug,
+        tokens = ids.len(),
+        "Resolved Polymarket tokens"
+    );
+    ids.into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, base_slug.to_string(), full_slug.to_string(), i == 0))
         .collect()
 }
 
-/// Like `resolve_assets` but also returns routing info for each token ID.
+// ── Public entry points ───────────────────────────────────────────────────────
+
+/// Resolve token IDs for every enabled config entry. Synchronous —
+/// blocks the calling thread on the HTTP round-trips. Use only during
+/// process startup; the rolling-window scheduler uses
+/// [`resolve_one_slug_async`] on the hot path.
+///
 /// Returns `(token_id, base_slug, full_slug, is_up)` tuples.
-///   - `base_slug`  — the original slug from config (no timestamp), used as the panel key
-///   - `full_slug`  — the fully-resolved slug with timestamp (e.g. "btc-updown-5m-1775308500")
-///   - `is_up`      — true = Up/Yes outcome, false = Down/No outcome
 pub fn resolve_assets_with_labels(
     markets: &[PolymarketMarketConfig],
-) -> Vec<(String, String, String, bool)> {
+) -> Vec<PolymarketLabeledAsset> {
     let Some(client) = build_rest_client() else {
-        return vec![];
+        return Vec::new();
     };
-
     let mut assets = Vec::new();
     for m in markets.iter().filter(|m| m.enabled && !m.slug.is_empty()) {
-        let slug = build_slug(&m.slug, m.interval_secs);
-        let ids = fetch_token_ids(&client, &slug);
-        if !ids.is_empty() {
-            info!(slug, tokens = ids.len(), "Resolved Polymarket tokens");
-            // Index 0 = Up/Yes, index 1 = Down/No
-            for (i, id) in ids.into_iter().enumerate() {
-                assets.push((id, m.slug.clone(), slug.clone(), i == 0));
-            }
-        }
+        let full_slug = build_slug(&m.slug, m.interval_secs);
+        assets.extend(resolve_one_blocking(&client, &m.slug, &full_slug));
     }
     assets
+}
+
+/// Async wrapper that resolves a SINGLE already-stamped `full_slug`.
+/// Used by the rolling-window scheduler to prefetch the next window's
+/// tokens concurrently with its `sleep_until(win_end)`.
+pub async fn resolve_one_slug_async(
+    base_slug: String,
+    full_slug: String,
+) -> Vec<PolymarketLabeledAsset> {
+    tokio::task::spawn_blocking(move || {
+        let Some(client) = build_rest_client() else {
+            return Vec::new();
+        };
+        resolve_one_blocking(&client, &base_slug, &full_slug)
+    })
+    .await
+    .unwrap_or_default()
 }

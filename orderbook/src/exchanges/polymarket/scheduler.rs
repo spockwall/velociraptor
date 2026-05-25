@@ -1,26 +1,34 @@
 //! Rolling-window scheduler for Polymarket markets.
 //!
-//! Given a `base_slug` and a `interval_secs`, this scheduler:
+//! Given a `base_slug` and `interval_secs`, this scheduler:
 //! 1. Computes the current window end (`win_end = ceil(now / interval) * interval`).
 //! 2. Spawns a per-window task via a user-supplied async closure.
-//! 3. `EARLY_START_SECS` before `win_end`, pre-starts the next window's task.
-//! 4. When `win_end` passes, stops the old task; the next task becomes current.
+//! 3. Immediately kicks off an *inline* REST prefetch for the next
+//!    window's `clobTokenIds` (still inside this same scheduler task —
+//!    no extra spawn). The prefetch future runs concurrently with the
+//!    `sleep_until(win_end)` we're about to do, so by the boundary
+//!    we (almost always) have tokens in hand.
+//! 4. At `win_end`, await the prefetch future, stop the old task,
+//!    spawn the new one with the pre-resolved tokens. There is **no
+//!    overlap** — only one window publishes on `polymarket:{base_slug}`
+//!    at a time.
 //! 5. Loops.
 //!
-//! The scheduler owns no exchange-specific logic — the caller's `spawn_fn`
-//! does that (market channel, user channel, etc.). The scheduler only owns
-//! the timing and the lifecycle of `WindowTask` handles.
+//! Why no `EARLY_START_SECS` and no `tokio::spawn` for the prefetch:
+//! the scheduler's own task is already async, so awaiting a sleep
+//! drives any other future in scope. Kicking off the prefetch as a
+//! plain future and awaiting it after the sleep gives the same wall
+//! time as a separate task would, with less plumbing.
 
 use crate::connection::SystemControl;
+use crate::exchanges::polymarket::resolver::{PolymarketLabeledAsset, resolve_one_slug_async};
 use libs::time::now_secs;
 use std::future::Future;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tracing::{info, warn};
 
-/// How many seconds before a window ends to pre-start the next window's task.
-pub const EARLY_START_SECS: u64 = 10;
-
-/// A running per-window task (one connection for one `full_slug`).
+/// A running per-window task (one WS connection for one `full_slug`).
 pub struct WindowTask {
     pub full_slug: String,
     pub control: SystemControl,
@@ -36,25 +44,25 @@ impl WindowTask {
         }
     }
 
-    /// Request shutdown and give the task a moment to flush/cleanup before
-    /// forcing cancellation.
+    /// Request shutdown and give the task up to 5s to flush before
+    /// forcing cancellation. Detached.
     pub fn stop(self) {
         let full_slug = self.full_slug;
         let control = self.control;
         let mut handle = self.handle;
 
-        eprintln!("[scheduler] stopping task for {full_slug}");
+        info!(full_slug = %full_slug, "[scheduler] stopping task");
         control.shutdown();
 
         tokio::spawn(async move {
             tokio::select! {
                 result = &mut handle => {
                     if let Err(err) = result {
-                        eprintln!("[scheduler] task join error for {full_slug}: {err}");
+                        warn!(full_slug = %full_slug, "[scheduler] task join error: {err}");
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                    eprintln!("[scheduler] force-aborting task for {full_slug}");
+                    warn!(full_slug = %full_slug, "[scheduler] force-aborting task");
                     handle.abort();
                     let _ = handle.await;
                 }
@@ -64,9 +72,6 @@ impl WindowTask {
 }
 
 /// Compute `(win_start, win_end, full_slug)` for the current window.
-///
-/// `full_slug` is `base_slug-{win_start}` to match the convention used by the
-/// Polymarket Gamma API's rolling-market slugs.
 pub fn current_window(base_slug: &str, interval_secs: u64) -> (u64, u64, String) {
     let now = now_secs();
     let win_start = (now / interval_secs) * interval_secs;
@@ -77,20 +82,19 @@ pub fn current_window(base_slug: &str, interval_secs: u64) -> (u64, u64, String)
 
 /// Run the rolling-window loop for one market.
 ///
-/// `spawn_fn(full_slug)` is invoked each time a new window must be started;
-/// it returns `Some(WindowTask)` on success or `None` if the window could
-/// not be started (e.g. slug not yet resolvable — we retry on the next iteration).
-///
-/// Runs forever; returns only if `spawn_fn` panics or the future is dropped.
-/// Spawn it with `tokio::spawn(run_rolling_scheduler(...))`.
+/// `spawn_fn(full_slug, prefetched_tokens)` is invoked at each window
+/// boundary. `prefetched_tokens` is `Some` when the scheduler already
+/// resolved tokens for that slug; `None` only on the very first iteration
+/// (cold start). It must return `Some(WindowTask)` on success or `None`
+/// to ask the scheduler to retry the same slug 5s later.
 pub async fn run_rolling_scheduler<F, Fut>(base_slug: String, interval_secs: u64, mut spawn_fn: F)
 where
-    F: FnMut(String) -> Fut + Send,
+    F: FnMut(String, Option<Vec<PolymarketLabeledAsset>>) -> Fut + Send,
     Fut: Future<Output = Option<WindowTask>> + Send,
 {
     if interval_secs == 0 {
-        // Static market — start once and run forever.
-        if let Some(task) = spawn_fn(base_slug.clone()).await {
+        // Static market — start once and run forever, no prefetch.
+        if let Some(task) = spawn_fn(base_slug.clone(), None).await {
             let _ = task.handle.await;
         }
         return;
@@ -101,47 +105,60 @@ where
     loop {
         let (_, win_end, full_slug) = current_window(&base_slug, interval_secs);
 
-        // Start current window if not already running.
-        let needs_spawn = current
+        // Cold start (no current task) or the loop fell behind a clock
+        // tick — spawn with None and let spawn_fn do the inline fetch.
+        if current
             .as_ref()
             .map(|t| t.full_slug != full_slug)
-            .unwrap_or(true);
-        if needs_spawn {
+            .unwrap_or(true)
+        {
             if let Some(old) = current.take() {
                 old.stop();
             }
-            current = spawn_fn(full_slug.clone()).await;
+            current = spawn_fn(full_slug.clone(), None).await;
             if current.is_none() {
-                eprintln!("[scheduler] spawn failed for {full_slug}; retrying in 5s");
+                warn!(full_slug = %full_slug, "[scheduler] spawn failed; retrying in 5s");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
         }
 
-        // Sleep until EARLY_START_SECS before this window ends.
-        let secs_until_early = win_end
-            .saturating_sub(now_secs())
-            .saturating_sub(EARLY_START_SECS);
-        if secs_until_early > 0 {
-            tokio::time::sleep(Duration::from_secs(secs_until_early)).await;
-        }
+        // ── Prefetch + sleep run concurrently ────────────────────────
+        // Kick off the next window's REST resolve as a plain future
+        // (no `tokio::spawn`). We won't await it until after the sleep,
+        // and the sleep is itself an await point — so the runtime will
+        // drive both forward in parallel within this single task.
+        let next_full_slug = format!("{base_slug}-{win_end}");
+        let prefetch = resolve_one_slug_async(base_slug.clone(), next_full_slug.clone());
 
-        // Pre-start next window.
-        let next_win_start = win_end;
-        let next_full_slug = format!("{base_slug}-{next_win_start}");
-        eprintln!("[scheduler] pre-starting next window: {next_full_slug}");
-        let next_task = spawn_fn(next_full_slug).await;
-
-        // Wait for current window to fully expire.
         let remaining = win_end.saturating_sub(now_secs());
-        if remaining > 0 {
-            tokio::time::sleep(Duration::from_secs(remaining)).await;
+        let sleep = tokio::time::sleep(Duration::from_secs(remaining));
+
+        // tokio::join! polls both futures cooperatively. By the time
+        // the sleep wakes us (`remaining` seconds), the prefetch has
+        // almost certainly resolved. If it hasn't, this awaits it —
+        // the public topic stays silent until tokens arrive.
+        let (tokens, _) = tokio::join!(prefetch, sleep);
+        if tokens.is_empty() {
+            warn!(full_slug = %next_full_slug, "[scheduler] prefetch returned no tokens; falling back to inline fetch");
         }
 
-        // Stop old; promote next.
+        // Stop old; spawn new with the pre-resolved tokens. Order matters:
+        // stop FIRST so only one publisher is ever on the topic.
         if let Some(old) = current.take() {
             old.stop();
         }
-        current = next_task;
+
+        let tokens = if tokens.is_empty() {
+            warn!("Prefetch Token not found");
+            None
+        } else {
+            Some(tokens)
+        };
+        current = spawn_fn(next_full_slug.clone(), tokens).await;
+        if current.is_none() {
+            warn!(full_slug = %next_full_slug, "[scheduler] next-window spawn failed; retrying top-of-loop in 5s");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 }
