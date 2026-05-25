@@ -51,6 +51,7 @@ mod tests {
             qty: 10.0,
             fee: 0.01,
             ts_ns: 0,
+            trade_status: None,
             maker_orders: None,
         }
     }
