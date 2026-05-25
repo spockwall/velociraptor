@@ -6,7 +6,10 @@ lets producers, the dispatcher, and tests share one definition without
 importing the threading machinery.
 
 Producers and the event each type represents:
-  - `MarketFeed`  → `QuoteEvent` / `TradeEvent` / `RolloverEvent`
+  - `Engine`      → `BootstrapEvent` (once, at startup, for
+                    window-strategies)
+  - `MarketFeed`  → `QuoteEvent` / `SnapshotEvent` / `TradeEvent` /
+                    `RolloverEvent`
   - `UserFeed`    → `FillEvent` / `OrderUpdateEvent`
   - shutdown      → `ShutdownEvent` (enqueued last; drains the rest first)
 
@@ -49,14 +52,32 @@ class TradeEvent:
 
 
 @dataclasses.dataclass(frozen=True)
+class BootstrapEvent:
+    """Fired once by the engine at process start for every
+    window-based strategy. Carries the current window's `full_slug`
+    (computed from base_slug + clock — see `market.gamma.current_full_slug`
+    + `interval_secs_from_base_slug`) so the dispatcher can resolve
+    asset_ids via `MarketState.on_rollover` BEFORE any quote arrives.
+
+    Distinct from `RolloverEvent` on purpose: bootstrap is a
+    process-lifecycle event with a different trigger (no prior frame,
+    slug derived from the clock); the dispatcher does NOT fire the
+    strategy's `_on_rollover` callback on bootstrap. Strategies see
+    asset_ids materialised on first `_on_quote` instead."""
+
+    exchange: str
+    base_slug: str
+    full_slug: str
+
+
+@dataclasses.dataclass(frozen=True)
 class RolloverEvent:
     """Fired by `MarketFeed` when the payload `full_slug` field on a
-    rolling topic differs from the last seen value, and also synthesised
-    once by the engine at startup so the bootstrap path goes through
-    the same dispatcher code. Carries `(exchange, base_slug,
-    full_slug)`; per-token asset_ids are resolved by
-    `MarketState.on_rollover` (Gamma) before strategy callbacks
-    fire, then read via `MarketState.asset_ids`."""
+    rolling topic differs from the last seen value. Carries
+    `(exchange, base_slug, full_slug)`; per-token asset_ids are
+    resolved by `MarketState.on_rollover` (Gamma) before strategy
+    `_on_rollover` callbacks fire, then read via
+    `MarketState.asset_ids`."""
 
     exchange: str
     base_slug: str
@@ -82,6 +103,7 @@ class ShutdownEvent:
 
 
 Event = Union[
+    BootstrapEvent,
     QuoteEvent,
     SnapshotEvent,
     TradeEvent,
