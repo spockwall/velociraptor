@@ -2,30 +2,26 @@
 
 Single Polymarket quote callback. On the first quote that passes the
 safe-mid guard, fires an IOC market order via `OrderRouter.place_market`
-and latches `_filled_this_window`. A subsequent rollover clears the
-latch for the new window.
+and latches `_sent_this_window`. A rollover clears the latch for the
+new window.
 
 Market orders fill or fail immediately, so there's no resting state
 to track — no cancel/replace dance. The `q` argument to `_on_quote`
-is still used as a freshness signal (we only place after seeing at
-least one valid book), but the price comes from the venue's match
-engine, not from us.
+is just a freshness signal (we only place after seeing at least one
+valid book); the price comes from the venue's match engine.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 
 from ...market import Quote
-from ...typings.state import OrderRecord
 from ..dispatcher import Dispatcher
 from .base import Strategy
 from ..helpers import (
     PIN_PX,
     SAFE_MID_HIGH,
     SAFE_MID_LOW,
-    qty_for_notional,
     safe_mid_guard,
 )
 
@@ -80,11 +76,18 @@ class FillOnceStrategy(Strategy):
     # ── handlers ──
 
     def _on_rollover(self, full_slug: str, asset_id: str) -> None:
+        # The zmq_server scheduler now spawns each window only AT the
+        # boundary (no pre-spawn), so a rollover event corresponds 1:1
+        # to a real window transition — no flap, no re-emit.
+        prev_full = self.window.full_slug
         self.window.full_slug = full_slug
         self.window.up_asset_id = asset_id
-        # New window → clear latches so we fire again.
         self._sent_this_window = False
         self._filled_this_window = False
+        log.info(
+            f"[{self.label}] rollover {prev_full!r} → {full_slug!r} "
+            f"asset={asset_id}"
+        )
 
     def _on_quote(self, q: Quote) -> None:
         if self._sent_this_window:
@@ -106,50 +109,54 @@ class FillOnceStrategy(Strategy):
         ):
             return
 
-        # Use the ask as the px reference *only* for qty sizing
-        # (notional / px → shares). The exchange ignores px on a
-        # market order; we just need a non-zero reference.
-        ref_px = q.best_ask if q.best_ask is not None else q.mid
-        if ref_px is None or ref_px <= 0:
+        # Freshness gate: only fire after seeing at least one valid
+        # book. The price itself isn't needed — for a Polymarket market
+        # BUY we send USDC notional, and the venue walks the asks
+        # itself.
+        if q.best_ask is None and q.mid is None:
             return
-        target_qty = qty_for_notional(self.order_notional_usd, ref_px)
-        if target_qty <= 0:
+
+        # Polymarket market BUY: `qty` is USDC notional, rounded to 2
+        # decimals so the venue's precision check on the maker amount
+        # passes (it rejects >2 decimal places).
+        target_qty_usdc = round(self.order_notional_usd, 2)
+        if target_qty_usdc <= 0:
             return
 
         slug = self.window.full_slug or self.window.base_slug
-        client_oid = f"te-fill-mkt-{slug[:18]}-{int(time.time() * 1000)}"
+        # `client_oid` is deterministic per (window, asset_id) so that a
+        # repeat fire — for any reason: rollover re-emit, snapshot
+        # replay, retry storm — re-uses the same id and hits the
+        # executor's idempotency cache instead of placing a new order.
+        # This is a belt-and-braces fallback on top of the
+        # `_sent_this_window` latch + the `_on_rollover` no-change guard.
+        client_oid = f"te-fill-mkt-{slug[:24]}-{asset_id[:10]}"
+        # Latch BEFORE the call: one window = one attempt, regardless of
+        # success or failure. Any response (ack or exception) is terminal
+        # for the window; the next firing waits for rollover.
+        self._sent_this_window = True
+        log.info(
+            f"[{self.label}] FILL_ONCE place_market notional=${target_qty_usdc:.2f} "
+            f"tif={self.market_tif} client_oid={client_oid}"
+        )
         try:
             ack = self.router.place_market(
                 symbol=asset_id,
                 side="buy",
-                qty=target_qty,
+                qty=target_qty_usdc,
                 client_oid=client_oid,
                 tif=self.market_tif,
                 **self._attribution(),
             )
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"[{self.label}] FILL_ONCE place_market failed: {e}")
-            return
-
-        # Latch immediately so a subsequent quote in the same window
-        # doesn't re-fire even if the ack races the next callback.
-        self._sent_this_window = True
-        oid = ack.get("exchange_oid")
-        self.state.orders.add(
-            OrderRecord(
-                client_oid=client_oid,
-                side_name="up",
-                symbol=asset_id,
-                direction="buy",
-                px=ref_px,  # reference only — market order has no limit
-                qty=target_qty,
-                exchange_oid=oid,
+            log.info(
+                f"[{self.label}] FILL_ONCE ack "
+                f"oid={ack.get('exchange_oid')} status={ack.get('status')}"
             )
-        )
-        log.info(
-            f"[{self.label}] FILL_ONCE place_market qty={target_qty:.2f} "
-            f"tif={self.market_tif} ref_ask={ref_px:.4f} oid={oid}"
-        )
+        except Exception as e:  # noqa: BLE001
+            # Latch stays True: one window = one attempt. Investigate
+            # in the logs / executor audit; we will not retry until
+            # the next rollover.
+            log.warning(f"[{self.label}] FILL_ONCE place_market failed: {e}")
 
     def _on_order_update(self, ev: dict) -> None:
         oid = ev.get("exchange_oid")
