@@ -17,6 +17,7 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+csv = { workspace = true }
 dashmap = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }

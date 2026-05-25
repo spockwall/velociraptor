@@ -1972,6 +1972,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "csv",
  "dashmap",
  "governor",
  "hex",
