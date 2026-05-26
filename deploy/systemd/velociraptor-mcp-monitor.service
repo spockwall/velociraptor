@@ -1,0 +1,19 @@
+[Unit]
+Description=Velociraptor MCP monitoring server
+Documentation=https://github.com/spockwall/velociraptor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+WorkingDirectory=/home/ben/velociraptor/mcp_monitor
+ExecStartPre=/usr/bin/test -x /home/ben/velociraptor/mcp_monitor/.venv/bin/python
+ExecStart=/home/ben/velociraptor/mcp_monitor/.venv/bin/python monitoring_server.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
