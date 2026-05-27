@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -220,7 +221,15 @@ class EventLog:
         # so the dict-merge below already flattens correctly.
         if isinstance(event, dict):
             for k, v in event.items():
-                if k in _EVENT_COLS:
+                if k not in _EVENT_COLS:
+                    continue
+                # `maker_orders` arrives as a list[dict] from msgpack.
+                # JSON-encode it so the CSV cell is a clean parseable
+                # blob (Python repr would use single quotes and break
+                # `json.loads` round-trips).
+                if k == "maker_orders" and isinstance(v, list):
+                    row[k] = json.dumps(v, default=str)
+                else:
                     row[k] = v
             # Some Polymarket fills carry ts_ns inside the event; prefer
             # ours (wall clock at receive) for ordering.
