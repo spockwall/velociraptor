@@ -181,5 +181,8 @@ Fastest error view for a recorder:
 
 - `deploy/systemd/README.md` — full reference (this skill is the summary)
 - `deploy/systemd/update.sh` — the upgrade automation
+- `mcp_monitor/` — sidecar MCP server (`velociraptor-mcp-monitor.service`)
+  that exposes these units' health + system CPU/RAM as MCP tools for Claude
+  Code. Read-only plus a single allowlisted `restart_unit` mutation.
 - `velociraptor-storage` skill — the MessagePack files the recorders write
 - `velociraptor-overview` skill — workspace/crate map
