@@ -80,7 +80,18 @@ pub enum UserEvent {
         /// without a known client_oid (e.g. trades on the taker side
         /// where we only know the taker_oid).
         client_oid: Option<String>,
-        exchange_oid: String,
+        /// Exchange-side order id when the venue identifies a single
+        /// order on the fill. `None` for venues whose fill event does
+        /// not carry an order id (Polymarket trade events report a
+        /// trade UUID, not an order id — use `taker_oid` / `maker_orders`
+        /// to match the fill to placed orders).
+        exchange_oid: Option<String>,
+        /// Venue-assigned trade id when available. Polymarket emits a
+        /// UUID per matched trade; other venues may leave this `None`.
+        /// Distinct from `exchange_oid` (which identifies an order, not
+        /// an execution).
+        #[serde(default)]
+        trade_id: Option<String>,
         symbol: String,
         side: Side,
         px: f64,
@@ -122,7 +133,8 @@ mod tests {
             exchange: "polymarket".into(),
             taker_oid: Some("c1".into()),
             client_oid: None,
-            exchange_oid: "x1".into(),
+            exchange_oid: None,
+            trade_id: Some("trade-abc".into()),
             symbol: "TRUMP-2028".into(),
             side: Side::Buy,
             px: 0.42,

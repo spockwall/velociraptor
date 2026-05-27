@@ -102,7 +102,8 @@ def _fmt_event(topic: str, ev: dict[str, Any]) -> str:
         return (
             f"[{ts}] {topic}  side={ev.get('side')}  "
             f"px={ev.get('px')}  qty={ev.get('qty')}  "
-            f"oid={ev.get('exchange_oid')}  client={ev.get('client_oid')}"
+            f"trade={ev.get('trade_id')}  taker={ev.get('taker_oid')}  "
+            f"client={ev.get('client_oid')}"
         )
     if kind == "order_update":
         return (

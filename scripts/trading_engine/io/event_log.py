@@ -79,6 +79,10 @@ _EVENT_COLS = [
     # both (when known)
     "client_oid",
     "exchange_oid",
+    # fill-only (Polymarket emits a UUID per matched trade; the venue
+    # does NOT publish an order id on fills, so use this + `taker_oid` +
+    # `maker_orders` to match fills back to placed orders).
+    "trade_id",
     # fill-only, exchange-specific blob (Polymarket maker_orders list,
     # JSON-encoded by the recorder; for events the value is whatever the
     # `event` payload carried, msgpack-decoded into a Python object).

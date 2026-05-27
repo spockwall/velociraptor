@@ -140,7 +140,7 @@ fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
             );
         }
         StreamMessage::UserEvent(UserEvent::Fill {
-            exchange_oid,
+            trade_id,
             taker_oid,
             symbol,
             side,
@@ -149,7 +149,7 @@ fn print_msg(base: &str, full: &str, msg: &StreamMessage) {
             ..
         }) => {
             eprintln!(
-                "[{tag}] FILL {side:?} px={px:.4} qty={qty:.4} trade={exchange_oid} taker={taker_oid:?} asset={symbol}"
+                "[{tag}] FILL {side:?} px={px:.4} qty={qty:.4} trade={trade_id:?} taker={taker_oid:?} asset={symbol}"
             );
         }
         StreamMessage::OrderbookUpdate(u) => {

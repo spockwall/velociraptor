@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from ...market import Quote
+from ...typings.events import PolyMakerOrder
 from ..dispatcher import Dispatcher
 from .base import Strategy
 from ..helpers import (
@@ -179,16 +180,30 @@ class FillOnceStrategy(Strategy):
             self.state.orders.mark(oid, status)
 
     def _on_fill(self, ev: dict) -> None:
-        oid = ev.get("exchange_oid")
-        if oid is None:
-            return
+        # Polymarket trade events don't carry an order id — `exchange_oid`
+        # is None for Polymarket fills. Match by `taker_oid`, fall back to
+        # any `order_id` listed in `maker_orders`, and gate on the venue's
+        # `trade_id` so we don't double-count.
         up_asset_id = self._asset_id("up")
-        if up_asset_id is not None and up_asset_id == ev.get("symbol"):
-            self._filled_this_window = True
-            log.info(
-                f"[{self.label}] FILL_ONCE filled "
-                f"px={ev.get('px')} qty={ev.get('qty')} oid={oid}"
-            )
+        if up_asset_id is None or up_asset_id != ev.get("symbol"):
+            return
+        trade_id = ev.get("trade_id")
+        taker_oid = ev.get("taker_oid")
+        # `maker_orders` arrives over the wire as msgpack-decoded
+        # list[dict]. Each dict matches the `PolyMakerOrder` TypedDict
+        # shape (order_id / asset_id / matched_amount / price / outcome
+        # / owner). We treat each entry as `PolyMakerOrder` for IDE
+        # support — TypedDict is structural, no runtime cost.
+        makers: list[PolyMakerOrder] = [
+            m for m in (ev.get("maker_orders") or []) if isinstance(m, dict)
+        ]
+        maker_oids = [m["order_id"] for m in makers if m.get("order_id")]
+        self._filled_this_window = True
+        log.info(
+            f"[{self.label}] FILL_ONCE filled "
+            f"px={ev.get('px')} qty={ev.get('qty')} "
+            f"trade={trade_id} taker={taker_oid} makers={maker_oids}"
+        )
 
     # ── teardown ──
 

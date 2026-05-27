@@ -336,10 +336,14 @@ impl PolymarketMessageParser {
             exchange: "polymarket".into(),
             taker_oid,
             // Polymarket trade events don't carry a client_oid distinct from
-            // the taker_oid; downstream consumers can match by exchange_oid
-            // against the corresponding `OrderUpdate`.
+            // the taker_oid; downstream consumers can match the fill to
+            // placed orders via `taker_oid` + `maker_orders`.
             client_oid: None,
-            exchange_oid: t.id,
+            // Polymarket's trade event carries a trade UUID (`t.id`), NOT
+            // an order id, so `exchange_oid` stays `None`. The UUID lives
+            // in `trade_id` below.
+            exchange_oid: None,
+            trade_id: Some(t.id),
             symbol: t.asset_id,
             side,
             px,
@@ -548,6 +552,7 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         let StreamMessage::UserEvent(UserEvent::Fill {
             exchange_oid,
+            trade_id,
             taker_oid,
             symbol,
             side,
@@ -559,7 +564,13 @@ mod tests {
             panic!("expected UserEvent::Fill")
         };
 
-        assert_eq!(exchange_oid, "28c4d2eb-bbea-40e7-a9f0-b2fdb56b2c2e");
+        // Polymarket trade events don't expose an order id — `exchange_oid`
+        // is None and the trade UUID lives in `trade_id`.
+        assert_eq!(exchange_oid.as_deref(), None);
+        assert_eq!(
+            trade_id.as_deref(),
+            Some("28c4d2eb-bbea-40e7-a9f0-b2fdb56b2c2e"),
+        );
         assert_eq!(
             taker_oid.as_deref(),
             Some("0x06bc63e346ed4ceddce9efd6b3af37c8f8f440c92fe7da6b2d0f9e4ccbc50c42"),

@@ -169,7 +169,12 @@ pub struct UserEventRecord {
     pub taker_oid: Option<String>,
     /// Client order id when known (order_update always; fill optionally).
     pub client_oid: Option<String>,
-    pub exchange_oid: String,
+    /// Exchange-side order id. `None` for Polymarket fills (the venue
+    /// doesn't expose an order id on trade events — match via
+    /// `taker_oid` + `maker_orders` instead).
+    pub exchange_oid: Option<String>,
+    /// Venue-assigned trade id (fill only; Polymarket emits a UUID).
+    pub trade_id: Option<String>,
     /// Exchange-specific maker-order list (fill only, Polymarket today).
     /// Serialised as a JSON string so the value fits in one CSV cell.
     pub maker_orders: Option<String>,
@@ -183,6 +188,7 @@ impl UserEventRecord {
                 taker_oid,
                 client_oid,
                 exchange_oid,
+                trade_id,
                 symbol,
                 side,
                 px,
@@ -205,6 +211,7 @@ impl UserEventRecord {
                 taker_oid: taker_oid.clone(),
                 client_oid: client_oid.clone(),
                 exchange_oid: exchange_oid.clone(),
+                trade_id: trade_id.clone(),
                 maker_orders: maker_orders
                     .as_ref()
                     .and_then(|v| serde_json::to_string(v).ok()),
@@ -233,7 +240,8 @@ impl UserEventRecord {
                 fee: None,
                 taker_oid: None,
                 client_oid: Some(client_oid.clone()),
-                exchange_oid: exchange_oid.clone(),
+                exchange_oid: Some(exchange_oid.clone()),
+                trade_id: None,
                 maker_orders: None,
             },
         }
