@@ -1,109 +1,42 @@
-//! Flat record types persisted to CSV.
+//! Record types persisted by the recorder.
 //!
-//! Every record is `Serialize` with no nested fields — the `csv` crate
-//! writes one row per record, header row first. Fields that don't apply
-//! to a given record (e.g. `fee` on an order_update) are `Option<...>`
-//! and serialize as empty cells.
+//! - `SnapshotRecord` / `TradeRecord` are serialized to **MessagePack** by
+//!   `writer.rs` (and by `polymarket_recorder`) via `rmp_serde::to_vec_named`,
+//!   one length-prefixed frame per record. They carry no `exchange`/`symbol` —
+//!   those are encoded in the file path.
+//! - `UserEventRecord` is the **CSV** row for the low-volume user-event stream;
+//!   it's flat with no nested fields, and per-variant exclusives (e.g. `fee` on
+//!   a fill, `filled`/`status` on an order_update) are `Option<...>` so they
+//!   serialize as empty cells where they don't apply.
 
 use crate::event::{LastTradePrice, OrderbookSnapshot, UserEvent};
 use serde::Serialize;
 
 // ── Snapshots ────────────────────────────────────────────────────────────────
 
-/// One persisted snapshot row.
+/// One persisted snapshot record (MessagePack).
 ///
-/// Bids and asks are stored as parallel arrays. The `depth` config field
-/// controls how many levels we keep. CSV writers expand each level into
-/// two columns (`bid0_px`, `bid0_qty`, ...) via `row(...)` — see writer.rs.
-/// Msgpack consumers (e.g. `polymarket_recorder` binary) serialize this
-/// struct directly via `Serialize`.
+/// Bids and asks are stored as parallel `[price, qty]` arrays, best first; the
+/// `depth` argument to `from_snapshot` caps how many levels are kept. Derived
+/// metrics (`best_bid_px`, `spread`, `mid`, `wmid`) are intentionally NOT
+/// stored — they're recomputed at read time from `bids`/`asks` — so the
+/// on-disk record stays small. `exchange`/`symbol` live in the file path.
 #[derive(Serialize)]
 pub struct SnapshotRecord {
     pub sequence: u64,
     pub ts_ns: i64,
-    pub best_bid_px: Option<f64>,
-    pub best_bid_qty: Option<f64>,
-    pub best_ask_px: Option<f64>,
-    pub best_ask_qty: Option<f64>,
-    pub spread: Option<f64>,
-    pub mid: Option<f64>,
-    #[serde(skip)]
-    pub depth_levels: usize,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
 }
 
 impl SnapshotRecord {
     pub fn from_snapshot(snap: &OrderbookSnapshot, depth: usize) -> Self {
-        let best_bid_px = snap.best_bid.map(|(p, _)| p);
-        let best_bid_qty = snap.best_bid.map(|(_, q)| q);
-        let best_ask_px = snap.best_ask.map(|(p, _)| p);
-        let best_ask_qty = snap.best_ask.map(|(_, q)| q);
-        let mid = match (best_bid_px, best_ask_px) {
-            (Some(b), Some(a)) => Some((b + a) / 2.0),
-            _ => None,
-        };
         Self {
             sequence: snap.sequence,
             ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
-            best_bid_px,
-            best_bid_qty,
-            best_ask_px,
-            best_ask_qty,
-            spread: snap.spread,
-            mid,
-            depth_levels: depth,
             bids: snap.bids[..snap.bids.len().min(depth)].to_vec(),
             asks: snap.asks[..snap.asks.len().min(depth)].to_vec(),
         }
-    }
-
-    /// CSV header row for this depth. Caller writes it once per new file.
-    pub fn header(depth: usize) -> Vec<String> {
-        let mut h = vec![
-            "ts_ns".to_string(),
-            "sequence".to_string(),
-            "best_bid_px".to_string(),
-            "best_bid_qty".to_string(),
-            "best_ask_px".to_string(),
-            "best_ask_qty".to_string(),
-            "spread".to_string(),
-            "mid".to_string(),
-        ];
-        for i in 0..depth {
-            h.push(format!("bid{i}_px"));
-            h.push(format!("bid{i}_qty"));
-        }
-        for i in 0..depth {
-            h.push(format!("ask{i}_px"));
-            h.push(format!("ask{i}_qty"));
-        }
-        h
-    }
-
-    /// CSV row as a flat vec of strings. Aligns 1-to-1 with `header(depth)`.
-    pub fn row(&self) -> Vec<String> {
-        let mut r = vec![
-            self.ts_ns.to_string(),
-            self.sequence.to_string(),
-            fmt_opt(self.best_bid_px),
-            fmt_opt(self.best_bid_qty),
-            fmt_opt(self.best_ask_px),
-            fmt_opt(self.best_ask_qty),
-            fmt_opt(self.spread),
-            fmt_opt(self.mid),
-        ];
-        for i in 0..self.depth_levels {
-            let (p, q) = self.bids.get(i).copied().unwrap_or((f64::NAN, f64::NAN));
-            r.push(fmt_f(p));
-            r.push(fmt_f(q));
-        }
-        for i in 0..self.depth_levels {
-            let (p, q) = self.asks.get(i).copied().unwrap_or((f64::NAN, f64::NAN));
-            r.push(fmt_f(p));
-            r.push(fmt_f(q));
-        }
-        r
     }
 }
 
@@ -245,30 +178,5 @@ impl UserEventRecord {
                 maker_orders: None,
             },
         }
-    }
-
-    /// Single CSV file under `events/`; `kind` discriminates variants in
-    /// the `type` column.
-    pub fn dir_name() -> &'static str {
-        "events"
-    }
-}
-
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-fn fmt_opt(x: Option<f64>) -> String {
-    match x {
-        Some(v) => fmt_f(v),
-        None => String::new(),
-    }
-}
-
-fn fmt_f(x: f64) -> String {
-    if x.is_nan() {
-        String::new()
-    } else {
-        // Compact, no trailing zeros, no scientific notation for typical
-        // price ranges. `{}` formatting on f64 gives this for us.
-        format!("{x}")
     }
 }
