@@ -14,7 +14,7 @@
 //! gaps automatically.
 //!
 //! Run:
-//!   cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml
+//!   cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

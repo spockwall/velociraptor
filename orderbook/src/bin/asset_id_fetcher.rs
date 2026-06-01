@@ -24,7 +24,7 @@
 //! ticker, not a yes/no token pair, so there's nothing analogous to record.
 //!
 //! Run:
-//!   cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml
+//!   cargo run --bin asset_id_fetcher --release -- --config configs/fetcher.yaml
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -246,9 +246,7 @@ async fn run_job(
                 window_start += interval_secs;
                 continue;
             }
-            match fetch_one_window(&http, &archive, &base_slug, interval_secs, window_start)
-                .await
-            {
+            match fetch_one_window(&http, &archive, &base_slug, interval_secs, window_start).await {
                 Ok(true) => wrote += 1,
                 Ok(false) => {}
                 Err(e) => {
