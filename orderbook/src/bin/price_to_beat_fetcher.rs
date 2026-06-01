@@ -17,7 +17,6 @@
 //!   cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -26,6 +25,7 @@ use clap::Parser;
 use libs::configs::Config;
 use libs::endpoints::kalshi::kalshi as kalshi_ep;
 use orderbook::exchanges::kalshi::build_market_ticker;
+use recorder::CsvArchive;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
@@ -165,63 +165,35 @@ async fn fetch_kalshi(http: &reqwest::Client, ticker: &str) -> Result<Targets> {
 }
 
 // ── CSV layer ───────────────────────────────────────────────────────────────
-
-fn csv_path(root: &Path, exchange: &str, base_slug: &str, day: DateTime<Utc>) -> PathBuf {
-    root.join(exchange)
-        .join(base_slug)
-        .join(format!("{}.csv", day.format("%Y-%m-%d")))
-}
+//
+// All file mechanics (append-with-header, read-all, daily paths) live in
+// `recorder::CsvArchive`. Here we only define the per-market partition
+// (`{exchange}/{base_slug}`) and the `window_start` dedup key.
 
 /// Walk every CSV under `{root}/{exchange}/{base_slug}/` and return the set
 /// of `window_start` timestamps already on disk. Used for dedup.
-fn known_window_starts(root: &Path, exchange: &str, base_slug: &str) -> HashSet<i64> {
-    let dir = root.join(exchange).join(base_slug);
-    let mut seen = HashSet::new();
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return seen;
-    };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("csv") {
-            continue;
-        }
-        let Ok(mut rdr) = csv::Reader::from_path(&p) else {
-            continue;
-        };
-        for row in rdr.deserialize::<CsvRow>().flatten() {
-            seen.insert(row.window_start);
-        }
-    }
-    seen
+fn known_window_starts(archive: &CsvArchive, exchange: &str, base_slug: &str) -> HashSet<i64> {
+    archive
+        .read_dir::<CsvRow>(&[exchange, base_slug])
+        .into_iter()
+        .map(|r| r.window_start)
+        .collect()
 }
 
 /// Largest `window_start` already on disk for this market, or `None` if
 /// nothing has been recorded yet.
-fn latest_window_start(root: &Path, exchange: &str, base_slug: &str) -> Option<i64> {
-    known_window_starts(root, exchange, base_slug)
+fn latest_window_start(archive: &CsvArchive, exchange: &str, base_slug: &str) -> Option<i64> {
+    known_window_starts(archive, exchange, base_slug)
         .into_iter()
         .max()
 }
 
-fn append_csv(root: &Path, row: &CsvRow) -> Result<()> {
+fn append_csv(archive: &CsvArchive, row: &CsvRow) -> Result<()> {
     let day =
         DateTime::<Utc>::from_timestamp(row.window_start, 0).context("invalid window_start")?;
-    let path = csv_path(root, &row.exchange, &row.base_slug, day);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("mkdir csv parent")?;
-    }
-    let new_file = !path.exists();
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .context("open csv")?;
-    let mut wtr = csv::WriterBuilder::new()
-        .has_headers(new_file)
-        .from_writer(file);
-    wtr.serialize(row).context("serialize row")?;
-    wtr.flush().context("flush csv")?;
-    Ok(())
+    // Partition by exchange/base_slug; file is the window-start UTC day.
+    let path = archive.daily_path(&[&row.exchange, &row.base_slug], day);
+    archive.append(&path, row)
 }
 
 fn direction(price_to_beat: Option<f64>, final_price: Option<f64>) -> &'static str {
@@ -346,7 +318,7 @@ impl Job {
 /// not yet resolved), or `Err` on transport failure.
 async fn fetch_one_window(
     http: &reqwest::Client,
-    archive_dir: &Path,
+    archive: &CsvArchive,
     job: &Job,
     window_start: i64,
 ) -> Result<bool> {
@@ -357,7 +329,7 @@ async fn fetch_one_window(
             let t = fetch_polymarket(http, &slug).await?;
             if let Some(row) = build_row("polymarket", base_slug, &slug, window_start, interval, &t)
             {
-                append_csv(archive_dir, &row)?;
+                append_csv(archive, &row)?;
                 Ok(true)
             } else {
                 debug!(slug, state = ?t.state, "polymarket: no data yet");
@@ -368,7 +340,7 @@ async fn fetch_one_window(
             let ticker = kalshi_ticker_for_window(series, window_start, interval)?;
             let t = fetch_kalshi(http, &ticker).await?;
             if let Some(row) = build_row("kalshi", series, &ticker, window_start, interval, &t) {
-                append_csv(archive_dir, &row)?;
+                append_csv(archive, &row)?;
                 Ok(true)
             } else {
                 debug!(ticker, state = ?t.state, "kalshi: no data yet");
@@ -382,7 +354,7 @@ async fn fetch_one_window(
 async fn run_job(
     job: Job,
     http: reqwest::Client,
-    archive_dir: PathBuf,
+    archive: CsvArchive,
     seed_from_ts: i64,
     lookback_secs: i64,
 ) {
@@ -391,7 +363,7 @@ async fn run_job(
     let ident = job.ident().to_string();
 
     // ── 1) Auto-backfill ────────────────────────────────────────────────────
-    let resume_from = match latest_window_start(&archive_dir, exchange, &ident) {
+    let resume_from = match latest_window_start(&archive, exchange, &ident) {
         Some(latest) => latest + interval,
         None => (seed_from_ts / interval) * interval,
     };
@@ -407,7 +379,7 @@ async fn run_job(
             count = (cutoff - resume_from) / interval,
             "auto-backfill: starting"
         );
-        let already = known_window_starts(&archive_dir, exchange, &ident);
+        let already = known_window_starts(&archive, exchange, &ident);
         let mut window_start = resume_from;
         let (mut wrote, mut skipped, mut errs) = (0usize, 0usize, 0usize);
         while window_start < cutoff {
@@ -416,7 +388,7 @@ async fn run_job(
                 window_start += interval;
                 continue;
             }
-            match fetch_one_window(&http, &archive_dir, &job, window_start).await {
+            match fetch_one_window(&http, &archive, &job, window_start).await {
                 Ok(true) => wrote += 1,
                 Ok(false) => {}
                 Err(e) => {
@@ -447,11 +419,11 @@ async fn run_job(
         let window_start = (target / interval) * interval;
 
         // Skip if already on disk (e.g. backfill caught up to here).
-        if known_window_starts(&archive_dir, exchange, &ident).contains(&window_start) {
+        if known_window_starts(&archive, exchange, &ident).contains(&window_start) {
             continue;
         }
 
-        match fetch_one_window(&http, &archive_dir, &job, window_start).await {
+        match fetch_one_window(&http, &archive, &job, window_start).await {
             Ok(true) => info!(exchange, ident, window_start, "wrote row"),
             Ok(false) => debug!(exchange, ident, window_start, "no row yet"),
             Err(e) => warn!(exchange, ident, window_start, "fetch failed: {e}"),
@@ -470,7 +442,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let cfg = Config::load(&args.config);
-    let archive_dir = PathBuf::from(
+    let archive = CsvArchive::new(
         args.archive_dir
             .clone()
             .unwrap_or_else(|| cfg.fetcher.price_to_beat_dir.clone()),
@@ -527,9 +499,9 @@ async fn main() -> Result<()> {
     let mut handles = Vec::new();
     for job in jobs {
         let http = http.clone();
-        let archive_dir = archive_dir.clone();
+        let archive = archive.clone();
         handles.push(tokio::spawn(async move {
-            run_job(job, http, archive_dir, seed_from_ts, args.lookback_secs).await
+            run_job(job, http, archive, seed_from_ts, args.lookback_secs).await
         }));
     }
     for h in handles {

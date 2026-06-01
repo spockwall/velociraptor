@@ -61,7 +61,6 @@ reqwest   = { workspace = true }
 rmp-serde = { workspace = true }
 zstd      = { workspace = true }
 redis     = { workspace = true }
-csv       = "1.3"
 
 [[bin]]
 name = "price_to_beat_fetcher"

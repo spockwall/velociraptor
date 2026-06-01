@@ -27,13 +27,14 @@
 //!   cargo run --bin asset_id_fetcher --release -- --config configs/example.yaml
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use libs::configs::Config;
+use recorder::CsvArchive;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
@@ -131,57 +132,28 @@ async fn fetch_polymarket_ids(http: &reqwest::Client, slug: &str) -> Result<Opti
 }
 
 // ── CSV layer ───────────────────────────────────────────────────────────────
+//
+// File mechanics live in `recorder::CsvArchive`. Here we only define the
+// per-market partition (`polymarket/{base_slug}`) and the `window_start`
+// dedup key.
 
-fn csv_path(root: &Path, base_slug: &str, day: DateTime<Utc>) -> PathBuf {
-    root.join("polymarket")
-        .join(base_slug)
-        .join(format!("{}.csv", day.format("%Y-%m-%d")))
+fn known_window_starts(archive: &CsvArchive, base_slug: &str) -> HashSet<i64> {
+    archive
+        .read_dir::<CsvRow>(&["polymarket", base_slug])
+        .into_iter()
+        .map(|r| r.window_start)
+        .collect()
 }
 
-fn known_window_starts(root: &Path, base_slug: &str) -> HashSet<i64> {
-    let dir = root.join("polymarket").join(base_slug);
-    let mut seen = HashSet::new();
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return seen;
-    };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("csv") {
-            continue;
-        }
-        let Ok(mut rdr) = csv::Reader::from_path(&p) else {
-            continue;
-        };
-        for row in rdr.deserialize::<CsvRow>().flatten() {
-            seen.insert(row.window_start);
-        }
-    }
-    seen
+fn latest_window_start(archive: &CsvArchive, base_slug: &str) -> Option<i64> {
+    known_window_starts(archive, base_slug).into_iter().max()
 }
 
-fn latest_window_start(root: &Path, base_slug: &str) -> Option<i64> {
-    known_window_starts(root, base_slug).into_iter().max()
-}
-
-fn append_csv(root: &Path, row: &CsvRow) -> Result<()> {
+fn append_csv(archive: &CsvArchive, row: &CsvRow) -> Result<()> {
     let day =
         DateTime::<Utc>::from_timestamp(row.window_start, 0).context("invalid window_start")?;
-    let path = csv_path(root, &row.base_slug, day);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("mkdir csv parent")?;
-    }
-    let new_file = !path.exists();
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .context("open csv")?;
-    let mut wtr = csv::WriterBuilder::new()
-        .has_headers(new_file)
-        .from_writer(file);
-    wtr.serialize(row).context("serialize row")?;
-    wtr.flush().context("flush csv")?;
-    Ok(())
+    let path = archive.daily_path(&["polymarket", &row.base_slug], day);
+    archive.append(&path, row)
 }
 
 fn iso_to_unix(s: &str) -> Option<i64> {
@@ -219,7 +191,7 @@ fn build_row(
 /// not yet open), or `Err` on transport / parse failure.
 async fn fetch_one_window(
     http: &reqwest::Client,
-    archive_dir: &Path,
+    archive: &CsvArchive,
     base_slug: &str,
     interval_secs: i64,
     window_start: i64,
@@ -228,7 +200,7 @@ async fn fetch_one_window(
     match fetch_polymarket_ids(http, &slug).await? {
         Some(r) => {
             let row = build_row(base_slug, &slug, window_start, interval_secs, &r);
-            append_csv(archive_dir, &row)?;
+            append_csv(archive, &row)?;
             Ok(true)
         }
         None => {
@@ -244,11 +216,11 @@ async fn run_job(
     base_slug: String,
     interval_secs: i64,
     http: reqwest::Client,
-    archive_dir: PathBuf,
+    archive: CsvArchive,
     seed_from_ts: i64,
 ) {
     // ── 1) Auto-backfill ────────────────────────────────────────────────────
-    let resume_from = match latest_window_start(&archive_dir, &base_slug) {
+    let resume_from = match latest_window_start(&archive, &base_slug) {
         Some(latest) => latest + interval_secs,
         None => (seed_from_ts / interval_secs) * interval_secs,
     };
@@ -265,7 +237,7 @@ async fn run_job(
             count = (cutoff - resume_from) / interval_secs,
             "auto-backfill: starting"
         );
-        let already = known_window_starts(&archive_dir, &base_slug);
+        let already = known_window_starts(&archive, &base_slug);
         let mut window_start = resume_from;
         let (mut wrote, mut skipped, mut errs) = (0usize, 0usize, 0usize);
         while window_start < cutoff {
@@ -274,7 +246,7 @@ async fn run_job(
                 window_start += interval_secs;
                 continue;
             }
-            match fetch_one_window(&http, &archive_dir, &base_slug, interval_secs, window_start)
+            match fetch_one_window(&http, &archive, &base_slug, interval_secs, window_start)
                 .await
             {
                 Ok(true) => wrote += 1,
@@ -304,11 +276,11 @@ async fn run_job(
 
         let window_start = (Utc::now().timestamp() / interval_secs) * interval_secs;
 
-        if known_window_starts(&archive_dir, &base_slug).contains(&window_start) {
+        if known_window_starts(&archive, &base_slug).contains(&window_start) {
             continue;
         }
 
-        match fetch_one_window(&http, &archive_dir, &base_slug, interval_secs, window_start).await {
+        match fetch_one_window(&http, &archive, &base_slug, interval_secs, window_start).await {
             Ok(true) => info!(base_slug = %base_slug, window_start, "wrote row"),
             Ok(false) => debug!(base_slug = %base_slug, window_start, "no row yet"),
             Err(e) => warn!(base_slug = %base_slug, window_start, "fetch failed: {e}"),
@@ -332,6 +304,7 @@ async fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| cfg.fetcher.asset_id_dir.clone()),
     );
+    let archive = CsvArchive::new(archive_dir.clone());
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(args.http_timeout_secs))
         .user_agent("velociraptor-asset-id-fetcher/0.1")
@@ -363,9 +336,9 @@ async fn main() -> Result<()> {
     let mut handles = Vec::new();
     for (base_slug, interval_secs) in jobs {
         let http = http.clone();
-        let archive_dir = archive_dir.clone();
+        let archive = archive.clone();
         handles.push(tokio::spawn(async move {
-            run_job(base_slug, interval_secs, http, archive_dir, seed_from_ts).await
+            run_job(base_slug, interval_secs, http, archive, seed_from_ts).await
         }));
     }
     for h in handles {
