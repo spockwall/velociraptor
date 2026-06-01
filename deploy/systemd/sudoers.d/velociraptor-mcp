@@ -1,11 +1,15 @@
 # /etc/sudoers.d/velociraptor-mcp
 # Install with: sudo visudo -f /etc/sudoers.d/velociraptor-mcp  (mode 0440)
 #
-# Lets the MCP monitor (running as `ben`) restart the four velociraptor
+# Lets the MCP monitor (running as `ben`) restart/stop the four velociraptor
 # units without a password — and ONLY those four. Explicit list, not a
 # `velociraptor-*.service` glob, so future malicious unit names can't ride
 # in via this rule.
 ben ALL=(root) NOPASSWD: /bin/systemctl restart velociraptor-polymarket-recorder.service, \
                           /bin/systemctl restart velociraptor-orderbook-recorder.service, \
                           /bin/systemctl restart velociraptor-price-to-beat-fetcher.service, \
-                          /bin/systemctl restart velociraptor-asset-id-fetcher.service
+                          /bin/systemctl restart velociraptor-asset-id-fetcher.service, \
+                          /bin/systemctl stop velociraptor-polymarket-recorder.service, \
+                          /bin/systemctl stop velociraptor-orderbook-recorder.service, \
+                          /bin/systemctl stop velociraptor-price-to-beat-fetcher.service, \
+                          /bin/systemctl stop velociraptor-asset-id-fetcher.service

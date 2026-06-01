@@ -21,6 +21,7 @@ All tools return human-readable text reports. Each report-style tool has a compa
 | `disk_usage(path='/data')` | Single-path disk usage. |
 | `data_dirs_overview()` | All `/data/*` paths the velociraptor configs write to, in one table. |
 | `restart_unit(unit)` | `sudo systemctl restart <unit>`. **Requires sudoers drop-in.** Validated against unit allowlist. |
+| `stop_unit(unit)` | `sudo systemctl stop <unit>`. **Requires sudoers drop-in.** Validated against unit allowlist. |
 
 ## Install (Linux server)
 
@@ -34,9 +35,9 @@ python3 -m venv .venv
 # Ctrl-C to stop
 ```
 
-## Sudoers drop-in (required for `restart_unit`)
+## Sudoers drop-in (required for `restart_unit` / `stop_unit`)
 
-Without this, `restart_unit` returns a clear error and everything else still works. Install with `visudo` (mode 0440):
+Without this, `restart_unit` / `stop_unit` return a clear error and everything else still works. Install with `visudo` (mode 0440):
 
 ```bash
 sudo visudo -f /etc/sudoers.d/velociraptor-mcp
@@ -48,14 +49,18 @@ Paste:
 ben ALL=(root) NOPASSWD: /bin/systemctl restart velociraptor-polymarket-recorder.service, \
                           /bin/systemctl restart velociraptor-orderbook-recorder.service, \
                           /bin/systemctl restart velociraptor-price-to-beat-fetcher.service, \
-                          /bin/systemctl restart velociraptor-asset-id-fetcher.service
+                          /bin/systemctl restart velociraptor-asset-id-fetcher.service, \
+                          /bin/systemctl stop velociraptor-polymarket-recorder.service, \
+                          /bin/systemctl stop velociraptor-orderbook-recorder.service, \
+                          /bin/systemctl stop velociraptor-price-to-beat-fetcher.service, \
+                          /bin/systemctl stop velociraptor-asset-id-fetcher.service
 ```
 
 Note: the rule is an **explicit list**, not a `velociraptor-*.service` glob — so a hypothetical future malicious unit name can't ride in. Verify:
 
 ```bash
 sudo -n -l -U ben | grep velociraptor
-# should list exactly the four restart commands
+# should list exactly the four restart + four stop commands
 ```
 
 A copy of this rule is shipped at `deploy/systemd/sudoers.d/velociraptor-mcp`.
@@ -148,9 +153,9 @@ The SSH-tunnel model works as long as everyone who needs MCP access is allowed t
 ## Security model (v1)
 
 - **HTTP server binds to 127.0.0.1 only.** Not reachable from the network.
-- **The SSH tunnel is the auth boundary.** No bearer tokens in v1 — anyone who can SSH as `ben` can already restart these services from a shell.
-- **`restart_unit` is allowlisted at three layers:** in-process unit list, scoped sudoers rule, and explicit `/bin/systemctl` path.
-- **No other mutations.** No stop, no deploy, no config edits in v1.
+- **The SSH tunnel is the auth boundary.** No bearer tokens in v1 — anyone who can SSH as `ben` can already restart/stop these services from a shell.
+- **`restart_unit` / `stop_unit` are allowlisted at three layers:** in-process unit list, scoped sudoers rule, and explicit `/bin/systemctl` path.
+- **Only restart and stop mutations.** No deploy, no config edits in v1.
 
 ## Local development (macOS)
 

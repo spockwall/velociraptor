@@ -615,6 +615,40 @@ def restart_unit(unit: str) -> str:
         return f"Restarted {unit} (rc=0) but failed to fetch fresh status: {e}"
 
 
+@mcp.tool()
+def stop_unit(unit: str) -> str:
+    """Stop a velociraptor unit via `sudo systemctl stop`.
+
+    Requires NOPASSWD sudoers rule (see README). Validated against the fixed
+    unit allowlist before sudo is invoked.
+    """
+    try:
+        _validate_unit(unit)
+        _require_systemctl()
+    except (SystemctlMissing, ValueError) as e:
+        return f"Error: {e}"
+
+    # Audit log to stderr — journald captures this when run as a systemd unit.
+    print(f"[{_now_utc()}] stop_unit: {unit}", file=sys.stderr, flush=True)
+
+    r = subprocess.run(
+        ["sudo", "-n", "/bin/systemctl", "stop", unit],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        return (f"stop_unit failed (rc={r.returncode}):\n"
+                f"stdout: {r.stdout.strip()}\n"
+                f"stderr: {r.stderr.strip()}\n"
+                f"Hint: check sudoers drop-in at /etc/sudoers.d/velociraptor-mcp.")
+
+    # Give systemd a moment to settle, then report fresh status.
+    time.sleep(1.0)
+    try:
+        return f"Stopped {unit}.\n\n" + _fmt_unit_status(_unit_status_dict(unit))
+    except Exception as e:  # noqa: BLE001
+        return f"Stopped {unit} (rc=0) but failed to fetch fresh status: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
