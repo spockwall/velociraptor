@@ -292,6 +292,7 @@ mod tests {
                 exchange_oid: exchange_oid.into(),
                 status: OrderStatus::New,
                 ts_ns: 0,
+                fill: None,
             })),
         }
     }
