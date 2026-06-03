@@ -9,6 +9,7 @@ import Trades from "./pages/Trades";
 import AccountFills from "./pages/account/Fills";
 import AccountOrders from "./pages/account/Orders";
 import Control from "./pages/Control";
+import Monitor from "./pages/Monitor";
 import themeConfig from "./theme.json";
 
 export default function App() {
@@ -33,6 +34,7 @@ export default function App() {
                     <Route path="/account/fills" element={<AccountFills />} />
                     <Route path="/account/orders" element={<AccountOrders />} />
                     <Route path="/control" element={<Control />} />
+                    <Route path="/monitor" element={<Monitor />} />
                 </Route>
             </Routes>
         </BrowserRouter>

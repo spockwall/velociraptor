@@ -8,6 +8,7 @@ const nav = [
     { to: "/trades", label: "Trades" },
     { to: "/account", label: "Account" },
     { to: "/control", label: "Control" },
+    { to: "/monitor", label: "Monitor" },
 ];
 
 export default function Layout() {

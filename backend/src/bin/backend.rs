@@ -48,6 +48,14 @@ async fn run(cfg: Config) -> Result<()> {
     let redis = RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await?;
     info!("Redis connected: {}", cfg.redis.url);
 
+    // Background system-monitor sampler: periodically snapshots host CPU/mem/
+    // disk + systemd status into a capped Redis list and a daily JSON-lines
+    // disk log under `{logging.dir}/system/`. Runs for the life of the process.
+    tokio::spawn(backend::routes::monitor::sample_loop(
+        redis.clone(),
+        std::path::PathBuf::from(&cfg.logging.dir),
+    ));
+
     let gamma = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .user_agent("velociraptor-backend/0.1")

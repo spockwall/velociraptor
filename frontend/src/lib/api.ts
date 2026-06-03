@@ -81,6 +81,58 @@ export interface ControlStatus {
 
 export type ControlAction = { type: "halt" } | { type: "resume" } | { type: "reload_risk" };
 
+// System monitor — mirrors `backend/src/routes/monitor.rs`.
+
+export interface HostInfo {
+    hostname: string;
+    os: string;
+    kernel: string;
+    uptime_secs: number;
+    cpu_count: number;
+}
+
+export interface CpuInfo {
+    usage_pct: number;
+    per_core_pct: number[];
+    load_avg: [number, number, number];
+}
+
+export interface MemoryInfo {
+    total_bytes: number;
+    used_bytes: number;
+    available_bytes: number;
+    used_pct: number;
+    swap_total_bytes: number;
+    swap_used_bytes: number;
+}
+
+export interface DiskInfo {
+    mount_point: string;
+    total_bytes: number;
+    available_bytes: number;
+    used_bytes: number;
+    used_pct: number;
+}
+
+export interface ServiceInfo {
+    unit: string;
+    active_state: string;
+    sub_state: string;
+    load_state: string;
+    main_pid: number;
+    active_secs: number;
+    error: string | null;
+}
+
+export interface MonitorStatus {
+    host: HostInfo;
+    cpu: CpuInfo;
+    memory: MemoryInfo;
+    disks: DiskInfo[];
+    services: ServiceInfo[];
+    ts: number;
+}
+
 export interface PolymarketMarket {
     /** Stable identifier across rollovers. The UI keys cards on this and
      *  fetches orderbook via `/api/orderbook/polymarket/{base_slug}`. */
@@ -181,6 +233,13 @@ export const api = {
     orders: (limit = 50) => get<UserEvent[]>(`${BASE}/events/orders?limit=${limit}`),
 
     getControl: () => get<ControlStatus>(`${BASE}/control`),
+
+    monitor: () => get<MonitorStatus>(`${BASE}/monitor`),
+
+    /// Recent monitor samples, newest-first. Backed by a capped Redis list the
+    /// backend's sampler writes every 30s. The chart reverses for time order.
+    monitorHistory: (limit = 720) =>
+        get<MonitorStatus[]>(`${BASE}/monitor/history?limit=${limit}`),
 
     postControl: (action: ControlAction) => post<ControlStatus>(`${BASE}/control`, action),
 

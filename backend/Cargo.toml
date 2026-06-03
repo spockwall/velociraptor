@@ -17,6 +17,7 @@ reqwest = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sysinfo = "0.33"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
