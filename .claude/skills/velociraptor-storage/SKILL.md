@@ -69,6 +69,18 @@ Per-exchange notes:
 
 The futures `binance` exchange uses the standard layout with no trade file. Spot is a separate `ExchangeName::BinanceSpot`.
 
+### User events (CSV, not mpack)
+
+The `recorder` crate's `StorageWriter` (used by `orderbook_recorder` + `orderbook_server`) writes **three** streams. Snapshots and trades are mpack as above; the **account-wide user-event stream is CSV** — it's low volume (a handful of fills / order-updates) so it stays human-readable like the price-to-beat archive, and is never zstd-compressed:
+
+```
+{base_path}/events/{YYYY-MM-DD}.csv   ← fills + order_updates, `type` column discriminates
+```
+
+Columns: `ts_ns,type,exchange,symbol,side,px,qty,filled,status,fee,taker_oid,client_oid,exchange_oid,trade_id,maker_orders`. `maker_orders` is a JSON string in one cell.
+
+The recorder crate splits the two formats by module: `recorder/src/mpack_writer.rs` holds `StorageWriter` (the mpack snapshot/trade streams), and `recorder/src/csv.rs` holds `CsvArchive` — the shared append-only CSV helper the user-event stream and both fetchers use.
+
 ### Polymarket (rolling windows)
 
 Four files per window: orderbook snapshots × 2 sides, trades × 2 sides.
@@ -137,7 +149,24 @@ Binaries:
 - `price_to_beat_fetcher` — long-running daemon; auto-backfills on startup from latest CSV row (or `--seed-from`), then polls every interval boundary.
 - `price_to_beat_backfill` — one-shot, walks a single market over `--from`/`--to`.
 
-Both share CSV format and dedup by `window_start` — safe to run side-by-side.
+Both share CSV format and dedup by `window_start` — safe to run side-by-side. The file mechanics (append-with-header, read-all, daily path) come from `recorder::CsvArchive`; the binary only defines the row struct + partition (`&[exchange, base_slug]`).
+
+### Adding a new CSV dataset
+
+`recorder::CsvArchive` is the one place to go through for any low-volume tabular data:
+
+```rust
+use recorder::CsvArchive;
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Row { ts: i64, /* … */ }
+
+let archive = CsvArchive::new("data/my_dataset");          // root
+let path = archive.daily_path(&["polymarket", slug], day); // {root}/polymarket/{slug}/{date}.csv
+archive.append(&path, &row)?;                              // header written on create
+let rows: Vec<Row> = archive.read_dir(&["polymarket", slug]); // every row across all days
+```
+
+`append` creates parent dirs + writes the header only on a new/empty file (append-safe on restart); `read_dir` skips malformed rows. No rotation/compression — CSV is for human-readable, low-volume data.
 
 ## Asset-ID archive (Polymarket only)
 
