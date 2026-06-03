@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use libs::credentials::polymarket::PolymarketCredentials;
 use libs::protocol::orders::{
-    HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
+    FillInfo, HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
 };
 use polymarket_client_sdk_v2::auth::state::Authenticated;
 use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
@@ -29,6 +29,7 @@ use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
 // ECDSA key) — same as `alloy_signer_local::PrivateKeySigner`.
 type PrivKeySigner = LocalSigner<k256::ecdsa::SigningKey>;
 use polymarket_client_sdk_v2::clob::types::request::{CancelMarketOrderRequest, OrdersRequest};
+use polymarket_client_sdk_v2::clob::types::response::PostOrderResponse;
 use polymarket_client_sdk_v2::clob::types::{
     Amount, OrderStatusType, OrderType, Side as SdkSide, SignatureType,
 };
@@ -296,6 +297,33 @@ fn now_ns() -> i64 {
     Utc::now().timestamp_nanos_opt().unwrap_or(0)
 }
 
+/// Project the SDK's `PostOrderResponse` (returned by `build_sign_and_post`)
+/// onto our protocol-level [`FillInfo`]. Decimals lower to `f64` (lossless at
+/// CLOB tick/size granularity); `B256` hashes render as `0x`-prefixed hex.
+/// An empty `error_msg` is normalized to `None`.
+fn fill_info(resp: &PostOrderResponse) -> FillInfo {
+    FillInfo {
+        making_amount: dec_to_f64(resp.making_amount),
+        taking_amount: dec_to_f64(resp.taking_amount),
+        success: resp.success,
+        error_msg: resp
+            .error_msg
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned(),
+        transaction_hashes: resp
+            .transaction_hashes
+            .iter()
+            .map(|h| format!("{h:#x}"))
+            .collect(),
+        trade_ids: resp.trade_ids.clone(),
+    }
+}
+
+fn dec_to_f64(d: Decimal) -> f64 {
+    d.to_string().parse().unwrap_or(0.0)
+}
+
 // ── Trait impl ──────────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -330,9 +358,10 @@ impl RestOrderClient for PolymarketRestClient {
 
         Ok(OrderAck {
             client_oid: p.client_oid.clone(),
-            exchange_oid: resp.order_id,
+            exchange_oid: resp.order_id.clone(),
             status: map_status(&resp.status),
             ts_ns: now_ns(),
+            fill: Some(fill_info(&resp)),
         })
     }
 
@@ -375,6 +404,7 @@ impl RestOrderClient for PolymarketRestClient {
             exchange_oid: exchange_oid.to_string(),
             status: OrderStatus::Canceled,
             ts_ns: now_ns(),
+            fill: None,
         })
     }
 
@@ -417,6 +447,7 @@ impl RestOrderClient for PolymarketRestClient {
                 exchange_oid: o.id,
                 status: map_status(&o.status),
                 ts_ns: now_ns(),
+                fill: None,
             })
             .collect())
     }

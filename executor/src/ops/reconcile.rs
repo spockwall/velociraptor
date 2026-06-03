@@ -120,6 +120,7 @@ mod tests {
                 exchange_oid: "".into(),
                 status: OrderStatus::Canceled,
                 ts_ns: 0,
+                fill: None,
             })
         }
         async fn cancel_all(&self) -> Result<u32, OrderError> {
@@ -158,6 +159,7 @@ mod tests {
                 exchange_oid: "live-1".into(),
                 status: OrderStatus::New,
                 ts_ns: 0,
+                fill: None,
             }],
         });
 
