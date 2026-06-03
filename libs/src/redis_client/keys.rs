@@ -66,6 +66,14 @@ impl Engine {
     pub const PARAMS: &'static str = "engine:params";
 }
 
+/// Host system-monitor metrics, written by the backend's background sampler.
+pub struct System;
+impl System {
+    /// Capped list of recent `MonitorStatus` samples (msgpack), newest first.
+    /// Read by `GET /api/monitor/history` for the frontend line graph.
+    pub const METRICS: &'static str = "system:metrics";
+}
+
 pub struct Risk;
 impl Risk {
     pub const CONFIG: &'static str = "risk:config";

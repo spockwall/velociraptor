@@ -24,8 +24,8 @@ pub use control::ControlMessage;
 use core::fmt;
 pub use events::{BbaPayload, EventKind, UserEvent};
 pub use orders::{
-    HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest, OrderResponse,
-    OrderResult, OrderStatus, PlaceOne, Side, Tif,
+    FillInfo, HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest,
+    OrderResponse, OrderResult, OrderStatus, PlaceOne, Side, Tif,
 };
 use serde::{Deserialize, Serialize};
 
