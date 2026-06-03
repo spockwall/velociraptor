@@ -22,10 +22,12 @@ That replaces the standalone `scripts/poly_heartbeat.py` script.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Optional
 
+from ..typings.orders import FillInfo
 from .event_log import EventLog
 from .executor_client import (
     ExecutorClient,
@@ -38,6 +40,39 @@ from .executor_client import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _fill_extra(fill: Optional[FillInfo]) -> dict:
+    """Project a parsed `FillInfo` onto the event-log `extra` columns.
+    Empty dict when there was no fill block (non-Polymarket / no match)."""
+    if fill is None:
+        return {}
+    extra: dict = {
+        "making_amount": fill.making_amount,
+        "taking_amount": fill.taking_amount,
+        "fill_success": fill.success,
+    }
+    if fill.trade_ids:
+        extra["trade_ids"] = ",".join(fill.trade_ids)
+    if fill.transaction_hashes:
+        extra["tx_hashes"] = ",".join(fill.transaction_hashes)
+    return extra
+
+
+def _log_fill(kind: str, label: Optional[str], ack: dict) -> None:
+    """Emit one INFO line with the full ack `fill` block for every order
+    placement (limit or market), so all strategies surface the venue's
+    synchronous fill detail uniformly. No-op when the ack carried no fill
+    (non-Polymarket path / nothing matched at ack time)."""
+    fill = ack.get("fill")
+    if fill is None:
+        return
+    tag = f"[{label}] " if label else ""
+    log.info(
+        f"{tag}{kind} ack "
+        f"oid={ack.get('exchange_oid')} status={ack.get('status')} "
+        f"fill={json.dumps(fill, default=str)}"
+    )
 
 
 class OrderRouter:
@@ -77,7 +112,13 @@ class OrderRouter:
         label: Optional[str] = None,
     ) -> dict:
         """Place a GTC limit. Returns the inner OrderAck dict on success.
-        Raises RuntimeError on Err."""
+        Raises RuntimeError on Err.
+
+        The ack dict carries an optional `fill` sub-map on the Polymarket
+        path (the venue's `PostOrderResponse`): matched maker/taker amounts,
+        settlement tx hashes, trade ids. Parse it with
+        `typings.orders.OrderAck.from_wire(ack)` or
+        `FillInfo.from_wire(ack.get("fill"))`."""
         if client_oid is None:
             client_oid = f"te-{int(time.time() * 1000)}-{symbol[:6]}"
         req = _place_req(
@@ -109,6 +150,8 @@ class OrderRouter:
             )
             raise RuntimeError(f"place failed: {err}")
         ack = unwrap(resp)
+        fill = FillInfo.from_wire(ack.get("fill"))
+        _log_fill("place", label, ack)
         self._record(
             "place",
             strategy=strategy,
@@ -121,6 +164,7 @@ class OrderRouter:
             exchange_oid=ack.get("exchange_oid"),
             ok=True,
             latency_ms=latency_ms,
+            extra=_fill_extra(fill),
         )
         return ack
 
@@ -136,7 +180,9 @@ class OrderRouter:
         label: Optional[str] = None,
     ) -> dict:
         """Place a market order. Returns the inner OrderAck dict on success;
-        raises `RuntimeError` on Err.
+        raises `RuntimeError` on Err. On the Polymarket path the ack's
+        `fill` sub-map reports the amounts matched synchronously — parse via
+        `typings.orders.OrderAck.from_wire(ack)`.
 
         Semantics (Polymarket-specific, side-dependent):
           - `side="buy"`  → `qty` is **USDC notional to spend**. The venue
@@ -189,6 +235,8 @@ class OrderRouter:
             )
             raise RuntimeError(f"place_market failed: {err}")
         ack = unwrap(resp)
+        fill = FillInfo.from_wire(ack.get("fill"))
+        _log_fill("place_market", label, ack)
         self._record(
             "place_market",
             strategy=strategy,
@@ -200,7 +248,7 @@ class OrderRouter:
             exchange_oid=ack.get("exchange_oid"),
             ok=True,
             latency_ms=latency_ms,
-            extra={"tif": tif_u},
+            extra={"tif": tif_u, **_fill_extra(fill)},
         )
         return ack
 

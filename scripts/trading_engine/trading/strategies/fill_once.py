@@ -153,17 +153,16 @@ class FillOnceStrategy(Strategy):
             f"tif={self.market_tif} client_oid={client_oid}"
         )
         try:
-            ack = self.router.place_market(
+            # `OrderRouter.place_market` logs the full ack `fill` block
+            # centrally (so every market-order strategy surfaces it the same
+            # way); no need to re-log it here.
+            self.router.place_market(
                 symbol=asset_id,
                 side="buy",
                 qty=target_qty_usdc,
                 client_oid=client_oid,
                 tif=self.market_tif,
                 **self._attribution(),
-            )
-            log.info(
-                f"[{self.label}] FILL_ONCE ack "
-                f"oid={ack.get('exchange_oid')} status={ack.get('status')}"
             )
         except Exception as e:  # noqa: BLE001
             # Latch stays True: one window = one attempt. Investigate

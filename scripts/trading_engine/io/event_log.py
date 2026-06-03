@@ -59,6 +59,14 @@ _ACTION_COLS = [
     "count",
     # `place_market` only — passed via `extra={"tif": ...}`.
     "tif",
+    # place-only — fill detail echoed from the exchange ack (Polymarket
+    # CLOB `PostOrderResponse` → protocol `OrderAck.fill`). Passed via
+    # `extra={...}`; blank when the ack carried no fill block.
+    "making_amount",
+    "taking_amount",
+    "fill_success",
+    "trade_ids",
+    "tx_hashes",
 ]
 
 _EVENT_COLS = [
