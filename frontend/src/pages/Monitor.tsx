@@ -12,6 +12,7 @@ import {
 import Card from "../components/Card";
 import { usePolling } from "../lib/usePolling";
 import { api, type MonitorStatus, type ServiceInfo } from "../lib/api";
+import { C } from "../lib/colors";
 
 // ── local formatters ────────────────────────────────────────────────────────
 
@@ -34,9 +35,10 @@ function fmtDuration(secs: number): string {
     return `${secs}s`;
 }
 
-const GREEN = "var(--color-accent-green, #6a9978)";
-const RED = "var(--color-accent-red, #b05c5c)";
-const BLUE = "var(--color-accent-blue, #5b8eb5)";
+// Local aliases onto the centralized accent tokens (see src/lib/colors.ts).
+const GREEN = C.green;
+const RED = C.red;
+const BLUE = C.blue;
 
 // Color ramp for usage bars: green < 70 < blue < 90 < red.
 function usageColor(pct: number): string {
@@ -52,13 +54,13 @@ function UsageBar({ pct, label, detail }: { pct: number; label: string; detail?:
     return (
         <div className="space-y-1.5">
             <div className="flex items-baseline justify-between text-xs">
-                <span style={{ color: "#c0c0c0" }}>{label}</span>
-                <span className="font-mono" style={{ color: "#888" }}>
+                <span style={{ color: C.textStrong }}>{label}</span>
+                <span className="font-mono" style={{ color: C.textDim }}>
                     {detail ? `${detail} · ` : ""}
                     {clamped.toFixed(1)}%
                 </span>
             </div>
-            <div className="h-2 rounded-full overflow-hidden" style={{ background: "#1f1f1f" }}>
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: C.borderCard }}>
                 <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{ width: `${clamped}%`, background: usageColor(clamped) }}
@@ -71,14 +73,14 @@ function UsageBar({ pct, label, detail }: { pct: number; label: string; detail?:
 function ServiceRow({ s }: { s: ServiceInfo }) {
     const { dot, text } =
         s.error || s.active_state === "unknown"
-            ? { dot: "#555", text: "#888" }
+            ? { dot: C.textGhost, text: C.textDim }
             : s.active_state === "active"
-              ? { dot: GREEN, text: "#c0c0c0" }
+              ? { dot: GREEN, text: C.textStrong }
               : s.active_state === "failed"
                 ? { dot: RED, text: RED }
                 : s.active_state === "activating" || s.active_state === "deactivating"
-                  ? { dot: BLUE, text: "#c0c0c0" }
-                  : { dot: "#777", text: "#888" };
+                  ? { dot: BLUE, text: C.textStrong }
+                  : { dot: C.textFaint, text: C.textDim };
 
     // Strip the common prefix/suffix for a denser label; keep full name in title.
     const short = s.unit.replace(/^velociraptor-/, "").replace(/\.service$/, "");
@@ -86,7 +88,7 @@ function ServiceRow({ s }: { s: ServiceInfo }) {
     return (
         <div
             className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
-            style={{ borderColor: "#1f1f1f" }}
+            style={{ borderColor: C.borderCard }}
             title={s.unit}
         >
             <span
@@ -98,7 +100,7 @@ function ServiceRow({ s }: { s: ServiceInfo }) {
                     {short}
                 </p>
                 {s.error && (
-                    <p className="text-[10px] mt-0.5 truncate" style={{ color: "#555" }}>
+                    <p className="text-[10px] mt-0.5 truncate" style={{ color: C.textGhost }}>
                         {s.error}
                     </p>
                 )}
@@ -108,7 +110,7 @@ function ServiceRow({ s }: { s: ServiceInfo }) {
                     {s.active_state}
                     {s.sub_state ? ` / ${s.sub_state}` : ""}
                 </p>
-                <p className="text-[10px] font-mono" style={{ color: "#555" }}>
+                <p className="text-[10px] font-mono" style={{ color: C.textGhost }}>
                     {s.main_pid > 0 ? `pid ${s.main_pid}` : "—"}
                     {s.active_secs > 0 ? ` · up ${fmtDuration(s.active_secs)}` : ""}
                 </p>
@@ -158,7 +160,7 @@ function HistoryChart({ points }: { points: ChartPoint[] }) {
     if (points.length < 2) {
         return (
             <div className="h-64 flex items-center justify-center">
-                <p className="text-xs" style={{ color: "#555" }}>
+                <p className="text-xs" style={{ color: C.textGhost }}>
                     collecting history… (a sample is recorded every 30s)
                 </p>
             </div>
@@ -168,30 +170,30 @@ function HistoryChart({ points }: { points: ChartPoint[] }) {
         <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: -16 }}>
-                    <CartesianGrid stroke="#1f1f1f" vertical={false} />
+                    <CartesianGrid stroke={C.borderCard} vertical={false} />
                     <XAxis
                         dataKey="t"
                         tickFormatter={fmtClock}
-                        tick={{ fill: "#666", fontSize: 10 }}
-                        stroke="#262626"
+                        tick={{ fill: C.textSubtle, fontSize: 10 }}
+                        stroke={C.borderStrong}
                         minTickGap={48}
                     />
                     <YAxis
                         domain={[0, 100]}
                         ticks={[0, 25, 50, 75, 100]}
                         tickFormatter={(v) => `${v}%`}
-                        tick={{ fill: "#666", fontSize: 10 }}
-                        stroke="#262626"
+                        tick={{ fill: C.textSubtle, fontSize: 10 }}
+                        stroke={C.borderStrong}
                         width={44}
                     />
                     <Tooltip
                         contentStyle={{
-                            background: "#141414",
-                            border: "1px solid #262626",
+                            background: C.bgCard,
+                            border: `1px solid ${C.borderStrong}`,
                             borderRadius: 6,
                             fontSize: 12,
                         }}
-                        labelStyle={{ color: "#888" }}
+                        labelStyle={{ color: C.textDim }}
                         labelFormatter={(t) => fmtClock(Number(t))}
                         formatter={(v, name) => [`${Number(v)}%`, String(name)]}
                     />
@@ -235,8 +237,8 @@ export default function Monitor() {
 
     if (loading && !data) {
         return (
-            <div className="p-5 w-full max-w-5xl mx-auto">
-                <p className="text-xs" style={{ color: "#888" }}>
+            <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto">
+                <p className="text-xs" style={{ color: C.textDim }}>
                     loading system status…
                 </p>
             </div>
@@ -245,10 +247,10 @@ export default function Monitor() {
 
     if (error && !data) {
         return (
-            <div className="p-5 w-full max-w-5xl mx-auto">
+            <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto">
                 <div
                     className="px-4 py-3 rounded-md border font-mono text-xs"
-                    style={{ background: "#1a1212", borderColor: "#3a1d1d", color: "#e5484d" }}
+                    style={{ background: C.errorBg, borderColor: C.errorBorder, color: C.errorText }}
                 >
                     monitor unavailable — {error}
                 </div>
@@ -262,22 +264,22 @@ export default function Monitor() {
     const ageSecs = Math.max(0, nowSecs - data.ts);
 
     return (
-        <div className="p-5 w-full max-w-5xl mx-auto space-y-5">
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto space-y-5">
             {/* Host header */}
             <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-3">
-                    <Server size={18} style={{ color: "#888" }} />
+                    <Server size={18} style={{ color: C.textDim }} />
                     <div>
-                        <p className="text-sm font-medium" style={{ color: "#e0e0e0" }}>
+                        <p className="text-sm font-medium" style={{ color: C.textBright }}>
                             {host.hostname}
                         </p>
-                        <p className="text-[11px] font-mono" style={{ color: "#666" }}>
+                        <p className="text-[11px] font-mono" style={{ color: C.textSubtle }}>
                             {host.os} · {host.kernel} · {host.cpu_count} cores · up{" "}
                             {fmtDuration(host.uptime_secs)}
                         </p>
                     </div>
                 </div>
-                <p className="text-[11px] font-mono" style={{ color: ageSecs > 15 ? "#f5a623" : "#555" }}>
+                <p className="text-[11px] font-mono" style={{ color: ageSecs > 15 ? C.amber : C.textGhost }}>
                     updated {ageSecs}s ago
                 </p>
             </div>
@@ -294,12 +296,12 @@ export default function Monitor() {
                                     className="w-2.5 h-0.5 rounded-full"
                                     style={{ background: s.color }}
                                 />
-                                <span className="text-[10px]" style={{ color: "#888" }}>
+                                <span className="text-[10px]" style={{ color: C.textDim }}>
                                     {s.label}
                                 </span>
                             </span>
                         ))}
-                        <LineChartIcon size={14} style={{ color: "#666" }} />
+                        <LineChartIcon size={14} style={{ color: C.textSubtle }} />
                     </div>
                 }
             >
@@ -311,22 +313,22 @@ export default function Monitor() {
                 <Card
                     title="cpu"
                     subtitle={`load ${cpu.load_avg.map((l) => l.toFixed(2)).join(" / ")}`}
-                    action={<Cpu size={14} style={{ color: "#666" }} />}
+                    action={<Cpu size={14} style={{ color: C.textSubtle }} />}
                 >
                     <div className="space-y-3">
                         <UsageBar pct={cpu.usage_pct} label="total" />
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5 pt-1">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-6 gap-x-4 gap-y-1.5 pt-1">
                             {cpu.per_core_pct.map((p, i) => (
                                 <div key={i} className="flex items-center gap-2">
                                     <span
                                         className="text-[10px] font-mono w-6 shrink-0"
-                                        style={{ color: "#555" }}
+                                        style={{ color: C.textGhost }}
                                     >
                                         c{i}
                                     </span>
                                     <div
                                         className="h-1.5 flex-1 rounded-full overflow-hidden"
-                                        style={{ background: "#1f1f1f" }}
+                                        style={{ background: C.borderCard }}
                                     >
                                         <div
                                             className="h-full rounded-full transition-all duration-500"
@@ -340,7 +342,7 @@ export default function Monitor() {
                 </Card>
 
                 {/* Memory */}
-                <Card title="memory" action={<MemoryStick size={14} style={{ color: "#666" }} />}>
+                <Card title="memory" action={<MemoryStick size={14} style={{ color: C.textSubtle }} />}>
                     <div className="space-y-3">
                         <UsageBar
                             pct={memory.used_pct}
@@ -354,17 +356,17 @@ export default function Monitor() {
                                 detail={`${fmtBytes(memory.swap_used_bytes)} / ${fmtBytes(memory.swap_total_bytes)}`}
                             />
                         )}
-                        <p className="text-[11px] font-mono pt-1" style={{ color: "#555" }}>
+                        <p className="text-[11px] font-mono pt-1" style={{ color: C.textGhost }}>
                             {fmtBytes(memory.available_bytes)} available
                         </p>
                     </div>
                 </Card>
 
                 {/* Disks */}
-                <Card title="disk" action={<HardDrive size={14} style={{ color: "#666" }} />}>
+                <Card title="disk" action={<HardDrive size={14} style={{ color: C.textSubtle }} />}>
                     <div className="space-y-3">
                         {disks.length === 0 ? (
-                            <p className="text-xs" style={{ color: "#555" }}>
+                            <p className="text-xs" style={{ color: C.textGhost }}>
                                 no disks reported
                             </p>
                         ) : (
@@ -384,11 +386,11 @@ export default function Monitor() {
                 <Card
                     title="systemd services"
                     subtitle={`${services.filter((s) => s.active_state === "active").length}/${services.length} active`}
-                    action={<Activity size={14} style={{ color: "#666" }} />}
+                    action={<Activity size={14} style={{ color: C.textSubtle }} />}
                     noPad
                 >
                     {services.length === 0 ? (
-                        <p className="text-xs p-4" style={{ color: "#555" }}>
+                        <p className="text-xs p-4" style={{ color: C.textGhost }}>
                             no services reported
                         </p>
                     ) : (

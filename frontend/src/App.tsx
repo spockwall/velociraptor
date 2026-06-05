@@ -10,6 +10,7 @@ import AccountFills from "./pages/account/Fills";
 import AccountOrders from "./pages/account/Orders";
 import Control from "./pages/Control";
 import Monitor from "./pages/Monitor";
+import Logs from "./pages/Logs";
 import themeConfig from "./theme.json";
 
 export default function App() {
@@ -35,6 +36,7 @@ export default function App() {
                     <Route path="/account/orders" element={<AccountOrders />} />
                     <Route path="/control" element={<Control />} />
                     <Route path="/monitor" element={<Monitor />} />
+                    <Route path="/logs" element={<Logs />} />
                 </Route>
             </Routes>
         </BrowserRouter>

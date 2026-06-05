@@ -4,6 +4,10 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 1000, enab
     const [data, setData] = useState<T | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    // Unix-seconds timestamp of the last *successful* fetch. Updated inside the
+    // fetch callback (an event, not render) so consumers can show "updated Ns
+    // ago" without reading the clock during render.
+    const [lastUpdated, setLastUpdated] = useState<number | null>(null);
     const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const fetch = useCallback(async () => {
@@ -11,6 +15,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 1000, enab
             const result = await fetcher();
             setData(result);
             setError(null);
+            setLastUpdated(Math.floor(Date.now() / 1000));
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -27,5 +32,5 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 1000, enab
         };
     }, [fetch, intervalMs, enabled]);
 
-    return { data, error, loading, refetch: fetch };
+    return { data, error, loading, lastUpdated, refetch: fetch };
 }

@@ -43,10 +43,7 @@ export default function ControlPage() {
         };
     }, []);
 
-    async function sendControl(
-        action: { type: "halt" | "resume" | "reload_risk" },
-        label: string,
-    ) {
+    async function sendControl(action: { type: "halt" | "resume" | "reload_risk" }, label: string) {
         setBusy(true);
         pushLog("info", `→ ${label}`);
         try {
@@ -60,69 +57,93 @@ export default function ControlPage() {
         }
     }
 
-    const btnClass =
-        "px-4 py-2 rounded-md border border-border-strong bg-bg-surface text-text-muted hover:text-white hover:bg-bg-hover hover:border-border-subtle transition-all cursor-pointer shadow-sm font-mono text-xs flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed";
+    // Solid, bright action buttons. Base layout is shared; each variant only
+    // swaps the fill / hover-fill (the bright accent tokens live in index.css).
+    const btnBase =
+        "flex-1 min-w-[7rem] py-3 rounded-md text-sm font-mono font-semibold text-white shadow-sm transition-all cursor-pointer flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed";
+    const haltBtn = `${btnBase} bg-accent-red-bright hover:bg-accent-red-bright-hover`;
+    const resumeBtn = `${btnBase} bg-accent-green-bright hover:bg-accent-green-bright-hover`;
+    const reloadBtn = `${btnBase} bg-accent-blue-bright hover:bg-accent-blue-bright-hover`;
 
-    // ── Status banner ────────────────────────────────────────────────────────
-    let banner: { text: string; cls: string };
+    // ── Status badge ─────────────────────────────────────────────────────────
+    // Compact state pill — just the state word; full detail is in the title
+    // tooltip + the explanation text.
+    let badge: { text: string; cls: string; title: string };
     if (statusErr) {
-        banner = { text: `status unavailable — ${statusErr}`, cls: "bg-bg-surface border-border-strong text-text-muted" };
+        badge = {
+            text: "UNKNOWN",
+            cls: "bg-bg-surface border-border-strong text-text-muted",
+            title: `status unavailable — ${statusErr}`,
+        };
     } else if (status?.kill_switch) {
-        banner = { text: "HALTED — new orders blocked, all open orders cancelled", cls: "bg-accent-red/10 border-accent-red/30 text-accent-red" };
+        badge = {
+            text: "HALTED",
+            cls: "bg-accent-red/15 border-accent-red/40 text-accent-red",
+            title: "new orders blocked, all open orders cancelled",
+        };
     } else if (status?.deadman_engaged) {
-        banner = { text: "DEAD-MAN ENGAGED — backend heartbeat stale; executor self-blocked", cls: "bg-accent-blue/10 border-accent-blue/30 text-accent-blue" };
+        badge = {
+            text: "DEAD-MAN",
+            cls: "bg-accent-blue/15 border-accent-blue/40 text-accent-blue",
+            title: "backend heartbeat stale; executor self-blocked",
+        };
     } else if (status) {
-        banner = { text: "LIVE — orders flowing normally", cls: "bg-accent-green/10 border-accent-green/30 text-accent-green" };
+        badge = {
+            text: "LIVE",
+            cls: "bg-accent-green/15 border-accent-green/40 text-accent-green",
+            title: "orders flowing normally",
+        };
     } else {
-        banner = { text: "loading control state…", cls: "bg-bg-surface border-border-strong text-text-muted" };
+        badge = { text: "…", cls: "bg-bg-surface border-border-strong text-text-muted", title: "loading control state" };
     }
 
     return (
-        <div className="p-5 w-full max-w-4xl mx-auto space-y-6">
-            <p className="text-xs text-text-muted leading-loose">
-                HALT sets{" "}
-                <code className="font-mono px-1.5 py-0.5 rounded-md border border-border-strong bg-bg-surface text-text-primary shadow-sm">
-                    executor:kill_switch
-                </code>{" "}
-                +{" "}
-                <code className="font-mono px-1.5 py-0.5 rounded-md border border-border-strong bg-bg-surface text-text-primary shadow-sm">
-                    executor:cancel_all
-                </code>{" "}
-                via the backend. The executor cancels every open order on the wallet and blocks new
-                ones until RESUME.
-            </p>
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto space-y-5">
+            {/* Top row — compact status badge (left), explanation, and actions
+                side by side, wrapping to a stack on narrow windows. */}
+            <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                {/* Live status badge — compact, left-aligned, shrink-to-fit */}
+                <div
+                    title={badge.title}
+                    className={`shrink-0 self-start lg:self-center px-3 py-1.5 rounded-md border font-mono text-xs font-semibold tracking-wide ${badge.cls}`}
+                >
+                    {badge.text}
+                </div>
 
-            {/* Live status banner */}
-            <div className={`px-4 py-3 rounded-md border font-mono text-xs font-medium ${banner.cls}`}>
-                {banner.text}
-            </div>
+                {/* Explanation */}
+                <p className="flex-1 text-xs text-text-muted leading-loose">
+                    HALT sets{" "}
+                    <code className="font-mono px-1.5 py-0.5 rounded-md border border-border-strong bg-bg-surface text-text-primary shadow-sm">
+                        executor:kill_switch+cancel_all
+                    </code>{" "}
+                    + via the backend. The executor cancels every open order on the wallet and blocks new ones until
+                    RESUME.
+                </p>
 
-            <div className="grid grid-cols-1 gap-4 mb-4">
-                <Card title="system control" subtitle="halt = block + cancel all" noPad>
-                    <div className="p-4 flex gap-3 h-full items-center">
-                        <button
-                            disabled={busy}
-                            onClick={() => sendControl({ type: "halt" }, "HALT — block + cancel all")}
-                            className="flex-1 py-2.5 rounded-md border text-xs font-mono font-medium transition-all shadow-sm bg-accent-red/10 border-accent-red/20 text-accent-red hover:bg-accent-red/20 disabled:opacity-50 cursor-pointer"
-                        >
-                            HALT
-                        </button>
-                        <button
-                            disabled={busy}
-                            onClick={() => sendControl({ type: "resume" }, "resume")}
-                            className={`flex-1 py-2.5 ${btnClass}`}
-                        >
-                            resume
-                        </button>
-                        <button
-                            disabled={busy}
-                            onClick={() => sendControl({ type: "reload_risk" }, "reload risk config")}
-                            className={`flex-1 py-2.5 ${btnClass}`}
-                        >
-                            reload risk
-                        </button>
-                    </div>
-                </Card>
+                {/* Action buttons */}
+                <div className="shrink-0 flex flex-wrap gap-3 items-stretch">
+                    <button
+                        disabled={busy}
+                        onClick={() => sendControl({ type: "halt" }, "HALT — block + cancel all")}
+                        className={haltBtn}
+                    >
+                        HALT
+                    </button>
+                    <button
+                        disabled={busy}
+                        onClick={() => sendControl({ type: "resume" }, "resume")}
+                        className={resumeBtn}
+                    >
+                        resume
+                    </button>
+                    <button
+                        disabled={busy}
+                        onClick={() => sendControl({ type: "reload_risk" }, "reload risk config")}
+                        className={reloadBtn}
+                    >
+                        reload risk
+                    </button>
+                </div>
             </div>
 
             {/* Log */}

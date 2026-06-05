@@ -133,6 +133,21 @@ export interface MonitorStatus {
     ts: number;
 }
 
+// Error logs — mirrors `backend/src/routes/logs.rs::LogEntry`.
+
+export interface LogEntry {
+    /** Which service's `.error.log` this came from. */
+    service: string;
+    /** Parsed RFC3339 timestamp, or null when the line didn't start with one. */
+    ts: string | null;
+    /** Parsed level (WARN / ERROR), or null. */
+    level: string | null;
+    /** Parsed tracing target (e.g. `backend::routes`), or null. */
+    target: string | null;
+    /** The full original log line (always present). */
+    raw: string;
+}
+
 export interface PolymarketMarket {
     /** Stable identifier across rollovers. The UI keys cards on this and
      *  fetches orderbook via `/api/orderbook/polymarket/{base_slug}`. */
@@ -240,6 +255,11 @@ export const api = {
     /// backend's sampler writes every 30s. The chart reverses for time order.
     monitorHistory: (limit = 720) =>
         get<MonitorStatus[]>(`${BASE}/monitor/history?limit=${limit}`),
+
+    /// Recent error-log entries across all services, newest-first. Backed by a
+    /// capped Redis list the backend's tailer fills from each service's daily
+    /// `.error.log`.
+    errorLogs: (limit = 200) => get<LogEntry[]>(`${BASE}/logs/errors?limit=${limit}`),
 
     postControl: (action: ControlAction) => post<ControlStatus>(`${BASE}/control`, action),
 

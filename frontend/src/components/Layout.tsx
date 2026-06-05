@@ -9,6 +9,7 @@ const nav = [
     { to: "/account", label: "Account" },
     { to: "/control", label: "Control" },
     { to: "/monitor", label: "Monitor" },
+    { to: "/logs", label: "Logs" },
 ];
 
 export default function Layout() {

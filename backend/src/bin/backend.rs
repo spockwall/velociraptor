@@ -56,6 +56,15 @@ async fn run(cfg: Config) -> Result<()> {
         std::path::PathBuf::from(&cfg.logging.dir),
     ));
 
+    // Background error-log tailer: republishes new lines from every service's
+    // daily `{logging.dir}/{service}/{day}.error.log` onto a capped Redis list,
+    // caching its per-service read cursor in Redis so restarts resume in place
+    // and daily rotation is handled. Read by `GET /api/logs/errors`.
+    tokio::spawn(backend::routes::logs::tail_loop(
+        redis.clone(),
+        std::path::PathBuf::from(&cfg.logging.dir),
+    ));
+
     let gamma = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .user_agent("velociraptor-backend/0.1")

@@ -72,6 +72,17 @@ impl System {
     /// Capped list of recent `MonitorStatus` samples (msgpack), newest first.
     /// Read by `GET /api/monitor/history` for the frontend line graph.
     pub const METRICS: &'static str = "system:metrics";
+
+    /// Capped list of recent error-log entries (msgpack `LogEntry`), newest
+    /// first. Written by the backend's error-log tailer, read by
+    /// `GET /api/logs/errors` for the frontend.
+    pub const ERROR_LOGS: &'static str = "system:error_logs";
+
+    /// Hash of the tailer's per-service read cursor: field = service name,
+    /// value = `"{YYYY-MM-DD}:{byte_offset}"`. Persists where each daily
+    /// `.error.log` was last read to, so a backend restart resumes instead of
+    /// re-emitting the whole file. The date component handles daily rotation.
+    pub const ERROR_LOG_CURSORS: &'static str = "system:error_log_cursors";
 }
 
 pub struct Risk;

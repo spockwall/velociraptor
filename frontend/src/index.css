@@ -1,19 +1,50 @@
 @import "tailwindcss";
 
 @theme {
+  /* ── Surfaces & borders ──────────────────────────────────────────────── */
   --color-bg-base: #0a0a0a;
   --color-bg-surface: #121212;
+  --color-bg-card: #141414;       /* Card body / chart tooltip / chip-active bg */
   --color-bg-hover: #1c1c1c;
+  --color-bg-chip: #1f2937;       /* active filter-chip background */
   --color-border-strong: #262626;
   --color-border-subtle: #333333;
-  
+  --color-border-card: #1f1f1f;   /* hairline between Card rows / inset tracks */
+  --color-border-faint: #1a1a1a;  /* faintest row divider (log rows) */
+  --color-border-chip: #374151;   /* active filter-chip border */
+
+  /* ── Text scale (light → dark grey) ──────────────────────────────────── */
   --color-text-primary: var(--theme-primary, #d4d4d4);
   --color-text-muted: var(--theme-secondary, #808080);
-  
+  --color-text-bright: #e0e0e0;   /* page/section headings */
+  --color-text-strong: #c0c0c0;   /* active value labels */
+  --color-text-dim: #888888;      /* secondary labels */
+  --color-text-faint: #777777;    /* tertiary (targets, inactive dots) */
+  --color-text-subtle: #666666;   /* axis ticks, captions */
+  --color-text-ghost: #555555;    /* timestamps, "—", least-important meta */
+  --color-text-trace: #444444;    /* card subtitle */
+
+  /* ── Accent / status palette (runtime-overridable via theme.json) ────── */
   --color-accent-green: var(--theme-green, #6a9978);
   --color-accent-red: var(--theme-red, #b05c5c);
   --color-accent-blue: var(--theme-blue, #5b8eb5);
   --color-accent-gray: var(--theme-gray, #404040);
+  --color-accent-gold: #c9a45c;   /* WARN level */
+  --color-accent-amber: #f5a623;  /* stale-data warning */
+
+  /* Brighter, fully-saturated accent variants — used for solid action
+     buttons (Control page) where the muted tones read as too dim. */
+  --color-accent-green-bright: #2faa5e;
+  --color-accent-red-bright: #e5484d;
+  --color-accent-blue-bright: #3b82f6;
+  --color-accent-green-bright-hover: #34c46c;
+  --color-accent-red-bright-hover: #f25a5f;
+  --color-accent-blue-bright-hover: #4f8ff7;
+
+  /* ── Error banner (loading/fetch failure callout) ────────────────────── */
+  --color-error-text: #e5484d;
+  --color-error-bg: #1a1212;
+  --color-error-border: #3a1d1d;
 }
 
 * {

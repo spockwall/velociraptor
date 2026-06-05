@@ -55,6 +55,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/monitor", get(routes::monitor::get_monitor))
         .route("/api/monitor/history", get(routes::monitor::get_monitor_history))
+        .route("/api/logs/errors", get(routes::logs::get_error_logs))
         .route("/api/spot_price/:product", get(routes::spot::get_spot_price))
         .route(
             "/api/window_open_price/:product/:interval_secs/:window_start",
