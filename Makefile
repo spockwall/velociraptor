@@ -4,10 +4,15 @@
 
 .PHONY: build builder rebuild up down logs ps clean
 
-# Build the shared Rust builder image, then the three runtime images.
+# Build the shared Rust builder image, then the runtime images.
+# The frontend is built with --no-cache: its Dockerfile's `COPY . . && npm run
+# build` layer otherwise cache-hits across source edits, so a plain cached build
+# serves a stale `dist/`. The Rust images keep the cache (they rebuild correctly
+# off the freshly-built builder image).
 build:
 	DOCKER_BUILDKIT=1 docker compose --profile build-only build builder
-	DOCKER_BUILDKIT=1 docker compose build backend orderbook_server executor frontend
+	DOCKER_BUILDKIT=1 docker compose build backend orderbook_server executor
+	DOCKER_BUILDKIT=1 docker compose build --no-cache frontend
 
 # Just the shared builder (use this after touching any Cargo.toml or src/).
 builder:
