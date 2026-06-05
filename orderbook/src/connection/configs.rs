@@ -25,7 +25,12 @@ impl ClientConfig {
             ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::BinanceSpot => (binance::ws::SPOT_PUBLIC_STREAM, 15u64),
             ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
-            ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 45u64),
+            // Ping must be MORE frequent than the 30s pong_timeout in
+            // `ClientConfig` (client.rs), or `last_pong` ages past 30s between
+            // pings every cycle and the heartbeat manager logs a spurious
+            // Warning (the connection is fine — Hyperliquid only closes after
+            // 60s idle). 20s keeps a comfortable margin under both bounds.
+            ExchangeName::Hyperliquid => (hyperliquid::ws::PUBLIC_STREAM, 20u64),
 
             // Kalshi sends server pings every 10s; client ping interval unused
             // but set conservatively to match their documented 10s window.
