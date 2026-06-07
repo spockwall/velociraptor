@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(cfg.binance.symbols, vec!["btcusdt", "ethusdt"]);
 
         assert!(cfg.okx.enabled);
-        assert_eq!(cfg.okx.symbols, vec!["BTC-USDT", "ETH-USDT-SWAP"]);
+        assert_eq!(cfg.okx.symbols, vec!["BTC-USDT", "ETH-USDT"]);
 
         assert!(cfg.hyperliquid.enabled);
         assert_eq!(cfg.hyperliquid.coins, vec!["BTC", "ETH"]);

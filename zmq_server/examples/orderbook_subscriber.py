@@ -25,7 +25,7 @@ Usage
 
     # OKX ETH, BBA type
     python3 zmq_server/examples/orderbook_subscriber.py \\
-        --exchange okx --symbol ETH-USDT-SWAP --type bba
+        --exchange okx --symbol ETH-USDT --type bba
 
     # Hyperliquid
     python3 zmq_server/examples/orderbook_subscriber.py \\
