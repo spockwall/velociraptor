@@ -17,6 +17,11 @@ redis:
 
 backend:
   port: 3000
+  # Subfolders under this dir are shown on the monitor page (du-style sizes).
+  # In Docker the data volume is mounted at /app/data (see docker-compose.yml:
+  # the backend service mounts ./data -> /app/data). On a bare-metal/systemd
+  # server deploy set this to the real data volume, e.g. /data.
+  data_dir: "/app/data"
 
 storage:
   enabled: false

@@ -25,6 +25,10 @@ redis:
 
 backend:
   port: 3000
+  # Root dir whose immediate subfolders the monitor page reports du-style usage
+  # for. On the server this is the data volume (`/data`); on a dev box without
+  # it the monitor's data_usage is just empty.
+  data_dir: "/data"
 
 storage:
   enabled: false

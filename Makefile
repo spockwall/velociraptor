@@ -14,6 +14,10 @@
 # up -d` won't recreate a service whose image content changed under the same
 # `:latest` tag. So after building we force-recreate the frontend; without this
 # you keep seeing the old UI even though a fresh image exists.
+
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
 build:
 	DOCKER_BUILDKIT=1 docker compose --profile build-only build builder
 	DOCKER_BUILDKIT=1 docker compose build backend orderbook_server executor
