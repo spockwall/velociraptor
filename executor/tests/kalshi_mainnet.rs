@@ -144,6 +144,48 @@ async fn place_order() {
     );
 }
 
+/// `RestOrderClient::place` with `OrderKind::Market` — fires a market order
+/// (`type:"market"`, no price) that fills against resting liquidity immediately.
+///
+///   cargo test -p executor --test kalshi_mainnet \
+///     -- --ignored --nocapture place_market_order
+///
+/// **Real money on the production host — this WILL fill.** `qty` is the contract
+/// count; `px`/`tif` are ignored by the venue for a market order.
+#[tokio::test]
+#[ignore = "places a real MARKET order on Kalshi (fills immediately) — run manually"]
+async fn place_market_order() {
+    let ticker = MARKET_TICKER.to_string();
+    let side = Side::Buy;
+    let qty = 1.0; // contracts
+
+    let client = build_client();
+    let client_oid = format!(
+        "kalshi-mainnet-mkt-{}",
+        chrono::Utc::now().timestamp_millis()
+    );
+
+    let order = PlaceOne {
+        client_oid: client_oid.clone(),
+        symbol: ticker,
+        side,
+        kind: OrderKind::Market,
+        px: 0.0, // ignored for market orders
+        qty,
+        tif: Tif::Ioc,
+    };
+
+    eprintln!("place_market: {order:?}");
+    let ack = client
+        .place(&order)
+        .await
+        .expect("place market should succeed");
+    eprintln!(
+        "place_market: ACK exchange_oid={} status={:?} client_oid={}",
+        ack.exchange_oid, ack.status, ack.client_oid
+    );
+}
+
 /// `RestOrderClient::place_batch` — submits two GTC limits via the batched
 /// endpoint. Edit the array literal in the body to control what gets placed.
 ///
@@ -203,7 +245,10 @@ async fn place_batch_orders() {
 async fn update_order() {
     let ticker = MARKET_TICKER.to_string();
     let client = build_client();
-    let client_oid = format!("kalshi-mainnet-amend-{}", chrono::Utc::now().timestamp_millis());
+    let client_oid = format!(
+        "kalshi-mainnet-amend-{}",
+        chrono::Utc::now().timestamp_millis()
+    );
 
     let order = PlaceOne {
         client_oid: client_oid.clone(),
@@ -277,7 +322,6 @@ async fn cancel_all_orders() {
 #[tokio::test]
 #[ignore = "cancels every order on a single Kalshi ticker — run manually"]
 async fn cancel_market_orders() {
-
     let client = build_client();
     let n = client
         .cancel_market(MARKET_TICKER)

@@ -35,6 +35,12 @@ struct Args {
     #[arg(long, default_value = "credentials/polymarket.yaml")]
     credentials: String,
 
+    /// Path to the Kalshi credentials file (a `kalshi:` section). Kept separate
+    /// from `--credentials` because Kalshi creds live in their own file. If the
+    /// file/section is absent the Kalshi REST client is simply not built.
+    #[arg(long, default_value = "credentials/kalshi.yaml")]
+    kalshi_credentials: String,
+
     /// Skip the credentials file-mode check (useful in dev / docker).
     #[arg(long)]
     skip_chmod_check: bool,
@@ -97,10 +103,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Kalshi (optional) ────────────────────────────────────────────────
-    // Built only when the credentials file has a `kalshi` section, so an
-    // absent section doesn't block startup. Sync constructor (RSA-PSS auth is
-    // local). Demo/env selection is future work — prod base for now.
-    match libs::credentials::kalshi::KalshiCredentials::try_load(&args.credentials) {
+    // Read from the dedicated `--kalshi-credentials` file (Kalshi creds live
+    // separately from polymarket). Built only when that file has a `kalshi`
+    // section, so an absent file/section doesn't block startup. Sync
+    // constructor (RSA-PSS auth is local). Demo/env selection is future work.
+    if !args.skip_chmod_check && std::path::Path::new(&args.kalshi_credentials).exists() {
+        if let Err(e) = ensure_owner_only(&args.kalshi_credentials) {
+            anyhow::bail!("kalshi credentials: {e}");
+        }
+    }
+    match libs::credentials::kalshi::KalshiCredentials::try_load(&args.kalshi_credentials) {
         Some(kalshi_creds) => {
             match KalshiRestClient::new(
                 kalshi_creds,
@@ -116,7 +128,10 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => warn!("kalshi: REST client init failed: {e}"),
             }
         }
-        None => info!("kalshi: no credentials section — skipping REST client"),
+        None => info!(
+            path = %args.kalshi_credentials,
+            "kalshi: no credentials file/section — skipping REST client"
+        ),
     }
 
     // ── Redis ────────────────────────────────────────────────────────────

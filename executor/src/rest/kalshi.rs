@@ -20,9 +20,12 @@
 //! | `client_oid`       | `client_order_id`                        |
 //! | `Tif`              | `time_in_force` token                    |
 //!
-//! Market orders are not supported on this REST surface (Kalshi has no market
-//! order type here) — `place` rejects `OrderKind::Market` with a clear error;
-//! submit a limit at an aggressive price with `Ioc`/`Fok` instead.
+//! Every order is sent as a **limit** (with `price` + `time_in_force`, both
+//! required by the API; no `type` field). `OrderKind::Market` is supported by
+//! sending an aggressive limit at the worst in-range price (`0.99` for a buy,
+//! `0.01` for a sell — the exact bounds `1.00`/`0.00` are rejected
+//! `invalid_price`) with an IOC/FOK tif, so it crosses the book and fills
+//! immediately rather than resting.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -189,6 +192,17 @@ fn tif_to_kalshi(t: Tif) -> Result<&'static str, OrderError> {
     }
 }
 
+/// `time_in_force` token for a **market** order. Kalshi requires the field but a
+/// market order must be marketable, so `Gtc`/`Gtd` (resting) don't apply — map
+/// them (and `Ioc`) to `immediate_or_cancel`, and `Fok` to `fill_or_kill`.
+fn market_tif_to_kalshi(t: Tif) -> &'static str {
+    match t {
+        Tif::Fok => "fill_or_kill",
+        // Gtc / Gtd / Ioc → IOC: take whatever fills now, cancel the rest.
+        _ => "immediate_or_cancel",
+    }
+}
+
 /// Derive an [`OrderStatus`] from Kalshi fill/remaining/initial counts.
 fn derive_status(fill: f64, remaining: f64, initial: f64) -> OrderStatus {
     if remaining <= 0.0 && fill > 0.0 {
@@ -207,6 +221,33 @@ fn derive_status(fill: f64, remaining: f64, initial: f64) -> OrderStatus {
 
 fn now_ns() -> i64 {
     Utc::now().timestamp_nanos_opt().unwrap_or(0)
+}
+
+/// Build the Kalshi create-order request for one `PlaceOne`. Limit orders carry
+/// a dollar price + time-in-force; market orders send `type:"market"` with just
+/// the count (Kalshi executes them against resting liquidity immediately, so
+/// `px` and `tif` are ignored). Borrows from `p`, so the returned request lives
+/// as long as `p`.
+fn build_create_req(p: &PlaceOne) -> Result<CreateOrderReq<'_>, OrderError> {
+    let side = side_to_kalshi(p.side);
+    let count = qty_to_count_string(p.qty);
+    match p.kind {
+        OrderKind::Limit => Ok(CreateOrderReq::limit(
+            &p.symbol,
+            &p.client_oid,
+            side,
+            count,
+            px_to_dollar_string(p.px),
+            tif_to_kalshi(p.tif)?,
+        )),
+        OrderKind::Market => Ok(CreateOrderReq::market(
+            &p.symbol,
+            &p.client_oid,
+            side,
+            count,
+            market_tif_to_kalshi(p.tif),
+        )),
+    }
 }
 
 /// Whether an [`OrderError`] represents a 404 / not-found from Kalshi. Covers
@@ -242,18 +283,82 @@ where
 /// a single-account trader. Make this a const so all create paths agree.
 const SELF_TRADE_PREVENTION: &str = "taker_at_cross";
 
+/// Marketable price bounds for a synthetic market order. Kalshi binary
+/// contracts trade in the OPEN interval (1¢–99¢): the exact bounds `1.0000` /
+/// `0.0000` are rejected `invalid_price`. So a marketable BUY crosses up to
+/// `0.99` and a marketable SELL down to `0.01` — still aggressive enough to
+/// sweep the whole book at the touch.
+const MARKETABLE_BUY_PX: &str = "0.9900";
+const MARKETABLE_SELL_PX: &str = "0.0100";
+
+/// Every Kalshi order is sent as a **limit** with an explicit `price` +
+/// `time_in_force` (both are required by the events-orders API — omitting either
+/// 400s). We don't send a `type` field: a "market" order is just an aggressive
+/// limit at the worst-acceptable price (see [`CreateOrderReq::market`]), which
+/// crosses the book and fills immediately. Avoiding `type` also sidesteps the
+/// API's per-type field validation.
 #[derive(Serialize)]
 struct CreateOrderReq<'a> {
     ticker: &'a str,
     client_order_id: &'a str,
-    side: &'a str, // "bid" | "ask"
-    count: String, // "10.00"
-    price: String, // "0.5600"
+    side: &'a str,  // "bid" | "ask"
+    count: String,  // "10.00"
+    price: String,  // "0.5600"
     time_in_force: &'a str,
     /// Required by the events-orders API (see [`SELF_TRADE_PREVENTION`]).
     self_trade_prevention_type: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     post_only: Option<bool>,
+}
+
+impl<'a> CreateOrderReq<'a> {
+    /// Build a limit order: the caller's price + time_in_force.
+    fn limit(
+        ticker: &'a str,
+        client_order_id: &'a str,
+        side: &'a str,
+        count: String,
+        price: String,
+        time_in_force: &'a str,
+    ) -> Self {
+        Self {
+            ticker,
+            client_order_id,
+            side,
+            count,
+            price,
+            time_in_force,
+            self_trade_prevention_type: SELF_TRADE_PREVENTION,
+            post_only: None,
+        }
+    }
+
+    /// Build a market order as an aggressive limit at the *worst-acceptable*
+    /// price that guarantees a cross: a `bid` (buy) pays up to `0.99`, an `ask`
+    /// (sell) sells down to `0.01` (the in-range extremes — see
+    /// [`MARKETABLE_BUY_PX`]). Paired with an IOC/FOK `time_in_force` it fills
+    /// against resting liquidity at the touch and never rests at this bound.
+    fn market(
+        ticker: &'a str,
+        client_order_id: &'a str,
+        side: &'a str,
+        count: String,
+        time_in_force: &'a str,
+    ) -> Self {
+        let price = if side == "bid" {
+            MARKETABLE_BUY_PX
+        } else {
+            MARKETABLE_SELL_PX
+        };
+        Self::limit(
+            ticker,
+            client_order_id,
+            side,
+            count,
+            price.to_string(),
+            time_in_force,
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -364,7 +469,11 @@ struct OrderRow {
 
 impl OrderRow {
     fn status(&self) -> OrderStatus {
-        derive_status(self.fill_count_fp, self.remaining_count_fp, self.initial_count_fp)
+        derive_status(
+            self.fill_count_fp,
+            self.remaining_count_fp,
+            self.initial_count_fp,
+        )
     }
 }
 
@@ -373,23 +482,7 @@ impl OrderRow {
 #[async_trait]
 impl RestOrderClient for KalshiRestClient {
     async fn place(&self, p: &PlaceOne) -> Result<OrderAck, OrderError> {
-        if p.kind == OrderKind::Market {
-            return Err(OrderError::Internal {
-                message: "kalshi: market orders unsupported on REST; submit a limit at an \
-                          aggressive price with Ioc/Fok"
-                    .into(),
-            });
-        }
-        let req = CreateOrderReq {
-            ticker: &p.symbol,
-            client_order_id: &p.client_oid,
-            side: side_to_kalshi(p.side),
-            count: qty_to_count_string(p.qty),
-            price: px_to_dollar_string(p.px),
-            time_in_force: tif_to_kalshi(p.tif)?,
-            self_trade_prevention_type: SELF_TRADE_PREVENTION,
-            post_only: None,
-        };
+        let req = build_create_req(p)?;
         let resp: CreateOrderResp = self
             .request(Method::POST, ep::EVENTS_ORDERS, None, Some(&req))
             .await?;
@@ -410,35 +503,20 @@ impl RestOrderClient for KalshiRestClient {
         &self,
         os: &[PlaceOne],
     ) -> Result<Vec<Result<OrderAck, OrderError>>, OrderError> {
-        // Validate every leg up front. Invalid legs (Market / Gtd) never reach
-        // the wire; they're slotted back into the result by index so callers
-        // keep a 1:1 mapping.
+        // Validate + build every leg up front. A leg that fails to build
+        // (e.g. `Tif::Gtd`) never reaches the wire; it's slotted back into the
+        // result by index so callers keep a 1:1 mapping.
         let mut reqs: Vec<CreateOrderReq> = Vec::with_capacity(os.len());
         // index in `os` → index in `reqs` (None for legs that failed validation)
         let mut slot: Vec<Option<usize>> = Vec::with_capacity(os.len());
         let mut errs: Vec<Option<OrderError>> = Vec::with_capacity(os.len());
 
         for p in os {
-            let validated = (p.kind != OrderKind::Market)
-                .then_some(())
-                .ok_or_else(|| OrderError::Internal {
-                    message: "kalshi: market orders unsupported on REST".into(),
-                })
-                .and_then(|_| tif_to_kalshi(p.tif));
-            match validated {
-                Ok(tif) => {
+            match build_create_req(p) {
+                Ok(req) => {
                     slot.push(Some(reqs.len()));
                     errs.push(None);
-                    reqs.push(CreateOrderReq {
-                        ticker: &p.symbol,
-                        client_order_id: &p.client_oid,
-                        side: side_to_kalshi(p.side),
-                        count: qty_to_count_string(p.qty),
-                        price: px_to_dollar_string(p.px),
-                        time_in_force: tif,
-                        self_trade_prevention_type: SELF_TRADE_PREVENTION,
-                        post_only: None,
-                    });
+                    reqs.push(req);
                 }
                 Err(e) => {
                     slot.push(None);
@@ -540,7 +618,12 @@ impl RestOrderClient for KalshiRestClient {
         let price = px_to_dollar_string(new_px.unwrap_or(cur_px));
         let count = qty_to_count_string(new_qty.unwrap_or(cur_count));
 
-        let amend_path = format!("{}{}{}", ep::EVENTS_ORDER_BY_ID, exchange_oid, ep::AMEND_SUFFIX);
+        let amend_path = format!(
+            "{}{}{}",
+            ep::EVENTS_ORDER_BY_ID,
+            exchange_oid,
+            ep::AMEND_SUFFIX
+        );
         let req = AmendReq {
             ticker: &row.ticker,
             side,
@@ -645,11 +728,11 @@ impl RestOrderClient for KalshiRestClient {
     }
 
     async fn heartbeat(&self) -> Result<HeartbeatAck, OrderError> {
-        // Liveness GET. Kalshi's heartbeat has no next-due field; report a
-        // sentinel so callers don't schedule a follow-up off this value.
-        let _: serde_json::Value = self
-            .request::<(), _>(Method::GET, ep::EXCHANGE_HEARTBEAT, None, None)
-            .await?;
+        // Kalshi's REST API is stateless (every request is RSA-PSS signed) —
+        // there is no heartbeat / keepalive to send, so this is a no-op static
+        // ack (matching the Polymarket client). `next_due_ms = MAX` means
+        // "always alive; never schedule a follow-up". For an actual
+        // connectivity/credential probe use `get_orders`.
         Ok(HeartbeatAck {
             next_due_ms: u64::MAX,
         })
@@ -733,27 +816,70 @@ mod tests {
     }
 
     #[test]
-    fn create_order_req_serializes_to_kalshi_shape() {
-        let req = CreateOrderReq {
-            ticker: "HIGHNY-24JAN01-T60",
-            client_order_id: "abc",
-            side: "bid",
-            count: "10.00".into(),
-            price: "0.5600".into(),
-            time_in_force: "good_till_canceled",
-            self_trade_prevention_type: SELF_TRADE_PREVENTION,
-            post_only: None,
+    fn limit_order_req_serializes_to_kalshi_shape() {
+        let p = PlaceOne {
+            client_oid: "abc".into(),
+            symbol: "HIGHNY-24JAN01-T60".into(),
+            side: Side::Buy,
+            kind: OrderKind::Limit,
+            px: 0.56,
+            qty: 10.0,
+            tif: Tif::Gtc,
         };
+        let req = build_create_req(&p).unwrap();
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["ticker"], "HIGHNY-24JAN01-T60");
+        // No `type` field — every order is a limit on the wire.
+        assert!(v.get("type").is_none());
         assert_eq!(v["side"], "bid");
         assert_eq!(v["count"], "10.00");
         assert_eq!(v["price"], "0.5600");
         assert_eq!(v["time_in_force"], "good_till_canceled");
-        // self_trade_prevention_type is required by the events-orders API.
         assert_eq!(v["self_trade_prevention_type"], "taker_at_cross");
-        // post_only omitted when None
         assert!(v.get("post_only").is_none());
+    }
+
+    #[test]
+    fn market_order_req_uses_marketable_price_and_tif() {
+        // SELL → ask → worst-acceptable price 0.0000 (crosses down the book).
+        let sell = PlaceOne {
+            client_oid: "abc".into(),
+            symbol: "HIGHNY-24JAN01-T60".into(),
+            side: Side::Sell,
+            kind: OrderKind::Market,
+            px: 0.0,
+            qty: 7.0,
+            tif: Tif::Ioc,
+        };
+        let v: serde_json::Value = serde_json::to_value(&build_create_req(&sell).unwrap()).unwrap();
+        // No `type` field — a "market" order is an aggressive limit on the wire.
+        assert!(v.get("type").is_none());
+        assert_eq!(v["side"], "ask");
+        assert_eq!(v["count"], "7.00");
+        // Kalshi REQUIRES both price and time_in_force on every order; a market
+        // SELL crosses down to the in-range floor 0.0100 (0.0000 is rejected).
+        assert_eq!(v["price"], "0.0100");
+        assert_eq!(v["time_in_force"], "immediate_or_cancel");
+        assert_eq!(v["self_trade_prevention_type"], "taker_at_cross");
+
+        // BUY → bid → in-range ceiling 0.9900 (1.0000 is rejected invalid_price).
+        let buy = PlaceOne {
+            kind: OrderKind::Market,
+            side: Side::Buy,
+            ..sell
+        };
+        let vb: serde_json::Value = serde_json::to_value(&build_create_req(&buy).unwrap()).unwrap();
+        assert_eq!(vb["side"], "bid");
+        assert_eq!(vb["price"], "0.9900");
+    }
+
+    #[test]
+    fn market_tif_maps_to_marketable_tokens() {
+        // Fok → fill_or_kill; everything else (incl. resting Gtc/Gtd) → IOC.
+        assert_eq!(market_tif_to_kalshi(Tif::Fok), "fill_or_kill");
+        assert_eq!(market_tif_to_kalshi(Tif::Ioc), "immediate_or_cancel");
+        assert_eq!(market_tif_to_kalshi(Tif::Gtc), "immediate_or_cancel");
+        assert_eq!(market_tif_to_kalshi(Tif::Gtd), "immediate_or_cancel");
     }
 
     #[test]
