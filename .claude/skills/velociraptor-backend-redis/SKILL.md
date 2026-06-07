@@ -20,6 +20,8 @@ When `redis.enabled: true`, `orderbook_server` writes on every engine tick:
 | `events:fills` | list | Recent fill events, capped at `event_list_cap` |
 | `events:orders` | list | Recent order updates, capped at `event_list_cap` |
 | `system:metrics` | list | Host monitor samples (msgpack), capped 2880 ≈ 24h — written by the **backend** sampler, not orderbook_server (see "System monitor" below) |
+| `system:error_logs` | list | Recent error-log entries (msgpack `LogEntry`), capped 2000 — written by the **backend** error-log tailer (see "Error logs" below) |
+| `system:error_log_cursors` | hash | Tailer read cursor per service: field = service, value = `"{YYYY-MM-DD}:{byte_offset}"`. Lets the backend resume the daily `.error.log` in place across restarts |
 
 `{slug}` is the STABLE identifier:
 - Static exchanges (`binance`/`binance_spot`/`okx`/`hyperliquid`): exchange-native symbol (`btcusdt`, `BTC-USDT`).
@@ -70,6 +72,7 @@ cargo run --bin backend --release -- --config configs/example.yaml
 | `GET` | `/api/kalshi/markets` | Live Kalshi windows — see `velociraptor-kalshi` |
 | `GET` | `/api/monitor` | Live host CPU / memory / disk + systemd unit status (no Redis read) |
 | `GET` | `/api/monitor/history?limit=N` | Recent monitor samples, newest-first (default 720, max 2880) |
+| `GET` | `/api/logs/errors?limit=N` | Recent error-log entries across all services, newest-first (default 200, max 2000) |
 
 `:exchange` matches lowercase enum name (`binance`, `binance_spot`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `:symbol` is the stable slug: exchange-native symbol for static exchanges, **`base_slug` for Polymarket**, **`series` for Kalshi**.
 
@@ -100,6 +103,19 @@ curl http://localhost:3000/api/orderbook/kalshi/KXBTC15M
 - appends it as one JSON line to `{logging.dir}/system/YYYY-MM-DD.log` (durable record; Redis is volatile + capped).
 
 `GET /api/monitor/history` reads the Redis list back; the frontend Monitor page charts CPU / memory / busiest-disk % over time (recharts `LineChart`). systemd units queried mirror `deploy/systemd/velociraptor.target`; on a host without systemd each unit reports `active_state: "unknown"` so the page still renders.
+
+## Error logs
+
+`backend/src/routes/logs.rs::tail_loop` is a second background task spawned by `bin/backend.rs`. Each binary writes a daily-rotating `{logging.dir}/{service}/{YYYY-MM-DD}.error.log` (WARN+ only) via `libs::logging::init_logging`; the frontend can't reach the box, so the backend tails those files and republishes new lines through Redis.
+
+Every 5s, for each watched service (`backend`, `server`, `executor`, the four recorders/fetchers — see `SERVICES` in `logs.rs`) it:
+
+- reads today's `.error.log` from the **cached cursor** (`(date, byte_offset)` in the Redis hash `system:error_log_cursors`, one field per service),
+- parses each new line best-effort into a `LogEntry { service, ts, level, target, raw }` (`raw` always holds the original; structured fields fill in when the line matches tracing's text format),
+- LPUSH-es them onto the capped list `system:error_logs` (cap 2000),
+- writes the advanced cursor back.
+
+Caching the cursor in Redis (not just memory) means a backend restart resumes in place instead of re-emitting the whole file. The cursor's **date** component is what makes daily rotation correct: when the day rolls over the file name changes, the cached date no longer matches today, so the new file starts at offset 0. A fresh deployment (no cursor) starts at the *end* of today's file so it doesn't dump a day of history on the first tick. Only complete (newline-terminated) lines are consumed, so a half-written final line is re-read whole next tick. `GET /api/logs/errors` just reads the list back — cheap and not cursor-consuming, so any number of frontend clients can poll it. The frontend Logs page renders it as a filterable (per-service) table.
 
 ## Backend heartbeat
 
