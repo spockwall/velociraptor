@@ -10,4 +10,7 @@ pub struct AppState {
     /// Coinbase / Kraken / Binance spot tickers). Connection pool is shared
     /// across requests so we don't re-handshake on every call.
     pub gamma: reqwest::Client,
+    /// Root directory whose immediate subfolders the `/api/monitor` endpoint
+    /// reports du-style usage for (`backend.data_dir`, default `/data`).
+    pub data_dir: std::path::PathBuf,
 }

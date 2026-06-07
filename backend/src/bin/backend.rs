@@ -54,6 +54,7 @@ async fn run(cfg: Config) -> Result<()> {
     tokio::spawn(backend::routes::monitor::sample_loop(
         redis.clone(),
         std::path::PathBuf::from(&cfg.logging.dir),
+        std::path::PathBuf::from(&cfg.backend.data_dir),
     ));
 
     // Background error-log tailer: republishes new lines from every service's
@@ -69,7 +70,11 @@ async fn run(cfg: Config) -> Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .user_agent("velociraptor-backend/0.1")
         .build()?;
-    let state = Arc::new(AppState { redis, gamma });
+    let state = Arc::new(AppState {
+        redis,
+        gamma,
+        data_dir: std::path::PathBuf::from(&cfg.backend.data_dir),
+    });
     // Per-route-group HTTP tracing is configured in `router()` (orderbook
     // reads at DEBUG, everything else at INFO; 5xx always ERROR).
     let app = router(state).layer(CorsLayer::permissive());

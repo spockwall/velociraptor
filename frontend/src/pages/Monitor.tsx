@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, MemoryStick, HardDrive, Server, Activity, LineChart as LineChartIcon } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, FolderTree, Server, Activity, LineChart as LineChartIcon } from "lucide-react";
 import {
     CartesianGrid,
     Line,
@@ -260,7 +260,7 @@ export default function Monitor() {
 
     if (!data) return null;
 
-    const { host, cpu, memory, disks, services } = data;
+    const { host, cpu, memory, disks, data_usage, services } = data;
     const ageSecs = Math.max(0, nowSecs - data.ts);
 
     return (
@@ -381,6 +381,26 @@ export default function Monitor() {
                         )}
                     </div>
                 </Card>
+
+                {/* Data directory usage — du-style per-subfolder sizes */}
+                {data_usage.length > 0 && (
+                    <Card
+                        title="data usage"
+                        subtitle="per-subfolder size under data dir"
+                        action={<FolderTree size={14} style={{ color: C.textSubtle }} />}
+                    >
+                        <div className="space-y-3">
+                            {data_usage.map((d) => (
+                                <UsageBar
+                                    key={d.name}
+                                    pct={d.pct_of_fs}
+                                    label={d.name}
+                                    detail={fmtBytes(d.size_bytes)}
+                                />
+                            ))}
+                        </div>
+                    </Card>
+                )}
 
                 {/* Services */}
                 <Card

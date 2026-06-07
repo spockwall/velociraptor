@@ -124,11 +124,23 @@ export interface ServiceInfo {
     error: string | null;
 }
 
+export interface DataDirUsage {
+    /** Immediate subfolder name under the configured data_dir. */
+    name: string;
+    /** Recursive total size of the subfolder, in bytes. */
+    size_bytes: number;
+    /** Share of the data_dir filesystem's total capacity, 0..100. */
+    pct_of_fs: number;
+}
+
 export interface MonitorStatus {
     host: HostInfo;
     cpu: CpuInfo;
     memory: MemoryInfo;
     disks: DiskInfo[];
+    /** du-style usage per immediate subfolder of the configured data_dir
+     *  (e.g. /data). Empty when the path doesn't exist (dev box). */
+    data_usage: DataDirUsage[];
     services: ServiceInfo[];
     ts: number;
 }
