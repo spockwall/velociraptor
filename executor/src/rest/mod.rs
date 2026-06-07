@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use libs::protocol::orders::{HeartbeatAck, OrderAck, OrderError, OrderStatus, PlaceOne};
 
+pub mod kalshi;
 pub mod polymarket;
 pub mod retry;
 

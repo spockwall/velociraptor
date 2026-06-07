@@ -31,6 +31,10 @@ prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 rmp-serde = { workspace = true }
+# `rsa` is named directly only to spell the Kalshi signer type
+# `rsa::pss::SigningKey<rsa::sha2::Sha256>` as a field in `rest/kalshi.rs`
+# (the signing itself lives in `libs::credentials::kalshi`).
+rsa = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

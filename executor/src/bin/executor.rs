@@ -12,6 +12,7 @@ use clap::Parser;
 use executor::control::{drain, run_watcher, ControlState, ShutdownState};
 use executor::gateway::{ClientMap, Gateway, GatewayConfig};
 use executor::ops::{ensure_owner_only, AuditSink, Metrics};
+use executor::rest::kalshi::KalshiRestClient;
 use executor::rest::polymarket::PolymarketRestClient;
 use executor::rest::RestOrderClient;
 use executor::{Executor, ExecutorBuild, ExecutorControlCallbacks};
@@ -93,6 +94,29 @@ async fn main() -> anyhow::Result<()> {
             warn!("polymarket: REST client init failed: {e}");
             anyhow::bail!("polymarket REST client could not be initialised");
         }
+    }
+
+    // ── Kalshi (optional) ────────────────────────────────────────────────
+    // Built only when the credentials file has a `kalshi` section, so an
+    // absent section doesn't block startup. Sync constructor (RSA-PSS auth is
+    // local). Demo/env selection is future work — prod base for now.
+    match libs::credentials::kalshi::KalshiCredentials::try_load(&args.credentials) {
+        Some(kalshi_creds) => {
+            match KalshiRestClient::new(
+                kalshi_creds,
+                libs::endpoints::kalshi::kalshi::EXTERNAL_API_BASE_URL,
+            ) {
+                Ok(c) => {
+                    clients.insert(
+                        ExchangeName::Kalshi,
+                        Arc::new(c) as Arc<dyn RestOrderClient>,
+                    );
+                    info!("kalshi: REST client built (external-api)");
+                }
+                Err(e) => warn!("kalshi: REST client init failed: {e}"),
+            }
+        }
+        None => info!("kalshi: no credentials section — skipping REST client"),
     }
 
     // ── Redis ────────────────────────────────────────────────────────────
