@@ -55,6 +55,9 @@ services:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
       - ./data/syslog:/app/syslog
+      # Read-only mount of the data volume so the monitor page can report
+      # per-subfolder usage (backend.data_dir = /app/data).
+      - ./data:/app/data:ro
     depends_on:
       - redis
     ports:
