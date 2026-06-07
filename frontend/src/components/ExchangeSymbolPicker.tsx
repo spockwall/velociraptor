@@ -7,7 +7,7 @@ export const PRESETS = [
     { exchange: "binance_spot", symbol: "btcusdt", label: "Binance Spot · BTCUSDT" },
     { exchange: "binance_spot", symbol: "ethusdt", label: "Binance Spot · ETHUSDT" },
     { exchange: "okx", symbol: "BTC-USDT", label: "OKX · BTC-USDT" },
-    { exchange: "okx", symbol: "ETH-USDT-SWAP", label: "OKX · ETH-USDT-SWAP" },
+    { exchange: "okx", symbol: "ETH-USDT", label: "OKX · ETH-USDT" },
     { exchange: "hyperliquid", symbol: "BTC", label: "Hyperliquid · BTC" },
     { exchange: "hyperliquid", symbol: "ETH", label: "Hyperliquid · ETH" },
 ];
