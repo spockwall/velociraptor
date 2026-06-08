@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 class ProbeStrategy(Strategy):
     name = "probe"
+    is_window = True  # built with a PolymarketWindow by Strategy.build
 
     def __init__(
         self,

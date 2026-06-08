@@ -59,6 +59,17 @@ def _binance_symbol_for(base_slug: str) -> Optional[str]:
 
 class MomentumStrategy(Strategy):
     name = "momentum"
+    is_window = True
+
+    @classmethod
+    def build(cls, args, *, market, router, state):
+        # Momentum takes no safe-mid knobs — build with just the window.
+        return cls(
+            market=market,
+            router=router,
+            state=state,
+            window=cls._window_from_args(args),
+        )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

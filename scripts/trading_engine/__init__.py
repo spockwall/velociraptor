@@ -32,7 +32,7 @@ from .trading import (
     Strategy,
     WindowStrategy,
     available_strategies,
-    make_strategy,
+    build_strategy,
 )
 from .typings.state import OrderLedger, OrderRecord, StrategyState
 from .typings.window import KalshiWindow, PolymarketWindow as MarketWindow
@@ -61,8 +61,8 @@ __all__ = [
     "UserFeed",
     "WindowStrategy",
     "available_strategies",
+    "build_strategy",
     "discover",
     "discover_kalshi",
     "main",
-    "make_strategy",
 ]

@@ -43,6 +43,20 @@ _DEPTH_LEVELS = 10
 
 class ObserveStrategy(Strategy):
     name = "observe"
+    # Pure watcher — no orders, so the engine skips the executor + user feed.
+    needs_orders = False
+
+    @classmethod
+    def build(cls, args, *, market, router, state):
+        return cls(
+            market=market,
+            router=router,
+            state=state,
+            binance_symbols=args.binance_symbols,
+            binance_spot_symbols=args.binance_spot_symbols,
+            poly_base_slugs=args.base_slugs,
+            kalshi_series=args.kalshi_series,
+        )
 
     def __init__(
         self,

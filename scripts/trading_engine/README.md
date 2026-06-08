@@ -519,7 +519,7 @@ scripts/trading_engine/
     ├── dispatcher.py       # Dispatcher — single-threaded event router
     ├── helpers.py          # MIN_PX/PIN_PX/SAFE_MID_* + clamp_px + qty_for_notional + safe_mid_guard
     └── strategies/
-        ├── __init__.py     # make_strategy(name, ...) + available_strategies()
+        ├── __init__.py     # build_strategy(name, args, ...) + strategy_class + available_strategies()
         ├── base.py         # Strategy abstract base (required_topics / setup / teardown)
         ├── observe.py      # ObserveStrategy
         ├── probe.py        # ProbeStrategy

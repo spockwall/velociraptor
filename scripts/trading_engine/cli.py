@@ -59,7 +59,36 @@ def parse_args() -> argparse.Namespace:
         "--kalshi-series",
         nargs="+",
         default=["KXBTC15M", "KXETH15M"],
-        help="Kalshi series (observe only)",
+        help=(
+            "Kalshi series. `observe` watches all; `kalshi_fill_once` uses the "
+            "first for its quote topic."
+        ),
+    )
+    p.add_argument(
+        "--kalshi-ticker",
+        default="",
+        help=(
+            "Kalshi market ticker to trade (UPPERCASE, with strike suffix, e.g. "
+            "KXBTC15M-26JUN081145-15). Required by `kalshi_fill_once`."
+        ),
+    )
+    p.add_argument(
+        "--kalshi-side",
+        choices=["buy", "sell"],
+        default="buy",
+        help="Side for kalshi_fill_once (buy→bid, sell→ask). Default buy.",
+    )
+    p.add_argument(
+        "--kalshi-qty",
+        type=float,
+        default=1.0,
+        help="Contract count for kalshi_fill_once. Default 1.",
+    )
+    p.add_argument(
+        "--kalshi-tif",
+        choices=["IOC", "FOK"],
+        default="IOC",
+        help="Market-order TIF for kalshi_fill_once. Default IOC.",
     )
     p.add_argument(
         "--binance-symbols",

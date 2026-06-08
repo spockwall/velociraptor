@@ -45,7 +45,7 @@ from .cli import parse_args
 from .io import OrderRouter, UserFeed
 from .io.event_log import EventLog
 from .market import MarketFeed, MarketState, Quote, Snapshot, Trade
-from .trading import Dispatcher, Strategy, make_strategy
+from .trading import Dispatcher, Strategy, build_strategy, strategy_class
 from .typings.events import (
     BootstrapEvent,
     FillEvent,
@@ -56,14 +56,8 @@ from .typings.events import (
     TradeEvent,
 )
 from .typings.state import StrategyState
-from .typings.window import PolymarketWindow
 
 log = logging.getLogger(__name__)
-
-
-# Strategies that need a Polymarket window (and therefore exactly one
-# --base-slug). Observe is the exception — it works with N inputs.
-_WINDOW_STRATEGIES = {"probe", "fill_once", "one_shot", "momentum"}
 
 
 def _ensure_writable_dir(path: str) -> None:
@@ -105,15 +99,23 @@ class Engine:
             on_rollover=self._enqueue_rollover,
             on_snapshot=self._enqueue_snapshot,
         )
-        # Observe doesn't need a connected executor or user feed.
-        self._needs_orders = args.strategy != "observe"
+        # Read order requirements off the strategy CLASS — no name special-
+        # casing. A pure watcher (observe) sets `needs_orders = False`, so the
+        # engine runs without an executor connection or user feed; the router's
+        # target venue comes from the class's `order_exchange`.
+        strat_cls = strategy_class(args.strategy)
+        self._needs_orders = strat_cls.needs_orders
         self.user_feed = (
             UserFeed(args.user_pub, on_event=self._enqueue_user_event)
             if self._needs_orders
             else None
         )
         self.router = (
-            OrderRouter(args.router_endpoint, event_log=self.event_log)
+            OrderRouter(
+                args.router_endpoint,
+                exchange=strat_cls.order_exchange,
+                event_log=self.event_log,
+            )
             if self._needs_orders
             else None
         )
@@ -123,34 +125,18 @@ class Engine:
     # ── build ──
 
     def _build_strategy(self) -> Strategy:
-        name = self.args.strategy
-        kwargs: dict = {
-            "market": self.market,
-            "router": self.router,  # may be None for observe
-            "state": StrategyState(),
-        }
-        if name == "observe":
-            kwargs.update(
-                binance_symbols=self.args.binance_symbols,
-                binance_spot_symbols=self.args.binance_spot_symbols,
-                poly_base_slugs=self.args.base_slugs,
-                kalshi_series=self.args.kalshi_series,
-            )
-        elif name in _WINDOW_STRATEGIES:
-            slugs = self.args.base_slugs
-            if len(slugs) != 1:
-                raise SystemExit(
-                    f"--strategy {name} requires exactly one --base-slugs "
-                    f"value (got {len(slugs)}: {slugs}). Launch multiple "
-                    f"engine processes for multiple markets."
-                )
-            kwargs["window"] = PolymarketWindow(base_slug=slugs[0])
-            # Trading-strategy knobs.
-            kwargs["safe_mid_low"] = self.args.safe_mid_low
-            kwargs["safe_mid_high"] = self.args.safe_mid_high
-            if name == "fill_once":
-                kwargs["order_notional_usd"] = self.args.order_notional_usd
-        return make_strategy(name, **kwargs)
+        # Fully uniform — every strategy constructs itself from `args` via its
+        # own `Strategy.build`. The engine keeps NO strategy-name list: window
+        # vs non-window, order routing, and per-strategy knobs are all decided
+        # by the strategy class (`is_window` / `needs_orders` / `order_exchange`
+        # / `build`).
+        return build_strategy(
+            self.args.strategy,
+            self.args,
+            market=self.market,
+            router=self.router,
+            state=StrategyState(),
+        )
 
     # ── run ──
 

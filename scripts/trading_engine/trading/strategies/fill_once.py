@@ -31,6 +31,14 @@ log = logging.getLogger(__name__)
 
 class FillOnceStrategy(Strategy):
     name = "fill_once"
+    is_window = True
+
+    @classmethod
+    def build(cls, args, *, market, router, state):
+        # Window kwargs + this strategy's extra notional knob.
+        kwargs = cls.window_kwargs(args, market=market, router=router, state=state)
+        kwargs["order_notional_usd"] = args.order_notional_usd
+        return cls(**kwargs)
 
     def __init__(
         self,

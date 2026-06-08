@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 class OneShotStrategy(Strategy):
     name = "one_shot"
+    is_window = True  # built with a PolymarketWindow by Strategy.build
 
     def __init__(
         self,
