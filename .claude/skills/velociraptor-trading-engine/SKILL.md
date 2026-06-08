@@ -321,6 +321,45 @@ def _on_quote(self, q):
 - **`required_topics()` is the only subscription surface.** If a topic isn't listed there, no callback you register against it will ever fire — the engine won't have subscribed the ZMQ topic.
 - **Stale Docker image trap.** Engine-side bugs that look like "no data" often mean a stale `orderbook_server` image. Always check image age vs. source edit time before doubting Python diffs.
 
+## Kalshi orders
+
+The order path is exchange-generic — `OrderRouter(exchange="kalshi")` routes
+through the executor's ROUTER to `KalshiRestClient` with no engine changes.
+`ExecutorClient`/`OrderRouter` take `exchange` as a plain string; the executor
+decodes it to `ExchangeName::Kalshi`.
+
+Kalshi specifics when calling `place_limit` / `place_market` / `cancel`:
+- **symbol** = UPPERCASE Kalshi **market** ticker (e.g. `KXBTC15M-…-15`), NOT the
+  event ticker (wrong/event ticker 404s `market_not_found`).
+- **side** `"buy"`→bid / `"sell"`→ask; **px** in dollars (0..1).
+- **Market orders ARE supported** — `place_market` sends an aggressive limit at
+  the worst in-range price (`0.99` buy / `0.01` sell) with IOC/FOK, so it crosses
+  the book and fills immediately. (Kalshi has no `type:"market"`; it's a
+  marketable limit on the wire, and the exact `1.00`/`0.00` bounds are rejected.)
+- The executor must be started with `--kalshi-credentials credentials/kalshi.yaml`
+  (separate from `--credentials`), and `server.yaml` needs a `kalshi:` market
+  section for Kalshi market data to flow.
+
+Kalshi is a **non-window** exchange in the engine: market data arrives on the
+stable `series` topic (e.g. `KXBTC15M`), the same way Polymarket arrives on
+`base_slug` — no dynamic endpoint. Subscribe `("kalshi", series, "snapshot")`.
+
+### `kalshi_fill_once` strategy
+
+`trading/strategies/kalshi_fill_once.py` — the Kalshi analogue of `fill_once`.
+On the first valid quote it fires one IOC/FOK **market** order on the configured
+market ticker, then parks (no rollover/asset-id dance; the ticker is fixed for
+the run). The engine builds `OrderRouter(exchange="kalshi")` for it
+(`_STRATEGY_EXCHANGE` in `app.py`).
+
+```bash
+python -m scripts.trading_engine \
+  --strategy kalshi_fill_once \
+  --kalshi-series KXBTC15M \
+  --kalshi-ticker KXBTC15M-26JUN081145-15 \
+  --kalshi-side buy --kalshi-qty 10 --kalshi-tif IOC
+```
+
 ## Where to look next
 
 - Wire formats / ZMQ topic shapes — `velociraptor-zmq-protocol`, `velociraptor-wire-formats`.

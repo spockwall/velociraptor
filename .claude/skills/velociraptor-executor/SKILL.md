@@ -20,29 +20,48 @@ For the wire types see `velociraptor-zmq-protocol`.
 
 ```bash
 cargo run --bin executor --release -- \
-  --credentials credentials/example.yaml \
-  --router-endpoint tcp://*:5557 \
-  --redis-url redis://127.0.0.1:6379 \
-  --kalshi-env prod \
-  --polymarket-env prod
+  --config configs/server.yaml \
+  --credentials credentials/polymarket.yaml \
+  --kalshi-credentials credentials/kalshi.yaml
 ```
 
-Credentials file is checked for `chmod 600` at startup. Pass `--skip-chmod-check` in dev.
+`--credentials` holds the `polymarket:` section; **Kalshi creds are a separate
+file** (`--kalshi-credentials`, default `credentials/kalshi.yaml`) because they
+live apart from Polymarket. The Kalshi REST client is built only when that file
+has a `kalshi:` section — absent → logged and skipped, startup still succeeds.
+Both credential files are checked for `chmod 600` at startup; pass
+`--skip-chmod-check` in dev.
 
 ## Action → REST mapping
 
-| `OrderAction` | Kalshi | Polymarket v2 |
-|---|---|---|
-| `Place` | `POST /portfolio/orders` | `POST /order` (EIP-712 signed) |
-| `PlaceBatch` | `POST /portfolio/orders/batched` | `POST /orders` |
-| `Update` | `POST /portfolio/orders/{id}/decrease` (qty only) | Internal — emulate via cancel+place |
-| `Cancel` | `DELETE /portfolio/orders/{id}` | `DELETE /order` |
-| `CancelAll` | `DELETE /portfolio/orders` | `DELETE /cancel-all` |
-| `CancelMarket` | `DELETE /portfolio/orders/market/{ticker}` | `DELETE /cancel-market-orders` |
-| `Heartbeat` | `POST /exchange/heartbeat` | `GET /v1/heartbeats` |
+Dispatch is exchange-generic: `Executor::dispatch` looks up
+`clients.get(&req.exchange)` and calls the `RestOrderClient` trait. Send
+`exchange: "kalshi"` (lowercase, `ExchangeName` is `rename_all="lowercase"`) to
+hit the Kalshi client.
 
-Symbol conventions:
-- **Kalshi:** `"{ticker}.YES"` or `"{ticker}.NO"`.
+| `OrderAction` | Kalshi (`external-api` v2) | Polymarket v2 |
+|---|---|---|
+| `Place` | `POST /portfolio/events/orders` (limit only) | `POST /order` (EIP-712 signed) |
+| `PlaceBatch` | `POST /portfolio/events/orders/batched` | iterate `place` |
+| `Update` | `GET` order → `POST /portfolio/events/orders/{id}/amend` | Internal — emulate via cancel+place |
+| `Cancel` | `DELETE /portfolio/orders/{id}` (idempotent: 404 → Canceled) | SDK `cancel_order` |
+| `CancelAll` | list `GET /portfolio/orders` → DELETE each | `DELETE /cancel-all` |
+| `CancelMarket` | list → DELETE each row matching the ticker | `DELETE /cancel-market-orders` |
+| `Heartbeat` | static ack (Kalshi REST has no heartbeat) | static ack |
+
+Kalshi conventions (`executor/src/rest/kalshi.rs`):
+- **symbol** = UPPERCASE Kalshi **market** ticker (e.g. `KXBTC15M-…-15` or
+  `KXMENWORLDCUP-26-AR`), NOT the event ticker — a wrong/event ticker 404s
+  `market_not_found`.
+- **side** `Buy`→`bid`, `Sell`→`ask` (the orders-list reports `yes`/`no`, which
+  amend remaps back to bid/ask).
+- **px** in dollars, 4-dp string (`"0.5600"`); **qty** = contract count, 2-dp.
+- `self_trade_prevention_type` is **required** (sent as `taker_at_cross`).
+- **kind**: every order is sent as a limit on the wire (`price` + `time_in_force`,
+  both required; no `type` field). `OrderKind::Limit` uses the caller's px;
+  `OrderKind::Market` sends an aggressive limit at the worst-acceptable price
+  (`0.99` buy / `0.01` sell — the in-range extremes; `1.00`/`0.00` are rejected
+  `invalid_price`) with IOC/FOK, so it crosses and fills immediately.
 - **Polymarket:** decimal token-id string.
 
 ## Redis control plane
