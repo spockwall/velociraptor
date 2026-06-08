@@ -17,7 +17,13 @@ export const HEADER_TEXT = "text-[10px]";
 
 export function fmtTimeNs(ns: number): string {
     if (!ns) return "—";
-    return new Date(ns / 1e6).toLocaleTimeString("en-US", { hour12: false });
+    const d = new Date(ns / 1e6);
+    // UTC, formatted as y/m/d-h:m:s. e.g. "2026/06/08-14:43:01".
+    const p = (n: number) => String(n).padStart(2, "0");
+    return (
+        `${d.getUTCFullYear()}/${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())}` +
+        `-${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
+    );
 }
 
 export function statusVariant(status: string): "gray" | "green" | "red" | "yellow" {
