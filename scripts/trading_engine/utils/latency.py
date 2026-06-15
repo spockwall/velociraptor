@@ -90,20 +90,31 @@ class _Inflight:
     t_exec_send_ns: int = 0
     t_ack_ns: int = 0
     t_bba_match_ns: int = 0  # first book frame after order (timing only)
-    t_book_match_ns: int = 0  # first frame the book actually reflects our order
-    matched: int = -1  # -1 unknown, 1 book confirmed our order, 0 timed out unconfirmed
-    match_px: float = 0.0  # the book price where we saw our order's effect
-    match_dqty: float = 0.0  # the qty delta we observed at that price (signed)
+    # ── book-CONFIRM: our order appeared in the book (qty went UP at our px) ──
+    t_book_match_ns: int = 0  # first frame the book reflects our resting order
+    book_confirmed: int = -1  # -1 unknown, 1 confirmed in book, 0 timed-out unconfirmed
+    match_px: float = 0.0  # book price where we saw our order appear
+    match_dqty: float = 0.0  # qty delta observed at that price when confirmed (+)
+    confirmed_qty: float = 0.0  # our resting qty at match_px right after confirm
+    # ── book-FILL: our resting qty was CONSUMED (qty went DOWN at our px) ──
+    # Ambiguous on the public book alone (could be a cancel or other makers at
+    # the same price); cross-check against the authoritative user fill below.
+    t_book_fill_ns: int = 0  # first frame our resting qty shrank vs. confirmed
+    book_filled: int = 0  # 1 if we observed consumption at our price
+    book_fill_dqty: float = 0.0  # how much qty was consumed at match_px (− → +mag)
+    book_fully_gone: int = 0  # 1 if our price level dropped to ~0 (fully consumed)
+    # ── authoritative match: user-channel fill event ──
     t_fill_evt_ns: int = 0
     ok: bool = True
 
     def done(self) -> bool:
-        """Ready to flush once the book confirms the order reflects in it
-        (t_book_match) — that's the signal you care about. The slow user-channel
-        fill is an opportunistic cross-check: it's included if it already
-        arrived, otherwise the row flushes without it (t_fill_evt stays 0).
-        Orders never confirmed flush on the 30s timeout with matched=0."""
-        return self.t_book_match_ns != 0
+        """Ready to flush when the order's life is observably over: either it
+        was fully consumed on the book (our price level went to ~0) OR the
+        authoritative user-channel fill arrived. Until then we keep watching so
+        a resting order's CONSUMPTION (a match) can be observed — confirming it
+        merely appeared is NOT terminal. Orders that just sit (no fill) flush on
+        the 30s timeout, carrying whatever confirm/partial-consume we saw."""
+        return self.book_fully_gone == 1 or self.t_fill_evt_ns != 0
 
 
 # CSV columns, in order. Stable so `analyze_latency.py` can rely on them.
@@ -118,10 +129,14 @@ _COLUMNS = [
     "ok",
     "px",
     "qty",
-    # did the orderbook actually reflect our order? (price/qty check)
-    "matched",  # 1 confirmed, 0 timed-out unconfirmed, -1 unknown
-    "match_px",  # book price where we observed our order's effect
-    "match_dqty",  # observed qty change at that price (signed)
+    # did our order APPEAR in the book? (price/qty check)
+    "book_confirmed",  # 1 seen in book, 0 timed-out unseen, -1 unknown
+    "match_px",  # book price where we observed our order
+    "match_dqty",  # qty added at that price when confirmed (+)
+    # was our resting order CONSUMED (matched/hit) on the book?
+    "book_filled",  # 1 if our qty shrank at match_px after confirm
+    "book_fill_dqty",  # how much qty was consumed at match_px
+    "book_fully_gone",  # 1 if our price level dropped to ~0 (fully consumed)
     # raw stamps (ns since epoch)
     "t_exch_ns",
     "t_recv_ns",
@@ -133,6 +148,7 @@ _COLUMNS = [
     "t_resp_ns",
     "t_bba_match_ns",
     "t_book_match_ns",
+    "t_book_fill_ns",
     "t_fill_evt_ns",
     # derived per-stage deltas (ms). Blank when an endpoint stamp is missing.
     "md_wire_ms",  # t_recv - t_exch     (venue→server, cross-clock)
@@ -143,8 +159,9 @@ _COLUMNS = [
     "resp_return_ms",  # t_resp - t_ack      (executor→engine return)
     "order_rtt_ms",  # t_resp - t_decide   (full engine-side order round-trip)
     "bba_match_ms",  # t_bba_match - t_decide (decide → next book frame, timing-only)
-    "book_match_ms",  # t_book_match - t_decide (decide → book CONFIRMED our order)
-    "fill_evt_ms",  # t_fill_evt  - t_decide (decide → user fill, SLOW)
+    "book_match_ms",  # t_book_match - t_decide (decide → order APPEARS in book)
+    "book_fill_ms",  # t_book_fill - t_decide (decide → order CONSUMED on book)
+    "fill_evt_ms",  # t_fill_evt  - t_decide (decide → user fill, authoritative)
 ]
 
 
@@ -316,12 +333,18 @@ class LatencyTracer:
     ) -> None:
         """A Polymarket full-depth frame for `symbol` (lists of (px, qty)).
         Updates the per-symbol book, then for each in-flight order on this
-        symbol:
-          - stamps `t_bba_match` on the first post-order frame (timing only —
-            "the book moved at all", may be unrelated to us);
-          - runs the price/qty check; if the book change matches what THIS
-            order should cause, stamps `t_book_match` and records the
-            observed price + qty delta (the real confirmation)."""
+        symbol, in two phases:
+
+          1. CONFIRM (not yet seen in book): run the price/qty check; if the
+             book reflects this order, stamp `t_book_match`, record the qty
+             delta and our resting qty at that price (`confirmed_qty`).
+          2. CONSUME (already confirmed, resting): watch our price level for
+             our qty SHRINKING below `confirmed_qty` — that's the order being
+             matched/hit. Stamp `t_book_fill` on first shrink; set
+             `book_fully_gone` when the level drops to ~0. (Public-book signal
+             — ambiguous vs. a cancel; cross-check with the user fill.)
+
+        Also stamps `t_bba_match` on the first post-order frame (pure timing)."""
         cur_bids = {float(p): float(q) for p, q in bids}
         cur_asks = {float(p): float(q) for p, q in asks}
         with self._lock:
@@ -332,12 +355,38 @@ class LatencyTracer:
                     continue
                 if item.t_bba_match_ns == 0:
                     item.t_bba_match_ns = received_ns
+
+                # Our side's book (where a resting buy sits on the bid side).
+                is_buy = item.side.lower() in ("buy", "bid", "up")
+                near = cur_bids if is_buy else cur_asks
+
                 if item.t_book_match_ns == 0:
+                    # Phase 1: has our order appeared yet?
                     hit = _book_reflects(item, cur_bids, cur_asks)
                     if hit is not None:
                         item.t_book_match_ns = received_ns
-                        item.matched = 1
+                        item.book_confirmed = 1
                         item.match_px, item.match_dqty = hit
+                        # Snapshot our resting qty at that price as the
+                        # consumption baseline.
+                        item.confirmed_qty = near.get(item.match_px, 0.0)
+                elif item.book_filled == 0:
+                    # Phase 2: confirmed + resting — watch for consumption at
+                    # our price (qty dropping below what we saw at confirm).
+                    now_q = near.get(item.match_px, 0.0)
+                    if now_q < item.confirmed_qty - _QTY_EPS:
+                        item.t_book_fill_ns = received_ns
+                        item.book_filled = 1
+                        item.book_fill_dqty = item.confirmed_qty - now_q
+                        if now_q <= _QTY_EPS:
+                            item.book_fully_gone = 1
+                    # else: level grew (more makers joined) or unchanged — keep
+                    # watching.
+                elif item.book_fully_gone == 0:
+                    # Already saw partial consumption; check if it's now gone.
+                    if near.get(item.match_px, 0.0) <= _QTY_EPS:
+                        item.book_fully_gone = 1
+
                 if item.done():
                     ready.append(item)
             for item in ready:
@@ -373,8 +422,8 @@ class LatencyTracer:
         """Flush all still-in-flight orders (partial rows) and close the file."""
         with self._lock:
             for item in list(self._inflight.values()):
-                if item.ok and item.matched == -1:
-                    item.matched = 0  # never confirmed before shutdown
+                if item.ok and item.book_confirmed == -1:
+                    item.book_confirmed = 0  # never seen in book before shutdown
                 self._flush_locked(item)
             self._inflight.clear()
             self._oid_index.clear()
@@ -393,10 +442,12 @@ class LatencyTracer:
             if now - it.t_decide_ns > _INFLIGHT_TIMEOUT_NS
         ]
         for item in stale:
-            # Timed out before the book confirmed our order: record matched=0
-            # (unconfirmed) unless a confirm already landed.
-            if item.ok and item.matched == -1:
-                item.matched = 0
+            # Timed out: if we never saw it in the book, mark unconfirmed.
+            # (If confirmed-but-never-consumed, book_confirmed=1/book_filled=0
+            # stays — the order simply rested without being hit, which is the
+            # normal outcome for a passive bid.)
+            if item.ok and item.book_confirmed == -1:
+                item.book_confirmed = 0
             self._pop_and_flush_locked(item)
 
     def _pop_and_flush_locked(self, item: _Inflight) -> None:
@@ -417,9 +468,12 @@ class LatencyTracer:
             int(it.ok),
             _fmt(it.px),
             _fmt(it.qty),
-            it.matched,
+            it.book_confirmed,
             _fmt(it.match_px),
             _fmt(it.match_dqty),
+            it.book_filled,
+            _fmt(it.book_fill_dqty),
+            it.book_fully_gone,
             it.t_exch_ns,
             it.t_recv_ns,
             it.t_eng_ns,
@@ -430,6 +484,7 @@ class LatencyTracer:
             it.t_resp_ns,
             it.t_bba_match_ns,
             it.t_book_match_ns,
+            it.t_book_fill_ns,
             it.t_fill_evt_ns,
             _fmt(_ms(it.t_recv_ns, it.t_exch_ns)),
             _fmt(_ms(it.t_eng_ns, it.t_recv_ns)),
@@ -440,6 +495,7 @@ class LatencyTracer:
             _fmt(_ms(it.t_resp_ns, it.t_decide_ns)),
             _fmt(_ms(it.t_bba_match_ns, it.t_decide_ns)),
             _fmt(_ms(it.t_book_match_ns, it.t_decide_ns)),
+            _fmt(_ms(it.t_book_fill_ns, it.t_decide_ns)),
             _fmt(_ms(it.t_fill_evt_ns, it.t_decide_ns)),
         ]
         try:

@@ -41,8 +41,9 @@ STAGES = [
     ("resp_return_ms", "executor→engine return"),
     ("order_rtt_ms", "FULL order round-trip (decide→resp)"),
     ("bba_match_ms", "decide→next-book-frame (timing only)"),
-    ("book_match_ms", "decide→book CONFIRMS order (px/qty)"),
-    ("fill_evt_ms", "decide→user-fill (slow)"),
+    ("book_match_ms", "decide→order APPEARS in book (px/qty)"),
+    ("book_fill_ms", "decide→order CONSUMED on book (matched)"),
+    ("fill_evt_ms", "decide→user-fill (authoritative)"),
 ]
 
 
@@ -80,10 +81,26 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         with open(args.csv_path, newline="") as fh:
-            rows = list(csv.DictReader(fh))
+            reader = csv.DictReader(fh)
+            header = reader.fieldnames or []
+            rows = list(reader)
     except FileNotFoundError:
         print(f"no such file: {args.csv_path}", file=sys.stderr)
         return 1
+
+    # Stale-header guard: a CSV written by an older tracer schema has different
+    # columns, so DictReader would mis-map values onto the wrong names and the
+    # report would be garbage (raw ns printed as ms, etc.). Refuse loudly.
+    missing = [c for c, _ in STAGES if c not in header]
+    if missing:
+        print(
+            f"CSV schema mismatch: {args.csv_path} is missing columns {missing}.\n"
+            f"It was likely written by an older tracer version. Archive it and "
+            f"start a fresh --latency-csv run (the new run writes the current "
+            f"header).",
+            file=sys.stderr,
+        )
+        return 2
 
     # Apply filters.
     def keep(r: dict) -> bool:
@@ -107,24 +124,40 @@ def main(argv: Optional[list[str]] = None) -> int:
     if filt:
         print(f"filters: {', '.join(filt)}{' only-ok' if args.only_ok else ''}")
 
-    # Match-rate: did the orderbook actually reflect our order (price/qty)?
-    confirmed = sum(1 for r in rows if r.get("matched") == "1")
-    unconfirmed = sum(1 for r in rows if r.get("matched") == "0")
-    unknown = len(rows) - confirmed - unconfirmed
+    # Two book observations:
+    #   appeared  — our order showed up in the book (qty up at our price)
+    #   consumed  — our resting qty was eaten (qty down) = matched/hit
+    appeared = sum(1 for r in rows if r.get("book_confirmed") == "1")
+    unseen = sum(1 for r in rows if r.get("book_confirmed") == "0")
+    consumed = sum(1 for r in rows if r.get("book_filled") == "1")
+    gone = sum(1 for r in rows if r.get("book_fully_gone") == "1")
+    filled_evt = sum(1 for r in rows if (r.get("t_fill_evt_ns") or "0") != "0")
     print()
     print(
-        f"book-confirmed (price/qty): {confirmed}/{len(rows)}  "
-        f"(unconfirmed/timed-out: {unconfirmed}, unknown: {unknown})"
+        f"appeared in book (px/qty): {appeared}/{len(rows)}  (never-seen: {unseen})"
     )
-    # Show what was observed for confirmed orders so you can eyeball the size.
+    print(
+        f"consumed on book (matched/hit): {consumed}  "
+        f"(fully gone: {gone}) · user-fill events: {filled_evt}"
+    )
+    # Per-order detail so you can eyeball appeared vs consumed.
     for r in rows:
-        if r.get("matched") == "1":
-            print(
+        if r.get("book_confirmed") == "1":
+            line = (
                 f"  ✓ {r.get('side'):4s} {r.get('kind'):6s} "
-                f"order px={r.get('px')} qty={r.get('qty')} → "
-                f"book moved {r.get('match_dqty')} @ {r.get('match_px')}  "
-                f"(confirm {r.get('book_match_ms')} ms)"
+                f"px={r.get('px')} qty={r.get('qty')} → "
+                f"appeared +{r.get('match_dqty')} @ {r.get('match_px')} "
+                f"({r.get('book_match_ms')} ms)"
             )
+            if r.get("book_filled") == "1":
+                tag = "FULLY MATCHED" if r.get("book_fully_gone") == "1" else "partial"
+                line += (
+                    f"  → CONSUMED {r.get('book_fill_dqty')} "
+                    f"({r.get('book_fill_ms')} ms) [{tag}]"
+                )
+            else:
+                line += "  → rested unmatched"
+            print(line)
     print()
     print(f"{'stage':38s} {'n':>5s} {'p50':>9s} {'p90':>9s} {'p99':>9s} {'max':>9s}")
     print("-" * 84)
