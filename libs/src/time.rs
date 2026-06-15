@@ -21,3 +21,10 @@ pub fn now_secs() -> u64 {
 pub fn now_ns() -> i64 {
     Utc::now().timestamp_nanos_opt().unwrap_or(0)
 }
+
+/// Wall-clock ns since the UNIX epoch as `u64` (clamps the pre-1970 case to 0).
+/// Used for latency-tracing stamps (`OrderMeta`, `OrderbookUpdate::recv_ns`)
+/// where a `u64` is wanted.
+pub fn now_ns_u64() -> u64 {
+    now_ns().max(0) as u64
+}

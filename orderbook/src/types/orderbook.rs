@@ -47,6 +47,15 @@ pub struct OrderbookUpdate {
     pub symbol: String,
     pub timestamp: DateTime<Utc>,
     pub exchange: ExchangeName,
+    /// Exchange event time in ns since UNIX epoch (Binance `E`, Polymarket
+    /// `last_update`). `0` if the venue didn't supply one. Set by the parser.
+    #[serde(default)]
+    pub exch_ns: u64,
+    /// Wall-clock ns when the orderbook_server read this update off the WS.
+    /// Stamped in `Client::handle_message` after parsing (the parser leaves
+    /// it `0`).
+    #[serde(default)]
+    pub recv_ns: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -15,6 +15,14 @@ pub struct BbaPayload {
     pub full_slug: Option<String>,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
+    /// Exchange event time in ns since UNIX epoch (see
+    /// [`crate::protocol::OrderbookSnapshot::t_exch_ns`]). `0` if absent.
+    #[serde(default)]
+    pub t_exch_ns: u64,
+    /// Wall-clock ns when orderbook_server read this off the WS (see
+    /// [`crate::protocol::OrderbookSnapshot::t_recv_ns`]).
+    #[serde(default)]
+    pub t_recv_ns: u64,
     pub best_bid: Option<(f64, f64)>,
     pub best_ask: Option<(f64, f64)>,
     pub spread: Option<f64>,

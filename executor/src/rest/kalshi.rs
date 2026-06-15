@@ -28,12 +28,12 @@
 //! immediately rather than resting.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use libs::credentials::kalshi::KalshiCredentials;
 use libs::endpoints::kalshi::kalshi::endpoints as ep;
 use libs::protocol::orders::{
     HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
 };
+use libs::time::now_ns;
 use reqwest::Method;
 use rsa::pss::SigningKey;
 use rsa::sha2::Sha256;
@@ -217,10 +217,6 @@ fn derive_status(fill: f64, remaining: f64, initial: f64) -> OrderStatus {
     } else {
         OrderStatus::New
     }
-}
-
-fn now_ns() -> i64 {
-    Utc::now().timestamp_nanos_opt().unwrap_or(0)
 }
 
 /// Build the Kalshi create-order request for one `PlaceOne`. Limit orders carry

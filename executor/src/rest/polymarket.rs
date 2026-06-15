@@ -18,11 +18,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use libs::credentials::polymarket::PolymarketCredentials;
 use libs::protocol::orders::{
     FillInfo, HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
 };
+use libs::time::now_ns;
 use polymarket_client_sdk_v2::auth::state::Authenticated;
 use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
 // `LocalSigner` is generic; `from_str` produces this concrete shape (k256
@@ -291,10 +291,6 @@ fn map_status(s: &OrderStatusType) -> OrderStatus {
         // here. Default to `New` rather than panicking; the gateway logs it.
         _ => OrderStatus::New,
     }
-}
-
-fn now_ns() -> i64 {
-    Utc::now().timestamp_nanos_opt().unwrap_or(0)
 }
 
 /// Project the SDK's `PostOrderResponse` (returned by `build_sign_and_post`)

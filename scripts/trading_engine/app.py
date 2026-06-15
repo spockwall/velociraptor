@@ -38,6 +38,7 @@ import os
 import queue
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -105,6 +106,15 @@ class Engine:
         # target venue comes from the class's `order_exchange`.
         strat_cls = strategy_class(args.strategy)
         self._needs_orders = strat_cls.needs_orders
+        # Optional latency tracer: one CSV row per order tracing decide →
+        # exec → ack → book-shows-it (BBA) → user fill. Only meaningful for
+        # order-placing strategies; disabled unless --latency-csv is set.
+        self.tracer = None
+        latency_csv = getattr(args, "latency_csv", None)
+        if latency_csv and self._needs_orders:
+            from .utils.latency import LatencyTracer
+
+            self.tracer = LatencyTracer(latency_csv)
         self.user_feed = (
             UserFeed(args.user_pub, on_event=self._enqueue_user_event)
             if self._needs_orders
@@ -115,6 +125,7 @@ class Engine:
                 args.router_endpoint,
                 exchange=strat_cls.order_exchange,
                 event_log=self.event_log,
+                tracer=self.tracer,
             )
             if self._needs_orders
             else None
@@ -213,6 +224,8 @@ class Engine:
             self.market_feed.stop()
             if self.user_feed is not None:
                 self.user_feed.stop()
+            if self.tracer is not None:
+                self.tracer.close()
             self.event_log.close()
 
     def _subscribe_required_topics(self) -> None:
@@ -237,6 +250,12 @@ class Engine:
         self.queue.put(QuoteEvent(exchange=exchange, symbol=symbol, quote=q))
 
     def _enqueue_snapshot(self, exchange: str, symbol: str, s: Snapshot) -> None:
+        # Latency tracer book-match: full-depth Polymarket frames let us
+        # confirm (by price/qty) that an in-flight order actually shows up in
+        # the book — not just that *some* frame arrived. `s.symbol` is the
+        # venue asset_id, matching the order's symbol.
+        if self.tracer is not None and exchange == "polymarket":
+            self.tracer.on_poly_book(s.symbol, s.bids, s.asks, s.received_ns)
         self.queue.put(SnapshotEvent(exchange=exchange, symbol=symbol, snapshot=s))
 
     def _enqueue_trade(self, exchange: str, symbol: str, t: Trade) -> None:
@@ -257,6 +276,14 @@ class Engine:
         # is disabled.
         self.event_log.record_event(topic, ev)
         kind = ev.get("type")
+        # Latency tracer fill cross-check: the user-channel fill/order_update
+        # is the authoritative (but slower) "it landed" signal.
+        if self.tracer is not None and kind in ("fill", "order_update"):
+            self.tracer.on_fill(
+                client_oid=ev.get("client_oid"),
+                exchange_oid=ev.get("exchange_oid"),
+                received_ns=time.time_ns(),
+            )
         if kind == "fill":
             self.queue.put(FillEvent(topic=topic, ev=ev))
         elif kind == "order_update":

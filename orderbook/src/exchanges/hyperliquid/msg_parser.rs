@@ -120,6 +120,8 @@ impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
             symbol,
             timestamp,
             exchange: self.exchange_name.clone(),
+            exch_ns: 0,
+            recv_ns: 0,
         })])
     }
 

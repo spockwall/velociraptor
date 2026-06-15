@@ -6,6 +6,7 @@ use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, St
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use libs::protocol::{ExchangeName, LastTradePrice};
+use libs::time::now_ns_u64;
 use tracing::{error, info};
 
 pub struct BinanceMessageParser {
@@ -105,12 +106,23 @@ impl BinanceMessageParser {
             return None;
         }
 
+        // `event_time` is ms since epoch; 0 on spot `@depth20` (no `E`).
+        let exch_ns = if msg.event_time > 0 {
+            msg.event_time as u64 * 1_000_000
+        } else {
+            0
+        };
         Some(StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
             timestamp,
             exchange: self.exchange_name.clone(),
+            exch_ns,
+            // `parse_*` runs synchronously right after the WS read in
+            // `Client::handle_message`, so "now" here is within µs of the
+            // true frame-arrival time — good enough for wire-time tracing.
+            recv_ns: now_ns_u64(),
         }))
     }
 }

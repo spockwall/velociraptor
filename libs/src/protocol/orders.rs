@@ -164,6 +164,26 @@ pub enum OrderResult {
 pub struct OrderResponse {
     pub req_id: u64,
     pub result: Result<OrderResult, OrderError>,
+    /// Server-side latency stamps for the order leg. `None` for responses that
+    /// never reached dispatch (e.g. decode failure). `serde(default)` so older
+    /// clients/decoders ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<OrderMeta>,
+}
+
+/// Executor-side timing for one order request, all ns since UNIX epoch on the
+/// executor's wall clock. The engine reads these to break the order leg into
+/// (a) engine→executor transport, (b) executor queue/decode, (c) the actual
+/// exchange REST round-trip. All on one machine's clock, so the deltas between
+/// them are skew-free; only the engine↔executor hop crosses machines.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderMeta {
+    /// When the executor decoded the request off the ZMQ ROUTER socket.
+    pub t_exec_recv_ns: u64,
+    /// When the executor was about to issue the exchange REST call.
+    pub t_exec_send_ns: u64,
+    /// When the executor received the exchange ack (REST response).
+    pub t_ack_ns: u64,
 }
 
 #[cfg(test)]
@@ -219,17 +239,24 @@ mod tests {
                 ts_ns: 1_700_000_000_000_000_000,
                 fill: None,
             })),
+            meta: Some(OrderMeta {
+                t_exec_recv_ns: 1_700_000_000_000_000_001,
+                t_exec_send_ns: 1_700_000_000_000_000_002,
+                t_ack_ns: 1_700_000_000_030_000_000,
+            }),
         };
         roundtrip(&ok);
 
         let err = OrderResponse {
             req_id: 2,
             result: Err(OrderError::KillSwitch),
+            meta: None,
         };
         roundtrip(&err);
 
         let batch = OrderResponse {
             req_id: 3,
+            meta: None,
             result: Ok(OrderResult::BatchAck {
                 results: vec![
                     Ok(OrderAck {

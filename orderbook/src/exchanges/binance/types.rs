@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 pub struct BinanceDepthData {
     #[serde(rename = "s", alias = "symbol", default)]
     pub symbol: String,
+    /// Exchange event time (ms). Present on futures `depthUpdate`; absent on
+    /// the spot `@depth20@100ms` partial-book stream (which carries only
+    /// `lastUpdateId`), so it defaults to `0` there — spot depth has no
+    /// venue-supplied event time to measure against.
+    #[serde(rename = "E", default)]
+    pub event_time: i64,
     #[serde(rename = "b", alias = "bids")]
     pub bids: Vec<[String; 2]>,
     #[serde(rename = "a", alias = "asks")]

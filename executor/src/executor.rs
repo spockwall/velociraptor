@@ -25,6 +25,7 @@ use libs::protocol::orders::{
 };
 use libs::protocol::ExchangeName;
 use libs::redis_client::RedisHandle;
+use libs::time::now_ns_u64;
 use tracing::warn;
 
 use crate::control::{ControlCallbacks, ControlState, ShutdownState};
@@ -109,6 +110,10 @@ impl Executor {
     /// exchange REST client is `decode → dispatch`. Restore the full
     /// pipeline before merging — see the original ordering in steps 2–7.
     pub async fn handle_request(&self, payload: &[u8]) -> OrderResponse {
+        // t_exec_recv: the moment the request landed off the ROUTER socket
+        // (decode is the first thing we do with it). Used for latency tracing.
+        let t_exec_recv_ns = now_ns_u64();
+
         // 1. Decode.
         let req: OrderRequest = match rmp_serde::from_slice(payload) {
             Ok(r) => r,
@@ -119,6 +124,7 @@ impl Executor {
                     result: Err(OrderError::Internal {
                         message: format!("decode: {e}"),
                     }),
+                    meta: None,
                 };
             }
         };
@@ -160,10 +166,20 @@ impl Executor {
         // }
 
         // 6. Dispatch to the exchange.
+        // t_exec_send brackets the exchange REST round-trip on this side, so
+        // (t_ack - t_exec_send) is the exchange latency and (t_exec_send -
+        // t_exec_recv) is executor-internal overhead. All on one clock.
+        let t_exec_send_ns = now_ns_u64();
         let result = self.dispatch(&req).await;
+        let t_ack_ns = now_ns_u64();
         let resp = OrderResponse {
             req_id: req.req_id,
             result: result.clone(),
+            meta: Some(libs::protocol::OrderMeta {
+                t_exec_recv_ns,
+                t_exec_send_ns,
+                t_ack_ns,
+            }),
         };
 
         // // 7. State maintenance (always — even on dispatch errors so the

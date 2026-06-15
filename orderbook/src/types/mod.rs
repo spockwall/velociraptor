@@ -17,6 +17,8 @@ pub fn snapshot_from(book: &Orderbook, depth: usize) -> OrderbookSnapshot {
         full_slug: None,
         sequence: book.sequence,
         timestamp: book.last_update,
+        t_exch_ns: book.last_exch_ns,
+        t_recv_ns: book.last_recv_ns,
         best_bid: book.best_bid(),
         best_ask: book.best_ask(),
         spread: book.spread(),

@@ -19,6 +19,13 @@ pub struct Orderbook {
     pub last_update: DateTime<Utc>,
     pub sequence: u64,
 
+    /// Exchange event time (ns since epoch) of the update that produced the
+    /// current book state; `0` if the venue supplied none. Carried into the
+    /// published `OrderbookSnapshot` for latency tracing.
+    pub last_exch_ns: u64,
+    /// Wall-clock ns when orderbook_server read that update off the WS.
+    pub last_recv_ns: u64,
+
     // Primary storage - by price level
     pub bid_levels: BTreeMap<OrderedFloat<f64>, PriceLevel>,
     pub ask_levels: BTreeMap<OrderedFloat<f64>, PriceLevel>,
@@ -34,6 +41,8 @@ impl Orderbook {
             exchange: exchange.clone(),
             last_update: Utc::now(),
             sequence: 0,
+            last_exch_ns: 0,
+            last_recv_ns: 0,
             bid_levels: BTreeMap::new(),
             ask_levels: BTreeMap::new(),
             is_initialized: false,
@@ -42,6 +51,8 @@ impl Orderbook {
 
     pub fn apply_update(&mut self, update: OrderbookUpdate) {
         self.last_update = update.timestamp;
+        self.last_exch_ns = update.exch_ns;
+        self.last_recv_ns = update.recv_ns;
         self.sequence += 1;
 
         match update.action {

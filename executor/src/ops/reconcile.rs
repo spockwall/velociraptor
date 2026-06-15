@@ -173,6 +173,7 @@ mod tests {
                 response: OrderResponse {
                     req_id: 0,
                     result: Err(OrderError::Timeout),
+                    meta: None,
                 },
                 exchange_oid: Some("known-but-gone".into()),
                 status: OrderStatus::New,

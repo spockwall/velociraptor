@@ -24,7 +24,7 @@ pub use control::ControlMessage;
 use core::fmt;
 pub use events::{BbaPayload, EventKind, UserEvent};
 pub use orders::{
-    FillInfo, HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderRequest,
+    FillInfo, HeartbeatAck, OrderAck, OrderAction, OrderError, OrderKind, OrderMeta, OrderRequest,
     OrderResponse, OrderResult, OrderStatus, PlaceOne, Side, Tif,
 };
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,18 @@ pub struct OrderbookSnapshot {
     pub full_slug: Option<String>,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
+    /// Exchange event time in ns since UNIX epoch (Binance `E`, Polymarket
+    /// `last_update`), as reported by the venue. `0` if the venue didn't
+    /// supply one. Cross-machine clock — compare only as a rough wire-time
+    /// indicator (subject to clock skew; run NTP/chrony). `serde(default)`
+    /// for back-compat with older encoded snapshots.
+    #[serde(default)]
+    pub t_exch_ns: u64,
+    /// Wall-clock ns when the orderbook_server read this update off the
+    /// exchange WebSocket. Same machine as `timestamp` (the book-applied
+    /// time), so `timestamp - t_recv` is trustworthy internal compute time.
+    #[serde(default)]
+    pub t_recv_ns: u64,
     pub best_bid: Option<PriceLevelTuple>,
     pub best_ask: Option<(f64, f64)>,
     pub spread: Option<f64>,
@@ -114,6 +126,8 @@ impl From<&OrderbookSnapshot> for BbaPayload {
             full_slug: snap.full_slug.clone(),
             sequence: snap.sequence,
             timestamp: snap.timestamp,
+            t_exch_ns: snap.t_exch_ns,
+            t_recv_ns: snap.t_recv_ns,
             best_bid: snap.best_bid,
             best_ask: snap.best_ask,
             spread: snap.spread,

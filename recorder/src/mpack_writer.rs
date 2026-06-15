@@ -304,6 +304,8 @@ mod tests {
             full_slug: None,
             sequence: 7,
             timestamp: Utc::now(),
+            t_exch_ns: 0,
+            t_recv_ns: 0,
             best_bid: Some((100.0, 1.0)),
             best_ask: Some((101.0, 2.0)),
             spread: Some(1.0),

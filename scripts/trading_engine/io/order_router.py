@@ -82,11 +82,15 @@ class OrderRouter:
         exchange: str = "polymarket",
         timeout_ms: int = 10_000,
         event_log: Optional[EventLog] = None,
+        tracer=None,
     ):
         self._endpoint = endpoint
         self._exchange = exchange
         self._cli = ExecutorClient(endpoint, timeout_ms=timeout_ms)
         self._event_log = event_log
+        # Optional LatencyTracer (utils.latency). When set, every place_*
+        # records a per-order latency row; None disables tracing with no cost.
+        self._tracer = tracer
 
     # ── lifecycle ──
 
@@ -110,6 +114,9 @@ class OrderRouter:
         # Attribution for the event log; ignored when no EventLog attached.
         strategy: Optional[str] = None,
         label: Optional[str] = None,
+        # Triggering market-data Quote, for the latency tracer's market-data
+        # leg. Ignored when no tracer is attached.
+        quote=None,
     ) -> dict:
         """Place a GTC limit. Returns the inner OrderAck dict on success.
         Raises RuntimeError on Err.
@@ -131,10 +138,26 @@ class OrderRouter:
             kind="limit",
             tif=tif,
         )
+        t_decide_ns = time.time_ns()
         resp = self._cli.send(req)
+        t_resp_ns = time.time_ns()
         latency_ms = resp.get("_meta", {}).get("latency_ms")
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
+            self._trace(
+                client_oid=client_oid,
+                exchange_oid="",
+                symbol=symbol,
+                side=side,
+                kind="limit",
+                px=px,
+                qty=qty,
+                t_decide_ns=t_decide_ns,
+                t_resp_ns=t_resp_ns,
+                meta=resp.get("meta"),
+                ok=False,
+                quote=quote,
+            )
             self._record(
                 "place",
                 strategy=strategy,
@@ -151,6 +174,20 @@ class OrderRouter:
             raise RuntimeError(f"place failed: {err}")
         ack = unwrap(resp)
         fill = FillInfo.from_wire(ack.get("fill"))
+        self._trace(
+            client_oid=client_oid,
+            exchange_oid=ack.get("exchange_oid") or "",
+            symbol=symbol,
+            side=side,
+            kind="limit",
+            px=px,
+            qty=qty,
+            t_decide_ns=t_decide_ns,
+            t_resp_ns=t_resp_ns,
+            meta=resp.get("meta"),
+            ok=True,
+            quote=quote,
+        )
         _log_fill("place", label, ack)
         self._record(
             "place",
@@ -178,6 +215,8 @@ class OrderRouter:
         # Attribution for the event log.
         strategy: Optional[str] = None,
         label: Optional[str] = None,
+        # Triggering market-data Quote, for the latency tracer.
+        quote=None,
     ) -> dict:
         """Place a market order. Returns the inner OrderAck dict on success;
         raises `RuntimeError` on Err. On the Polymarket path the ack's
@@ -216,10 +255,26 @@ class OrderRouter:
             kind="market",
             tif=tif_u,
         )
+        t_decide_ns = time.time_ns()
         resp = self._cli.send(req)
+        t_resp_ns = time.time_ns()
         latency_ms = resp.get("_meta", {}).get("latency_ms")
         if not is_ok(resp):
             err = resp.get("result", {}).get("Err", {})
+            self._trace(
+                client_oid=client_oid,
+                exchange_oid="",
+                symbol=symbol,
+                side=side,
+                kind="market",
+                px=0.0,
+                qty=qty,
+                t_decide_ns=t_decide_ns,
+                t_resp_ns=t_resp_ns,
+                meta=resp.get("meta"),
+                ok=False,
+                quote=quote,
+            )
             self._record(
                 "place_market",
                 strategy=strategy,
@@ -236,6 +291,20 @@ class OrderRouter:
             raise RuntimeError(f"place_market failed: {err}")
         ack = unwrap(resp)
         fill = FillInfo.from_wire(ack.get("fill"))
+        self._trace(
+            client_oid=client_oid,
+            exchange_oid=ack.get("exchange_oid") or "",
+            symbol=symbol,
+            side=side,
+            kind="market",
+            px=0.0,
+            qty=qty,
+            t_decide_ns=t_decide_ns,
+            t_resp_ns=t_resp_ns,
+            meta=resp.get("meta"),
+            ok=True,
+            quote=quote,
+        )
         _log_fill("place_market", label, ack)
         self._record(
             "place_market",
@@ -343,6 +412,17 @@ class OrderRouter:
         if self._event_log is None:
             return
         self._event_log.record_action(kind=kind, exchange=self._exchange, **fields)
+
+    def _trace(self, **fields) -> None:
+        """Hand one place result to the latency tracer. No-op without a tracer
+        or on non-Polymarket orders (only Polymarket has the BBA/fill loop we
+        measure against)."""
+        if self._tracer is None or self._exchange != "polymarket":
+            return
+        try:
+            self._tracer.on_order_sent(exchange=self._exchange, **fields)
+        except Exception:  # noqa: BLE001
+            log.exception("latency tracer on_order_sent raised")
 
 
 # ── CLI entrypoint (replaces scripts/poly_heartbeat.py) ─────────────────────

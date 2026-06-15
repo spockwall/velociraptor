@@ -69,8 +69,14 @@ class Quote:
     best_ask: Optional[float]
     mid: Optional[float]
     sequence: int
-    received_ns: int  # local wall clock at receive
+    received_ns: int  # local wall clock at receive (= t_eng in latency tracing)
     full_slug: Optional[str] = None
+    # Latency-tracing stamps carried from orderbook_server (ns since epoch).
+    # `t_exch_ns`: venue event time (0 if the venue supplied none — e.g.
+    # Binance spot @depth20). `t_recv_ns`: when orderbook_server read the WS
+    # frame. Both 0 for older publishers (the fields are serde(default) in Rust).
+    t_exch_ns: int = 0
+    t_recv_ns: int = 0
 
     @property
     def is_two_sided(self) -> bool:
@@ -96,6 +102,9 @@ class Snapshot:
     full_slug: Optional[str] = None
     bids: list[tuple[float, float]] = dataclasses.field(default_factory=list)
     asks: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+    # See `Quote` for the meaning of these latency-tracing stamps.
+    t_exch_ns: int = 0
+    t_recv_ns: int = 0
 
     def as_quote(self) -> "Quote":
         """Cheap BBA view used by the snapshot → quote fan-out in
@@ -109,6 +118,8 @@ class Snapshot:
             sequence=self.sequence,
             received_ns=self.received_ns,
             full_slug=self.full_slug,
+            t_exch_ns=self.t_exch_ns,
+            t_recv_ns=self.t_recv_ns,
         )
 
 
@@ -410,6 +421,9 @@ class MarketFeed:
             full_slug=full_slug if isinstance(full_slug, str) else None,
             bids=bids,
             asks=asks,
+            # Latency stamps from orderbook_server; absent on older publishers.
+            t_exch_ns=int(snap.get("t_exch_ns", 0) or 0),
+            t_recv_ns=int(snap.get("t_recv_ns", 0) or 0),
         )
         # Derived BBA view — pure projection of `s`.
         q = s.as_quote()

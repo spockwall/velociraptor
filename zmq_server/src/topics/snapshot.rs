@@ -73,6 +73,8 @@ mod tests {
             full_slug: None,
             sequence: 42,
             timestamp: chrono::Utc::now(),
+            t_exch_ns: 0,
+            t_recv_ns: 0,
             best_bid: Some((30000.0, 1.5)),
             best_ask: Some((30001.0, 2.0)),
             spread: Some(1.0),

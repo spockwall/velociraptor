@@ -117,6 +117,16 @@ def parse_args() -> argparse.Namespace:
     # ── Strategy params ──
     p.add_argument("--order-notional-usd", type=float, default=10.0)
     p.add_argument(
+        "--limit-offset-ticks",
+        type=int,
+        default=0,
+        help=(
+            "one_shot: how many ticks BELOW best bid to rest the limit order. "
+            "0 (default) joins the best bid; larger values rest deeper in the "
+            "book (a fresh bid level, easier to spot, zero fill risk)."
+        ),
+    )
+    p.add_argument(
         "--safe-mid-low",
         type=float,
         default=0.30,
@@ -130,6 +140,21 @@ def parse_args() -> argparse.Namespace:
     )
 
     p.add_argument("--log-level", default="info")
+
+    # ── Latency tracing (optional) ──
+    # When set, the engine writes one CSV row per order tracing the full
+    # decide → executor → ack → book-shows-it (BBA) → user-fill chain. Feed
+    # the file to `scripts/analyze_latency.py` for per-stage p50/p90/p99.
+    # Off by default (no file, no overhead).
+    p.add_argument(
+        "--latency-csv",
+        default=None,
+        help=(
+            "Path to write per-order latency-trace rows (CSV). Only active "
+            "for order-placing strategies. Analyze with "
+            "scripts/analyze_latency.py. Default: disabled."
+        ),
+    )
 
     # ── Engine event log (durable action + event record) ──
     # Mandatory. The log is the only durable record of what the engine

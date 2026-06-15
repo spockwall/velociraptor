@@ -8,8 +8,8 @@ use anyhow::Result;
 use chrono::TimeZone;
 use chrono::Utc;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderStatus, Side, UserEvent};
-use libs::time::now_ns;
 use libs::time::parse_timestamp_ms;
+use libs::time::{now_ns, now_ns_u64};
 use tracing::{error, info, warn};
 
 /// Which Polymarket WS channel this parser instance is bound to.
@@ -205,6 +205,13 @@ impl PolymarketMessageParser {
             symbol,
             timestamp: ts,
             exchange: self.exchange_name.clone(),
+            // `ts` is the Polymarket event time (parsed from the message
+            // `timestamp`/`last_update` field), so it doubles as t_exch.
+            exch_ns: ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64,
+            // `parse_*` runs synchronously right after the WS read, so "now"
+            // here is within µs of true frame arrival — good enough for
+            // wire-time tracing.
+            recv_ns: now_ns_u64(),
         })])
     }
 
@@ -219,6 +226,9 @@ impl PolymarketMessageParser {
 
         let ts = parse_timestamp_ms(&event.timestamp);
         let ts_str = ts.to_rfc3339();
+        // One WS-read time for the whole frame (all changes arrived together).
+        let recv_ns = now_ns_u64();
+        let exch_ns = ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
 
         // Each price change is independent: qty==0 → Delete, qty>0 → Update.
         // Emit one StreamMessage per change so actions are never mixed across levels.
@@ -261,6 +271,8 @@ impl PolymarketMessageParser {
                 symbol: change.asset_id.clone(),
                 timestamp: ts,
                 exchange: self.exchange_name.clone(),
+                exch_ns,
+                recv_ns,
             }));
         }
 

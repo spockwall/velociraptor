@@ -224,6 +224,7 @@ impl OrderRegistry {
                     let resp = OrderResponse {
                         req_id,
                         result,
+                        meta: None,
                     };
                     self.record(&req, &resp);
                 }
@@ -294,6 +295,7 @@ mod tests {
                 ts_ns: 0,
                 fill: None,
             })),
+            meta: None,
         }
     }
 
