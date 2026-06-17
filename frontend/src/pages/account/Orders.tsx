@@ -13,7 +13,7 @@ export default function OrdersPage() {
     const filtered = useMemo(() => (data ?? []).filter((e) => eventMatchesSearch(e, search)), [data, search]);
 
     return (
-        <div className="p-5 w-full">
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto">
             <AccountTabs />
             <SearchBox value={search} onChange={setSearch} />
             <Card title="order updates" subtitle="events:orders (Redis)">

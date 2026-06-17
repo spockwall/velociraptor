@@ -23,7 +23,7 @@ export default function FillsPage() {
     );
 
     return (
-        <div className="p-5 w-full">
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto">
             <AccountTabs />
             <SearchBox value={search} onChange={setSearch} />
             <Card title="recent fills" subtitle="events:fills (Redis)">

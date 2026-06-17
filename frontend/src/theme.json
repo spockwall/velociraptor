@@ -1,10 +1,10 @@
 {
     "colors": {
-        "primary": "#d4d4d4",
-        "secondary": "#808080",
-        "gray": "#5f5e5eff",
-        "green": "#599a6dff",
-        "red": "#b34c4cff",
-        "blue": "#5b8eb5"
+        "primary": "#e8eefb",
+        "secondary": "#97a6c4",
+        "gray": "#3a4a68",
+        "green": "#2fe6a0",
+        "red": "#ff5d6c",
+        "blue": "#38bdf8"
     }
 }

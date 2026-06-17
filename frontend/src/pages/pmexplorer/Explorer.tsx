@@ -160,7 +160,7 @@ export default function Explorer() {
     }, []);
 
     return (
-        <div className="p-5 w-full max-w-6xl mx-auto space-y-5">
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto space-y-5">
             {/* ── search header ── */}
             <div className="flex flex-col gap-3">
                 <form

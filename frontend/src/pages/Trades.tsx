@@ -37,7 +37,7 @@ export default function TradesPage() {
     }, [trades, search]);
 
     return (
-        <div className="p-5 w-full max-w-6xl mx-auto space-y-6">
+        <div className="p-5 lg:px-8 w-full max-w-7xl mx-auto space-y-6">
             {/* Toolbar */}
             <div className="flex items-center gap-4">
                 <div className="relative flex-1 max-w-md">
