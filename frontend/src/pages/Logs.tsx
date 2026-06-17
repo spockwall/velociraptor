@@ -150,7 +150,7 @@ export default function Logs() {
             </div>
 
             <Card
-                title="recent errors"
+                title="Recent Errors"
                 subtitle={`${rows.length} entries`}
                 action={<AlertTriangle size={14} style={{ color: C.textSubtle }} />}
                 noPad

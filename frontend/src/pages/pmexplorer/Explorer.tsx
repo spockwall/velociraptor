@@ -3,7 +3,7 @@
 // proxied through the backend `/api/pm/*` routes.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { ExternalLink, RefreshCw, Search, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import Card from "../../components/Card";
 import { api } from "../../lib/api";
 import type {
@@ -77,8 +77,10 @@ export default function Explorer() {
     });
     const [wallet, setWallet] = useState<string>("");
     const [resolveErr, setResolveErr] = useState<string | null>(null);
-    // Human label for the resolved wallet, e.g. "plswin123 · proxy of 0x192c…".
-    const [resolvedLabel, setResolvedLabel] = useState<string | null>(null);
+    // Display name for the resolved wallet (username/pseudonym), or null when
+    // we only know the address. The wallet itself is shown separately, so this
+    // never repeats the address.
+    const [displayName, setDisplayName] = useState<string | null>(null);
     const [tab, setTab] = useState<Tab>("positions");
 
     // Holders + Markets take their own per-tab inputs (a conditionId / slug).
@@ -110,14 +112,7 @@ export default function Explorer() {
         try {
             const r = await api.pmResolve(id);
             setWallet(r.wallet);
-            const who = r.name || r.pseudonym;
-            const label =
-                r.source === "proxy"
-                    ? `${who ? `${who} · ` : ""}proxy of ${shortHash(r.input ?? id, 6, 4)}`
-                    : r.source === "leaderboard"
-                      ? `${who ?? id} (matched on leaderboard)`
-                      : null;
-            setResolvedLabel(label);
+            setDisplayName(r.name || r.pseudonym || null);
             // Cache the (successful) input so it's restored on next visit.
             try {
                 localStorage.setItem(LS_KEY, id);
@@ -129,7 +124,7 @@ export default function Explorer() {
         } catch (e) {
             setResolveErr(e instanceof Error ? e.message : String(e));
             setWallet("");
-            setResolvedLabel(null);
+            setDisplayName(null);
         }
     }
 
@@ -144,7 +139,7 @@ export default function Explorer() {
     const pickWallet = useCallback((w: string) => {
         setInput(w);
         setResolveErr(null);
-        setResolvedLabel(null);
+        setDisplayName(null);
         setWallet(w.toLowerCase());
         setTab("positions");
         try {
@@ -171,10 +166,7 @@ export default function Explorer() {
                     }}
                 >
                     <div className="relative flex-1 max-w-xl">
-                        <Search
-                            size={14}
-                            className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
-                        />
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
                         <input
                             type="text"
                             placeholder="0x wallet address  (or username, best-effort)…"
@@ -199,18 +191,16 @@ export default function Explorer() {
                         Refresh
                     </button>
                 </form>
-                <HeaderStats
-                    wallet={wallet}
-                    resolveErr={resolveErr}
-                    label={resolvedLabel}
-                    refreshKey={refreshKey}
-                />
+                {/* Hint / error line — only when no wallet is loaded; once a
+                    wallet resolves, the trader info moves into the summary box. */}
+                {!wallet && <HeaderStats resolveErr={resolveErr} />}
             </div>
 
-            {/* ── always-visible summary box: portfolio value + range P&L ── */}
+            {/* ── summary box: trader · portfolio value · range P&L (one line) ── */}
             {wallet && (
                 <ProfileSummary
                     wallet={wallet}
+                    name={displayName}
                     refreshKey={refreshKey}
                     range={pnlRange}
                     onRangeChange={setPnlRange}
@@ -239,12 +229,7 @@ export default function Explorer() {
                 <PositionsPanel wallet={wallet} onPickMarket={pickMarket} refreshKey={refreshKey} />
             )}
             {tab === "pnl" && (
-                <PnlPanel
-                    wallet={wallet}
-                    refreshKey={refreshKey}
-                    range={pnlRange}
-                    onRangeChange={setPnlRange}
-                />
+                <PnlPanel wallet={wallet} refreshKey={refreshKey} range={pnlRange} onRangeChange={setPnlRange} />
             )}
             {tab === "trades" && <TradesPanel wallet={wallet} refreshKey={refreshKey} />}
             {tab === "activity" && <ActivityPanel wallet={wallet} refreshKey={refreshKey} />}
@@ -256,9 +241,7 @@ export default function Explorer() {
                     refreshKey={refreshKey}
                 />
             )}
-            {tab === "markets" && (
-                <MarketsPanel slug={slug} setSlug={setSlug} refreshKey={refreshKey} />
-            )}
+            {tab === "markets" && <MarketsPanel slug={slug} setSlug={setSlug} refreshKey={refreshKey} />}
             {tab === "leaderboard" && (
                 <LeaderboardPanel
                     metric={lbMetric}
@@ -273,69 +256,61 @@ export default function Explorer() {
     );
 }
 
-// ── header stats (portfolio value) ───────────────────────────────────────────
+// ── hint / error line (shown only before a wallet resolves) ──────────────────
 
-function HeaderStats({
-    wallet,
-    resolveErr,
-    label,
-    refreshKey,
-}: {
-    wallet: string;
-    resolveErr: string | null;
-    label: string | null;
-    refreshKey: number;
-}) {
-    void refreshKey; // accepted for prop symmetry; this row shows no polled data
+function HeaderStats({ resolveErr }: { resolveErr: string | null }) {
     if (resolveErr) {
         return <p className="text-[11px] font-mono text-accent-red">{resolveErr}</p>;
     }
-    if (!wallet) {
-        return (
-            <p className="text-[11px] font-mono text-text-muted">
-                enter a wallet to inspect positions, trades & activity
-            </p>
-        );
-    }
     return (
         <p className="text-[11px] font-mono text-text-muted">
-            {label && (
-                <>
-                    <span className="text-white">{label}</span>
-                    {"  ·  "}
-                </>
-            )}
-            wallet: <span className="text-white">{shortHash(wallet, 6, 4)}</span>
+            Enter a wallet address or username to inspect positions, trades &amp; activity.
         </p>
     );
 }
 
-// ── always-visible summary: current portfolio value + total P&L ──────────────
+// ── always-visible summary: trader · portfolio value · range P&L ─────────────
+
+const STAT_LABEL =
+    "text-[10px] uppercase tracking-[0.08em] text-text-muted font-medium flex items-center gap-1.5";
+const STAT_VALUE = "text-[26px] leading-none font-mono mt-2.5 tabular-nums";
+const STAT_FOOT = "text-[9px] text-text-muted mt-2 font-mono";
+
+/** Deterministic gradient for the trader avatar, derived from the address. */
+function avatarGradient(seed: string): string {
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    const a = h % 360;
+    const b = (a + 64) % 360;
+    return `linear-gradient(135deg, hsl(${a} 55% 45%), hsl(${b} 60% 38%))`;
+}
 
 function ProfileSummary({
     wallet,
+    name,
     refreshKey,
     range,
     onRangeChange,
 }: {
     wallet: string;
+    name: string | null;
     refreshKey: number;
     range: PnlInterval;
     onRangeChange: (r: PnlInterval) => void;
 }) {
     const fidelity = pnlFidelity(range);
     const valueFetcher = useCallback(() => api.pmValue(wallet), [wallet, refreshKey]);
-    const pnlFetcher = useCallback(
-        () => api.pmPnl(wallet, range, fidelity),
-        [wallet, range, fidelity, refreshKey],
-    );
+    const pnlFetcher = useCallback(() => api.pmPnl(wallet, range, fidelity), [wallet, range, fidelity, refreshKey]);
     const { data: value } = usePolling<PmValue>(valueFetcher, 10_000, !!wallet);
     const { data: pnl } = usePolling<PmPnlPoint[]>(pnlFetcher, 10_000, !!wallet);
 
     // P&L over the selected range (change across the window).
     const pnlVal = rangePnl(pnl);
-    const pnlColor = pnlVal == null ? "text-white" : pnlVal >= 0 ? "text-accent-green" : "text-accent-red";
-    const rangeLabel = range === "all" ? "all-time" : `past ${range}`;
+    const up = pnlVal != null && pnlVal >= 0;
+    const pnlColor = pnlVal == null ? "text-white" : up ? "text-accent-green" : "text-accent-red";
+    const rangeLabel = range === "all" ? "All-time" : `Past ${range}`;
+    const walletShort = shortHash(wallet, 6, 4);
+    const initials = (name ?? wallet.slice(2, 4)).slice(0, 2).toUpperCase();
 
     const seg = (active: boolean) =>
         `px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
@@ -345,17 +320,62 @@ function ProfileSummary({
         }`;
 
     return (
-        <div className="grid grid-cols-2 gap-px bg-border-strong rounded overflow-hidden">
-            <div className="bg-bg-card p-4">
-                <p className="text-[9px] uppercase tracking-wide text-text-muted">portfolio value</p>
-                <p className="text-[22px] font-mono text-white mt-1">
-                    {value ? fmtUsd(value.value) : "—"}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-border-strong rounded-lg overflow-hidden shadow-lg shadow-black/30 ring-1 ring-white/5">
+            {/* Trader — avatar + name headline, address shown once as a link. */}
+            <div className="bg-gradient-to-br from-bg-card to-bg-base p-4 flex flex-col">
+                <p className={STAT_LABEL}>
+                    <Wallet size={11} /> Trader
                 </p>
-                <p className="text-[9px] text-text-muted mt-1 font-mono">current holdings (no public history)</p>
+                <div className="flex items-center gap-3 mt-3">
+                    <div
+                        className="h-10 w-10 rounded-full flex items-center justify-center text-[12px] font-bold text-white/95 shrink-0 ring-1 ring-white/15 shadow-inner"
+                        style={{ background: avatarGradient(wallet) }}
+                        aria-hidden
+                    >
+                        {initials}
+                    </div>
+                    <div className="min-w-0">
+                        <p
+                            className="text-[17px] leading-tight font-semibold text-white truncate"
+                            title={name ?? wallet}
+                        >
+                            {name ?? walletShort}
+                        </p>
+                        <a
+                            href={`https://polymarket.com/profile/${wallet}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[10px] text-text-muted hover:text-white mt-0.5 font-mono transition-colors"
+                            title={wallet}
+                        >
+                            {wallet}
+                            <ExternalLink size={9} />
+                        </a>
+                    </div>
+                </div>
             </div>
-            <div className="bg-bg-card p-4">
-                <div className="flex items-center justify-between">
-                    <p className="text-[9px] uppercase tracking-wide text-text-muted">P&amp;L ({rangeLabel})</p>
+
+            {/* Portfolio value */}
+            <div className="bg-gradient-to-br from-bg-card to-bg-base p-4">
+                <p className={STAT_LABEL}>Portfolio Value</p>
+                <p className={`${STAT_VALUE} text-white`}>{value ? fmtUsd(value.value) : "—"}</p>
+                <p className={STAT_FOOT}>Current holdings</p>
+            </div>
+
+            {/* Profit / Loss over the selected range — left accent bar by sign. */}
+            <div
+                className="relative bg-gradient-to-br from-bg-card to-bg-base p-4 pl-5"
+                style={{
+                    boxShadow:
+                        pnlVal == null
+                            ? undefined
+                            : `inset 3px 0 0 0 var(--color-accent-${up ? "green" : "red"})`,
+                }}
+            >
+                <div className="flex items-center justify-between gap-2">
+                    <p className={STAT_LABEL}>
+                        {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />} Profit / Loss
+                    </p>
                     <div className="flex gap-1">
                         {(["1d", "1w", "1m", "all"] as const).map((r) => (
                             <button key={r} onClick={() => onRangeChange(r)} className={seg(range === r)}>
@@ -364,10 +384,10 @@ function ProfileSummary({
                         ))}
                     </div>
                 </div>
-                <p className={`text-[22px] font-mono mt-1 ${pnlColor}`}>
-                    {pnlVal == null ? "—" : `${pnlVal >= 0 ? "+" : ""}${fmtUsd(pnlVal)}`}
+                <p className={`${STAT_VALUE} ${pnlColor}`}>
+                    {pnlVal == null ? "—" : `${up ? "+" : ""}${fmtUsd(pnlVal)}`}
                 </p>
-                <p className="text-[9px] text-text-muted mt-1 font-mono">cumulative profit / loss over range</p>
+                <p className={STAT_FOOT}>{rangeLabel} · cumulative</p>
             </div>
         </div>
     );
@@ -392,10 +412,7 @@ function PositionsPanel({
     const positions = usePolling<PmPosition[]>(posFetcher, 10_000, !!wallet);
     const closed = usePolling<PmClosedPosition[]>(closedFetcher, 10_000, !!wallet);
 
-    const active = useMemo(
-        () => (positions.data ?? []).filter((p) => !p.redeemable),
-        [positions.data],
-    );
+    const active = useMemo(() => (positions.data ?? []).filter((p) => !p.redeemable), [positions.data]);
     const closedRows = closed.data ?? [];
 
     if (!wallet)
@@ -415,10 +432,7 @@ function PositionsPanel({
                     emptyLabel="no active positions"
                 />
             </Card>
-            <Card
-                title={`closed positions (${closedRows.length})`}
-                subtitle="resolved · data-api /closed-positions"
-            >
+            <Card title={`closed positions (${closedRows.length})`} subtitle="resolved · data-api /closed-positions">
                 <ClosedPositionsTable
                     rows={closedRows}
                     loading={closed.loading}
@@ -458,10 +472,7 @@ function PnlPanel({
     onRangeChange: (r: PnlInterval) => void;
 }) {
     const fidelity = pnlFidelity(range);
-    const fetcher = useCallback(
-        () => api.pmPnl(wallet, range, fidelity),
-        [wallet, range, fidelity, refreshKey],
-    );
+    const fetcher = useCallback(() => api.pmPnl(wallet, range, fidelity), [wallet, range, fidelity, refreshKey]);
     const { data, loading, error } = usePolling<PmPnlPoint[]>(fetcher, 10_000, !!wallet);
 
     const seg = (active: boolean) =>
@@ -495,10 +506,7 @@ function PnlPanel({
 }
 
 function ActivityPanel({ wallet, refreshKey }: { wallet: string; refreshKey: number }) {
-    const fetcher = useCallback(
-        () => api.pmActivity(wallet, undefined, 200),
-        [wallet, refreshKey],
-    );
+    const fetcher = useCallback(() => api.pmActivity(wallet, undefined, 200), [wallet, refreshKey]);
     const { data, loading, error } = usePolling<PmActivity[]>(fetcher, 10_000, !!wallet);
     if (!wallet)
         return (
@@ -527,11 +535,7 @@ function HoldersPanel({
     refreshKey: number;
 }) {
     const fetcher = useCallback(() => api.pmHolders(conditionId), [conditionId, refreshKey]);
-    const { data, loading, error } = usePolling<PmHolderGroup[]>(
-        fetcher,
-        10_000,
-        conditionId.startsWith("0x"),
-    );
+    const { data, loading, error } = usePolling<PmHolderGroup[]>(fetcher, 10_000, conditionId.startsWith("0x"));
     return (
         <Card
             title="holders"
@@ -547,12 +551,7 @@ function HoldersPanel({
             }
         >
             {conditionId.startsWith("0x") ? (
-                <HoldersTable
-                    groups={data ?? []}
-                    loading={loading}
-                    error={error}
-                    onPickWallet={onPickWallet}
-                />
+                <HoldersTable groups={data ?? []} loading={loading} error={error} onPickWallet={onPickWallet} />
             ) : (
                 <EmptyState loading={false} error={null} label="enter a market conditionId" />
             )}

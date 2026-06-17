@@ -136,13 +136,13 @@ export default function ControlPage() {
                     >
                         resume
                     </button>
-                    <button
+                    {/*<button
                         disabled={busy}
                         onClick={() => sendControl({ type: "reload_risk" }, "reload risk config")}
                         className={reloadBtn}
                     >
                         reload risk
-                    </button>
+                    </button>*/}
                 </div>
             </div>
 

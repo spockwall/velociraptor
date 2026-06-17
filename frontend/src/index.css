@@ -12,14 +12,15 @@
 @theme {
   /* ── Surfaces & borders ──────────────────────────────────────────────── */
   /* Surfaces carry slight transparency so backdrop-filter glass reads. */
-  --color-bg-base: #060912;        /* page background (near-black navy) */
-  --color-bg-surface: #0b1120e6;   /* navbar / header glass */
-  --color-bg-card: #0e1626cc;      /* card body / tooltip / active chip */
-  --color-bg-hover: #18233aee;     /* hover / active pill */
-  --color-bg-chip: #15233f;        /* active filter-chip background */
-  --color-border-strong: #243450;  /* primary hairline (brighter than before) */
-  --color-border-subtle: #35507a;  /* hover border / emphasis */
-  --color-border-card: #1b2840;    /* hairline between rows / inset tracks */
+  /* Neutral near-black charcoal (only the faintest cool tint, not blue). */
+  --color-bg-base: #0a0a0c;        /* page background (near-black) */
+  --color-bg-surface: #121214e6;   /* navbar / header glass */
+  --color-bg-card: #151517cc;      /* card body / tooltip / active chip */
+  --color-bg-hover: #222226ee;     /* hover / active pill */
+  --color-bg-chip: #1d1d21;        /* active filter-chip background */
+  --color-border-strong: #2c2c32;  /* primary hairline */
+  --color-border-subtle: #44444d;  /* hover border / emphasis */
+  --color-border-card: #232328;    /* hairline between rows / inset tracks */
   --color-border-faint: #16203399; /* faintest divider (log rows) */
   --color-border-chip: #36568c;    /* active filter-chip border */
 
@@ -35,31 +36,42 @@
   --color-text-trace: #56688c;    /* card subtitle */
 
   /* ── Accent / status palette ─────────────────────────────────────────── */
-  /* Trading: vivid neon mint (up) / coral (down) — bright & clearly distinct. */
-  --color-accent-green: var(--theme-green, #2fe6a0);
-  --color-accent-red: var(--theme-red, #ff5d6c);
-  --color-accent-blue: var(--theme-blue, #38bdf8);   /* cyan */
+  /* Trading green/red are the ONLY saturated colors. Everything non-trading
+     (nav, focus, links, "info") uses a desaturated cool slate so nothing
+     competes with the up/down semantics. */
+  --color-accent-green: var(--theme-green, #2fe6a0);  /* up */
+  --color-accent-red: var(--theme-red, #ff5d6c);      /* down */
+  --color-accent-blue: var(--theme-blue, #9fb1d4);    /* neutral slate (info) */
   --color-accent-gray: var(--theme-gray, #3a4a68);
   --color-accent-gold: #ffd166;   /* WARN level */
   --color-accent-amber: #ffb347;  /* stale-data warning */
-  --color-accent-violet: #a78bfa; /* secondary HUD accent */
+  --color-accent-violet: #b9c4dc; /* neutral (legacy alias) */
 
-  /* Brighter, fully-saturated accent variants — solid action buttons. */
+  /* Brighter variants — solid action buttons. Green/red stay vivid; the
+     former blue "neutral action" becomes a bright slate, not cyan. */
   --color-accent-green-bright: #10e294;
   --color-accent-red-bright: #ff4d5e;
-  --color-accent-blue-bright: #22b8ff;
+  --color-accent-blue-bright: #c3d0e8;
   --color-accent-green-bright-hover: #3bf0a8;
   --color-accent-red-bright-hover: #ff6a78;
-  --color-accent-blue-bright-hover: #4cc7ff;
+  --color-accent-blue-bright-hover: #d7e0f1;
 
   /* ── Error banner ────────────────────────────────────────────────────── */
   --color-error-text: #ff6a78;
   --color-error-bg: #1c0f1acc;
   --color-error-border: #4a2233;
 
-  /* ── HUD effect tokens (used by App.css) ─────────────────────────────── */
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  /* Override Tailwind's default font stacks so `font-sans` / `font-mono`
+     utilities (66 mono usages across the tables) resolve to our self-hosted
+     faces. Inter for UI, JetBrains Mono for numeric/data. */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ── HUD effect tokens ───────────────────────────────────────────────── */
   --hud-glass-blur: 14px;
-  --hud-glow-cyan: 0 0 0 1px rgba(56, 189, 248, 0.25), 0 0 22px -6px rgba(56, 189, 248, 0.55);
+  /* Neutral white-ish glow for active/focus states (no blue). */
+  --hud-glow-accent: 0 0 0 1px rgba(220, 230, 251, 0.22), 0 0 20px -8px rgba(220, 230, 251, 0.4);
   --hud-glow-green: 0 0 18px -4px rgba(47, 230, 160, 0.6);
   --hud-glow-red: 0 0 18px -4px rgba(255, 93, 108, 0.6);
 }
@@ -72,8 +84,10 @@ body {
     margin: 0;
     background: var(--color-bg-base);
     color: var(--color-text-primary);
-    font-family: "Inter", system-ui, sans-serif;
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.005em;
 }
 
 #root {
@@ -92,12 +106,12 @@ body {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #2b3f63, #1d2c47);
+    background: linear-gradient(180deg, #3a3a42, #26262b);
     border-radius: 8px;
-    border: 1px solid #0a1120;
+    border: 1px solid #0d0d10;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #38bdf8, #2b3f63);
+    background: linear-gradient(180deg, #55555f, #3a3a42);
 }
 
 /*
@@ -119,9 +133,9 @@ body::before {
     z-index: -1;
     pointer-events: none;
     background:
-        radial-gradient(1100px 600px at 12% -8%, rgba(56, 189, 248, 0.10), transparent 60%),
-        radial-gradient(1000px 620px at 100% 0%, rgba(167, 139, 250, 0.10), transparent 55%),
-        radial-gradient(900px 700px at 50% 120%, rgba(47, 230, 160, 0.06), transparent 60%);
+        radial-gradient(1100px 600px at 12% -8%, rgba(200, 200, 210, 0.05), transparent 60%),
+        radial-gradient(1000px 620px at 100% 0%, rgba(200, 200, 210, 0.035), transparent 55%),
+        radial-gradient(900px 700px at 50% 120%, rgba(47, 230, 160, 0.03), transparent 60%);
 }
 body::after {
     content: "";
@@ -131,39 +145,39 @@ body::after {
     pointer-events: none;
     opacity: 0.5;
     background-image:
-        linear-gradient(rgba(56, 189, 248, 0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(56, 189, 248, 0.035) 1px, transparent 1px);
+        linear-gradient(rgba(200, 200, 210, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(200, 200, 210, 0.03) 1px, transparent 1px);
     background-size: 44px 44px;
     -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
     mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
 }
 
-/* ── Navbar: sticky frosted glass with a cyan underglow ───────────────── */
+/* ── Navbar: sticky frosted glass with a neutral underglow ────────────── */
 header.flex {
     position: sticky;
     top: 0;
     z-index: 40;
-    background: linear-gradient(180deg, rgba(13, 20, 38, 0.85), rgba(8, 12, 24, 0.7));
+    background: linear-gradient(180deg, rgba(22, 22, 26, 0.85), rgba(12, 12, 14, 0.7));
     backdrop-filter: blur(var(--hud-glass-blur)) saturate(140%);
     -webkit-backdrop-filter: blur(var(--hud-glass-blur)) saturate(140%);
     border-bottom: 1px solid var(--color-border-strong);
-    box-shadow: 0 1px 0 rgba(56, 189, 248, 0.18), 0 8px 30px -18px rgba(0, 0, 0, 0.9);
+    box-shadow: 0 1px 0 rgba(220, 230, 251, 0.1), 0 8px 30px -18px rgba(0, 0, 0, 0.9);
 }
 
-/* Active nav pill gets a cyan glow + tint (matches the isActive utilities). */
+/* Active nav pill: neutral bright tint + soft white glow (no blue). */
 header nav a {
     letter-spacing: 0.01em;
 }
 header nav a[aria-current="page"] {
-    background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.06)) !important;
-    border-color: rgba(56, 189, 248, 0.5) !important;
+    background: linear-gradient(180deg, rgba(220, 230, 251, 0.14), rgba(220, 230, 251, 0.05)) !important;
+    border-color: rgba(220, 230, 251, 0.4) !important;
     color: #ffffff !important;
-    box-shadow: var(--hud-glow-cyan);
+    box-shadow: var(--hud-glow-accent);
 }
 
 /* ── Cards: any rounded+bordered panel becomes frosted glass ──────────── */
 .rounded.border {
-    background: linear-gradient(180deg, rgba(16, 24, 41, 0.82), rgba(10, 16, 30, 0.78)) !important;
+    background: linear-gradient(180deg, rgba(26, 26, 31, 0.82), rgba(18, 18, 21, 0.78)) !important;
     backdrop-filter: blur(var(--hud-glass-blur)) saturate(130%);
     -webkit-backdrop-filter: blur(var(--hud-glass-blur)) saturate(130%);
     border-color: var(--color-border-strong) !important;
@@ -198,23 +212,23 @@ table tbody tr {
     transition: background 0.12s ease;
 }
 table tbody tr:hover {
-    background: rgba(56, 189, 248, 0.06);
+    background: rgba(220, 230, 251, 0.05);
 }
 /* Numeric cells get the tabular figure treatment for clean column alignment. */
 table td, table th {
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Inputs: HUD field with cyan focus glow ───────────────────────────── */
+/* ── Inputs: HUD field with neutral focus ring ────────────────────────── */
 input[type="text"], input:not([type]), select, textarea {
-    background: rgba(8, 13, 26, 0.85) !important;
+    background: rgba(13, 13, 16, 0.85) !important;
     border-color: var(--color-border-strong) !important;
     color: var(--color-text-primary) !important;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 input[type="text"]:focus, input:not([type]):focus, select:focus, textarea:focus {
-    border-color: rgba(56, 189, 248, 0.65) !important;
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
+    border-color: rgba(220, 230, 251, 0.55) !important;
+    box-shadow: 0 0 0 3px rgba(220, 230, 251, 0.12);
     outline: none;
 }
 ::placeholder { color: var(--color-text-ghost) !important; }
@@ -226,8 +240,8 @@ button {
 }
 button:active { transform: translateY(0.5px); }
 
-/* Links inside content keep the cyan accent. */
-a.underline:hover { text-shadow: 0 0 10px rgba(56, 189, 248, 0.45); }
+/* Links inside content: neutral hover glow. */
+a.underline:hover { text-shadow: 0 0 10px rgba(220, 230, 251, 0.35); }
 
 /* ── Trading semantics: neon glow on green/red text & badges ──────────── */
 .text-accent-green { text-shadow: 0 0 12px rgba(47, 230, 160, 0.35); }
@@ -235,7 +249,7 @@ a.underline:hover { text-shadow: 0 0 10px rgba(56, 189, 248, 0.45); }
 
 /* ── Selection ────────────────────────────────────────────────────────── */
 ::selection {
-    background: rgba(56, 189, 248, 0.3);
+    background: rgba(220, 230, 251, 0.22);
     color: #ffffff;
 }
 
