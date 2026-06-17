@@ -238,6 +238,140 @@ export interface UserOrderUpdate {
 
 export type UserEvent = UserFill | UserOrderUpdate;
 
+// ── Polymarket Explorer ──────────────────────────────────────────────────────
+// Public per-user + market data proxied by the backend from Polymarket's
+// data-api / lb-api / gamma-api. All keyed by proxy wallet address.
+
+/// One open position. Mirrors data-api `/positions` row (subset we render).
+export interface PmPosition {
+    proxyWallet: string;
+    asset: string;
+    conditionId: string;
+    size: number;
+    avgPrice: number;
+    curPrice: number;
+    initialValue: number;
+    currentValue: number;
+    cashPnl: number;
+    percentPnl: number;
+    realizedPnl: number;
+    title: string;
+    slug: string;
+    icon: string;
+    outcome: string;
+    outcomeIndex: number;
+    redeemable: boolean;
+    endDate: string;
+}
+
+/// One resolved/closed position. data-api `/closed-positions`.
+export interface PmClosedPosition {
+    proxyWallet: string;
+    asset: string;
+    conditionId: string;
+    avgPrice: number;
+    totalBought: number;
+    realizedPnl: number;
+    curPrice: number;
+    timestamp: number;
+    title: string;
+    slug: string;
+    icon: string;
+    outcome: string;
+    outcomeIndex: number;
+    endDate: string;
+}
+
+/// One on-chain trade. data-api `/trades`.
+export interface PmTrade {
+    proxyWallet: string;
+    side: string;
+    asset: string;
+    conditionId: string;
+    size: number;
+    price: number;
+    timestamp: number;
+    title: string;
+    slug: string;
+    outcome: string;
+    outcomeIndex: number;
+    transactionHash: string;
+}
+
+/// One activity event. `type` is TRADE/SPLIT/MERGE/REDEEM/REWARD/MAKER_REBATE/
+/// YIELD/… `side` is BUY/SELL for trades, empty otherwise.
+export interface PmActivity {
+    proxyWallet: string;
+    timestamp: number;
+    type: string;
+    conditionId: string;
+    size: number;
+    usdcSize: number;
+    price: number;
+    side: string;
+    outcome: string;
+    outcomeIndex: number;
+    title: string;
+    slug: string;
+    transactionHash: string;
+    name: string;
+    pseudonym: string;
+}
+
+/// Portfolio value — backend flattens upstream `[{user,value}]`.
+export interface PmValue {
+    user: string;
+    value: number;
+}
+
+/// One P&L time-series point. `t` = unix seconds, `p` = cumulative P&L (USD).
+/// The last point is the current total P&L.
+export interface PmPnlPoint {
+    t: number;
+    p: number;
+}
+
+/// One holder within a token group of the data-api `/holders` response.
+export interface PmHolderEntry {
+    proxyWallet: string;
+    name: string;
+    pseudonym: string;
+    amount: number;
+    outcomeIndex: number;
+    profileImage: string;
+}
+
+/// data-api `/holders` returns one group per token (Yes / No).
+export interface PmHolderGroup {
+    token: string;
+    holders: PmHolderEntry[];
+}
+
+/// One leaderboard row (lb-api volume/profit).
+export interface PmLeaderboardEntry {
+    proxyWallet: string;
+    name: string;
+    pseudonym: string;
+    amount: number;
+    profileImage: string;
+}
+
+/// Market metrics — the "open interest" substitute (Polymarket has no OI field).
+/// Gamma market objects carry liquidity + volume series.
+export interface PmMarketMetrics {
+    slug: string;
+    question?: string;
+    liquidity?: number;
+    volume?: number;
+    volume24hr?: number;
+    volume1wk?: number;
+    volume1mo?: number;
+    bestBid?: number;
+    bestAsk?: number;
+    lastTradePrice?: number;
+    [k: string]: unknown;
+}
+
 export const api = {
     health: () => get<{ ok: boolean }>("/health"),
 
@@ -272,6 +406,34 @@ export const api = {
     /// capped Redis list the backend's tailer fills from each service's daily
     /// `.error.log`.
     errorLogs: (limit = 200) => get<LogEntry[]>(`${BASE}/logs/errors?limit=${limit}`),
+
+    // Polymarket Explorer — arbitrary-user public data.
+    pmResolve: (id: string) =>
+        get<{
+            wallet: string;
+            source: string;
+            input?: string;
+            name?: string | null;
+            pseudonym?: string | null;
+        }>(`${BASE}/pm/resolve/${encodeURIComponent(id)}`),
+    pmPositions: (wallet: string) => get<PmPosition[]>(`${BASE}/pm/positions/${wallet}`),
+    pmClosedPositions: (wallet: string, limit = 100) =>
+        get<PmClosedPosition[]>(`${BASE}/pm/closed-positions/${wallet}?limit=${limit}`),
+    pmTrades: (wallet: string, limit = 100) =>
+        get<PmTrade[]>(`${BASE}/pm/trades/${wallet}?limit=${limit}&takerOnly=true`),
+    pmActivity: (wallet: string, type?: string, limit = 100) =>
+        get<PmActivity[]>(
+            `${BASE}/pm/activity/${wallet}?limit=${limit}${type ? `&type=${type}` : ""}`,
+        ),
+    pmValue: (wallet: string) => get<PmValue>(`${BASE}/pm/value/${wallet}`),
+    pmPnl: (wallet: string, interval: "1d" | "1w" | "1m" | "all" = "all", fidelity: "1h" | "1d" = "1d") =>
+        get<PmPnlPoint[]>(`${BASE}/pm/pnl/${wallet}?interval=${interval}&fidelity=${fidelity}`),
+    pmHolders: (conditionId: string) => get<PmHolderGroup[]>(`${BASE}/pm/holders/${conditionId}`),
+    pmLeaderboard: (metric: "volume" | "profit", window: "all" | "7d" | "30d", limit = 20) =>
+        get<PmLeaderboardEntry[]>(
+            `${BASE}/pm/leaderboard?metric=${metric}&window=${window}&limit=${limit}`,
+        ),
+    pmMarket: (slug: string) => get<PmMarketMetrics>(`${BASE}/pm/market/${slug}`),
 
     postControl: (action: ControlAction) => post<ControlStatus>(`${BASE}/control`, action),
 

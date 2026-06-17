@@ -6,6 +6,7 @@ import Orderbook from "./pages/Orderbook";
 import Polymarket from "./pages/Polymarket";
 import Kalshi from "./pages/Kalshi";
 import Trades from "./pages/Trades";
+import PmExplorer from "./pages/pmexplorer/Explorer";
 import AccountFills from "./pages/account/Fills";
 import AccountOrders from "./pages/account/Orders";
 import Control from "./pages/Control";
@@ -31,6 +32,7 @@ export default function App() {
                     <Route path="/polymarket" element={<Polymarket />} />
                     <Route path="/kalshi" element={<Kalshi />} />
                     <Route path="/trades" element={<Trades />} />
+                    <Route path="/pm-explorer" element={<PmExplorer />} />
                     <Route path="/account" element={<Navigate to="/account/fills" replace />} />
                     <Route path="/account/fills" element={<AccountFills />} />
                     <Route path="/account/orders" element={<AccountOrders />} />

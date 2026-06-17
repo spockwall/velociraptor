@@ -6,4 +6,5 @@ pub mod logs;
 pub mod markets;
 pub mod monitor;
 pub mod orderbook;
+pub mod pmexplorer;
 pub mod spot;

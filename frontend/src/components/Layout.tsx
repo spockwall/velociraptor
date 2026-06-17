@@ -10,6 +10,7 @@ const nav = [
     { to: "/control", label: "Control" },
     { to: "/monitor", label: "Monitor" },
     { to: "/logs", label: "Logs" },
+    { to: "/pm-explorer", label: "Profile" },
 ];
 
 export default function Layout() {
