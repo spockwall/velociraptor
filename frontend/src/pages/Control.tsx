@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Terminal } from "lucide-react";
+import { Terminal, Activity } from "lucide-react";
 import Card from "../components/Card";
-import { api, type ControlStatus } from "../lib/api";
+import { ServiceRow } from "../components/ServiceRow";
+import { C } from "../lib/colors";
+import { api, type ControlStatus, type ServiceInfo } from "../lib/api";
 
 interface LogEntry {
     ts: string;
@@ -14,6 +16,7 @@ export default function ControlPage() {
     const [busy, setBusy] = useState(false);
     const [status, setStatus] = useState<ControlStatus | null>(null);
     const [statusErr, setStatusErr] = useState<string | null>(null);
+    const [services, setServices] = useState<ServiceInfo[]>([]);
 
     function pushLog(level: LogEntry["level"], msg: string) {
         const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -43,6 +46,26 @@ export default function ControlPage() {
         };
     }, []);
 
+    // Poll systemd service status (from /api/monitor) every 5s — the same
+    // source the Monitor page used; collecting it is mildly expensive.
+    useEffect(() => {
+        let alive = true;
+        async function tick() {
+            try {
+                const m = await api.monitor();
+                if (alive) setServices(m.services);
+            } catch {
+                /* leave previous list on transient error */
+            }
+        }
+        tick();
+        const id = setInterval(tick, 5000);
+        return () => {
+            alive = false;
+            clearInterval(id);
+        };
+    }, []);
+
     async function sendControl(action: { type: "halt" | "resume" | "reload_risk" }, label: string) {
         setBusy(true);
         pushLog("info", `→ ${label}`);
@@ -63,7 +86,8 @@ export default function ControlPage() {
         "flex-1 min-w-[7rem] py-3 rounded-md text-sm font-mono font-semibold text-white shadow-sm transition-all cursor-pointer flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed";
     const haltBtn = `${btnBase} bg-accent-red-bright hover:bg-accent-red-bright-hover`;
     const resumeBtn = `${btnBase} bg-accent-green-bright hover:bg-accent-green-bright-hover`;
-    const reloadBtn = `${btnBase} bg-accent-blue-bright hover:bg-accent-blue-bright-hover`;
+    // reloadBtn — kept commented alongside the disabled "reload risk" button below.
+    // const reloadBtn = `${btnBase} bg-accent-blue-bright hover:bg-accent-blue-bright-hover`;
 
     // ── Status badge ─────────────────────────────────────────────────────────
     // Compact state pill — just the state word; full detail is in the title
@@ -171,6 +195,22 @@ export default function ControlPage() {
                         ))
                     )}
                 </div>
+            </Card>
+
+            {/* Systemd services — moved here from the Monitor page */}
+            <Card
+                title="systemd services"
+                subtitle={`${services.filter((s) => s.active_state === "active").length}/${services.length} active`}
+                action={<Activity size={14} style={{ color: C.textSubtle }} />}
+                noPad
+            >
+                {services.length === 0 ? (
+                    <p className="text-xs p-4" style={{ color: C.textGhost }}>
+                        no services reported
+                    </p>
+                ) : (
+                    services.map((s) => <ServiceRow key={s.unit} s={s} />)
+                )}
             </Card>
         </div>
     );

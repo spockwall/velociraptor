@@ -55,6 +55,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/monitor", get(routes::monitor::get_monitor))
         .route("/api/monitor/history", get(routes::monitor::get_monitor_history))
+        .route("/api/redis/keys", get(routes::monitor::get_redis_keys))
         .route("/api/logs/errors", get(routes::logs::get_error_logs))
         .route("/api/pm/positions/:wallet", get(routes::pmexplorer::get_positions))
         .route("/api/pm/closed-positions/:wallet", get(routes::pmexplorer::get_closed_positions))

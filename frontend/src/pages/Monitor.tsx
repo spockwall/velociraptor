@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, MemoryStick, HardDrive, FolderTree, Server, Activity, LineChart as LineChartIcon } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, FolderTree, Server, Database, LineChart as LineChartIcon } from "lucide-react";
 import {
     CartesianGrid,
     Line,
@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import Card from "../components/Card";
 import { usePolling } from "../lib/usePolling";
-import { api, type MonitorStatus, type ServiceInfo } from "../lib/api";
+import { api, type MonitorStatus, type RedisKeyInfo } from "../lib/api";
 import { C } from "../lib/colors";
 
 // ── local formatters ────────────────────────────────────────────────────────
@@ -65,55 +65,6 @@ function UsageBar({ pct, label, detail }: { pct: number; label: string; detail?:
                     className="h-full rounded-full transition-all duration-500"
                     style={{ width: `${clamped}%`, background: usageColor(clamped) }}
                 />
-            </div>
-        </div>
-    );
-}
-
-function ServiceRow({ s }: { s: ServiceInfo }) {
-    const { dot, text } =
-        s.error || s.active_state === "unknown"
-            ? { dot: C.textGhost, text: C.textDim }
-            : s.active_state === "active"
-              ? { dot: GREEN, text: C.textStrong }
-              : s.active_state === "failed"
-                ? { dot: RED, text: RED }
-                : s.active_state === "activating" || s.active_state === "deactivating"
-                  ? { dot: BLUE, text: C.textStrong }
-                  : { dot: C.textFaint, text: C.textDim };
-
-    // Strip the common prefix/suffix for a denser label; keep full name in title.
-    const short = s.unit.replace(/^velociraptor-/, "").replace(/\.service$/, "");
-
-    return (
-        <div
-            className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
-            style={{ borderColor: C.borderCard }}
-            title={s.unit}
-        >
-            <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: dot, boxShadow: `0 0 6px ${dot}` }}
-            />
-            <div className="flex-1 min-w-0">
-                <p className="text-xs font-mono truncate" style={{ color: text }}>
-                    {short}
-                </p>
-                {s.error && (
-                    <p className="text-[10px] mt-0.5 truncate" style={{ color: C.textGhost }}>
-                        {s.error}
-                    </p>
-                )}
-            </div>
-            <div className="text-right shrink-0">
-                <p className="text-xs font-mono" style={{ color: text }}>
-                    {s.active_state}
-                    {s.sub_state ? ` / ${s.sub_state}` : ""}
-                </p>
-                <p className="text-[10px] font-mono" style={{ color: C.textGhost }}>
-                    {s.main_pid > 0 ? `pid ${s.main_pid}` : "—"}
-                    {s.active_secs > 0 ? ` · up ${fmtDuration(s.active_secs)}` : ""}
-                </p>
             </div>
         </div>
     );
@@ -215,6 +166,199 @@ function HistoryChart({ points }: { points: ChartPoint[] }) {
     );
 }
 
+// ── redis keys ────────────────────────────────────────────────────────────────
+
+// Known caps for the capped lists (mirrors the backend config: snapshot_cap /
+// trade_cap / monitor HISTORY_CAP / error-log cap). Used to show "n / cap" and
+// a fullness color. Keys not listed here just show their raw size.
+function listCap(key: string): number | null {
+    if (key.startsWith("snapshots:")) return 1000;
+    if (key.startsWith("trades:")) return 500;
+    if (key === "system:metrics") return 2880;
+    if (key === "system:error_logs") return 2000;
+    return null;
+}
+
+function kindColor(kind: string): string {
+    switch (kind) {
+        case "list":
+            return BLUE;
+        case "set":
+            return GREEN;
+        case "hash":
+            return C.amber;
+        case "stream":
+            return RED;
+        default:
+            return C.textDim; // string / none
+    }
+}
+
+// The 8 categories, in tab order. `match` decides which keys belong to each.
+const REDIS_CATEGORIES = [
+    "ob",
+    "bba",
+    "snapshots",
+    "trades",
+    "polymarket",
+    "kalshi",
+    "window_open_price",
+    "system",
+] as const;
+type RedisCategory = (typeof REDIS_CATEGORIES)[number] | "other";
+
+function categoryOf(key: string): RedisCategory {
+    for (const c of REDIS_CATEGORIES) {
+        if (key.startsWith(`${c}:`)) return c;
+    }
+    return "other";
+}
+
+function fmtPx(v: number | undefined): string {
+    if (v == null) return "—";
+    // Prediction markets are 0–1 probabilities; CEX prices are large.
+    return v < 10 ? v.toFixed(4) : v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** Decoded one-line summary for bba: / window_open_price: rows (else null). */
+function decodedSummary(k: RedisKeyInfo): React.ReactNode {
+    const d = k.data;
+    if (!d) return null;
+    if (k.key.startsWith("bba:")) {
+        const bid = d.best_bid ? `${fmtPx(d.best_bid[0])} × ${fmtPx(d.best_bid[1])}` : "—";
+        const ask = d.best_ask ? `${fmtPx(d.best_ask[0])} × ${fmtPx(d.best_ask[1])}` : "—";
+        return (
+            <span className="font-mono text-[11px]">
+                <span style={{ color: GREEN }}>bid {bid}</span>
+                <span style={{ color: C.textGhost }}>{"   "}</span>
+                <span style={{ color: RED }}>ask {ask}</span>
+            </span>
+        );
+    }
+    if (k.key.startsWith("window_open_price:")) {
+        return (
+            <span className="font-mono text-[11px]" style={{ color: C.textStrong }}>
+                {d.product} · {d.interval_secs}s · open@{d.window_start} ·{" "}
+                <span style={{ color: C.amber }}>${fmtPx(d.price)}</span> ({d.source})
+            </span>
+        );
+    }
+    return null;
+}
+
+function RedisKeysCard({ keys }: { keys: RedisKeyInfo[] }) {
+    const [tab, setTab] = useState<RedisCategory>("bba");
+
+    // Group keys by category (memo keeps it stable across the 10s polls).
+    const groups = useMemo(() => {
+        const m = new Map<RedisCategory, RedisKeyInfo[]>();
+        for (const k of keys) {
+            const c = categoryOf(k.key);
+            (m.get(c) ?? m.set(c, []).get(c)!).push(k);
+        }
+        return m;
+    }, [keys]);
+
+    // Tabs to actually render: the 8 known categories present, plus "other".
+    const allCats: RedisCategory[] = [...REDIS_CATEGORIES, "other"];
+    const tabs: RedisCategory[] = allCats.filter((c) => (groups.get(c)?.length ?? 0) > 0);
+    const active = groups.get(tab)?.length ? tab : (tabs[0] ?? "bba");
+    const rows = groups.get(active) ?? [];
+    const totalElems = keys.reduce((acc, k) => acc + (k.size ?? 0), 0);
+    const hasDecoded = active === "bba" || active === "window_open_price";
+
+    return (
+        <Card
+            title="redis keys"
+            subtitle={`${keys.length} keys · ${totalElems.toLocaleString()} elements (live SCAN)`}
+            action={<Database size={14} style={{ color: C.textSubtle }} />}
+            noPad
+        >
+            {/* Tab strip */}
+            <div className="flex items-center gap-1 flex-wrap px-4 py-2.5 border-b" style={{ borderColor: C.borderCard }}>
+                {tabs.map((c) => {
+                    const n = groups.get(c)?.length ?? 0;
+                    const isActive = c === active;
+                    return (
+                        <button
+                            key={c}
+                            onClick={() => setTab(c)}
+                            className="px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors"
+                            style={{
+                                color: isActive ? "#fff" : C.textDim,
+                                background: isActive ? C.bgChip : "transparent",
+                                borderColor: isActive ? C.borderStrong : "transparent",
+                            }}
+                        >
+                            {c} <span style={{ color: C.textGhost }}>{n}</span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {rows.length === 0 ? (
+                <p className="text-xs p-4" style={{ color: C.textGhost }}>
+                    no keys
+                </p>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="w-full table-auto text-[11px] font-mono">
+                        <thead>
+                            <tr className="text-left" style={{ color: C.textDim }}>
+                                <th className="px-4 py-2 font-medium">key</th>
+                                <th className="px-3 py-2 font-medium">type</th>
+                                {hasDecoded ? (
+                                    <th className="px-4 py-2 font-medium">data</th>
+                                ) : (
+                                    <th className="px-4 py-2 font-medium text-right">size</th>
+                                )}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((k) => {
+                                const cap = listCap(k.key);
+                                const pct = cap && k.size != null ? (k.size / cap) * 100 : null;
+                                return (
+                                    <tr key={k.key} className="border-t" style={{ borderColor: C.borderCard }}>
+                                        <td
+                                            className="px-4 py-1.5 truncate max-w-[42ch]"
+                                            style={{ color: C.textStrong }}
+                                            title={k.key}
+                                        >
+                                            {k.key}
+                                        </td>
+                                        <td className="px-3 py-1.5">
+                                            <span style={{ color: kindColor(k.kind) }}>{k.kind}</span>
+                                        </td>
+                                        {hasDecoded ? (
+                                            <td className="px-4 py-1.5 whitespace-nowrap">
+                                                {decodedSummary(k) ?? (
+                                                    <span style={{ color: C.textGhost }}>—</span>
+                                                )}
+                                            </td>
+                                        ) : (
+                                            <td
+                                                className="px-4 py-1.5 text-right whitespace-nowrap"
+                                                style={{ color: pct != null ? usageColor(pct) : C.textDim }}
+                                            >
+                                                {k.size == null
+                                                    ? "—"
+                                                    : cap
+                                                      ? `${k.size.toLocaleString()} / ${cap.toLocaleString()}`
+                                                      : k.size.toLocaleString()}
+                                            </td>
+                                        )}
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </Card>
+    );
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 
 export default function Monitor() {
@@ -226,6 +370,9 @@ export default function Monitor() {
     // every 15s is plenty to pick up new points without redundant fetches.
     const { data: history } = usePolling<MonitorStatus[]>(() => api.monitorHistory(), 15000);
     const points = useMemo(() => toChartPoints(history ?? []), [history]);
+
+    // Live Redis key inventory (every key + type + size). SCAN is cheap; 10s.
+    const { data: redisKeys } = usePolling<RedisKeyInfo[]>(() => api.redisKeys(), 10000);
 
     // Ticking clock (in unix seconds) so "updated Ns ago" stays live between
     // polls without reading the clock during render (React purity rule).
@@ -260,7 +407,7 @@ export default function Monitor() {
 
     if (!data) return null;
 
-    const { host, cpu, memory, disks, data_usage, services } = data;
+    const { host, cpu, memory, disks, data_usage } = data;
     const ageSecs = Math.max(0, nowSecs - data.ts);
 
     return (
@@ -361,7 +508,12 @@ export default function Monitor() {
                         </p>
                     </div>
                 </Card>
+            </div>
 
+            {/* Redis keys — live inventory, between the cpu/memory and disk rows */}
+            <RedisKeysCard keys={redisKeys ?? []} />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Disks */}
                 <Card title="disk" action={<HardDrive size={14} style={{ color: C.textSubtle }} />}>
                     <div className="space-y-3">
@@ -401,22 +553,6 @@ export default function Monitor() {
                         </div>
                     </Card>
                 )}
-
-                {/* Services */}
-                <Card
-                    title="systemd services"
-                    subtitle={`${services.filter((s) => s.active_state === "active").length}/${services.length} active`}
-                    action={<Activity size={14} style={{ color: C.textSubtle }} />}
-                    noPad
-                >
-                    {services.length === 0 ? (
-                        <p className="text-xs p-4" style={{ color: C.textGhost }}>
-                            no services reported
-                        </p>
-                    ) : (
-                        services.map((s) => <ServiceRow key={s.unit} s={s} />)
-                    )}
-                </Card>
             </div>
         </div>
     );

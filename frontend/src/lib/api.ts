@@ -145,6 +145,30 @@ export interface MonitorStatus {
     ts: number;
 }
 
+// Redis key inventory — mirrors `libs::redis_client::RedisKeyInfo`.
+export interface RedisKeyInfo {
+    key: string;
+    /** string / list / set / hash / zset / stream / none. */
+    kind: string;
+    /** Element count for list/set/hash/zset/stream; null for strings. */
+    size: number | null;
+    /** Decoded payload for bba: (BbaPayload) and window_open_price: (JSON).
+     *  Absent for key families we don't decode. */
+    data?: {
+        // bba: fields
+        best_bid?: [number, number] | null;
+        best_ask?: [number, number] | null;
+        spread?: number | null;
+        // window_open_price: fields
+        product?: string;
+        interval_secs?: number;
+        window_start?: number;
+        price?: number;
+        source?: string;
+        [k: string]: unknown;
+    } | null;
+}
+
 // Error logs — mirrors `backend/src/routes/logs.rs::LogEntry`.
 
 export interface LogEntry {
@@ -396,6 +420,10 @@ export const api = {
     getControl: () => get<ControlStatus>(`${BASE}/control`),
 
     monitor: () => get<MonitorStatus>(`${BASE}/monitor`),
+
+    /// Live Redis key inventory (every key + type + element count), fetched
+    /// fresh via SCAN. Sorted by key.
+    redisKeys: () => get<RedisKeyInfo[]>(`${BASE}/redis/keys`),
 
     /// Recent monitor samples, newest-first. Backed by a capped Redis list the
     /// backend's sampler writes every 30s. The chart reverses for time order.

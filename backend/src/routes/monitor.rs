@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use axum::extract::State;
 use axum::response::Json;
+use libs::redis_client::RedisKeyInfo;
 use libs::redis_client::keys::System as SystemKey;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
@@ -148,6 +149,36 @@ pub(crate) async fn get_monitor(
         .await
         .map_err(|e| ApiError::Decode(format!("monitor collect: {e}")))?;
     Ok(Json(status))
+}
+
+/// Live Redis key inventory: every key with its type and element count,
+/// fetched fresh from Redis (cursor-based SCAN, non-blocking). Sorted by key.
+/// `bba:` and `window_open_price:` entries are enriched with a decoded `data`
+/// payload so the UI can show live prices instead of an opaque blob. Backs
+/// `GET /api/redis/keys`.
+pub(crate) async fn get_redis_keys(
+    State(s): State<Arc<AppState>>,
+) -> Result<Json<Vec<RedisKeyInfo>>, ApiError> {
+    let mut keys = s.redis.key_overview().await;
+    for k in &mut keys {
+        if let Some(rest) = k.key.strip_prefix("bba:") {
+            let _ = rest;
+            if let Some(bytes) = s.redis.get_raw(&k.key).await {
+                if let Ok(bba) = rmp_serde::from_slice::<libs::protocol::events::BbaPayload>(&bytes)
+                {
+                    k.data = serde_json::to_value(&bba).ok();
+                }
+            }
+        } else if k.key.starts_with("window_open_price:") {
+            // Stored as plain JSON text.
+            if let Some(bytes) = s.redis.get_raw(&k.key).await {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    k.data = Some(v);
+                }
+            }
+        }
+    }
+    Ok(Json(keys))
 }
 
 #[derive(Deserialize)]

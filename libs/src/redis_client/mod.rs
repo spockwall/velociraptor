@@ -9,7 +9,26 @@ pub mod spillover;
 use anyhow::Result;
 use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
+use serde::{Deserialize, Serialize};
 use tracing::error;
+
+/// One Redis key with its type and element count, as surfaced by
+/// [`RedisHandle::key_overview`]. `size` is the element count for
+/// list/set/hash/zset/stream; `None` for scalar types (string) whose "size"
+/// isn't a count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedisKeyInfo {
+    pub key: String,
+    /// Redis type: string / list / set / hash / zset / stream / none.
+    pub kind: String,
+    /// Element count (LLEN/SCARD/HLEN/ZCARD/XLEN). `None` for strings.
+    pub size: Option<u64>,
+    /// Optional decoded payload for human-readable key families (e.g. `bba:`
+    /// best bid/ask, `window_open_price:` price). `None` for keys we don't
+    /// decode. Populated by the backend route, not `key_overview` itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
 
 /// A cheaply-clonable handle to Redis, backed by `ConnectionManager` so
 /// reconnects are automatic.
@@ -31,6 +50,73 @@ impl RedisHandle {
     /// Raw access to the underlying connection manager.
     pub fn raw(&self) -> ConnectionManager {
         self.conn.clone()
+    }
+
+    /// Enumerate every key with its type and element count for a live overview
+    /// (used by the backend's `/api/redis/keys`). Uses cursor-based `SCAN`
+    /// (never `KEYS`) so it doesn't block Redis, then fetches each key's `TYPE`
+    /// and its size with the type-appropriate command. Best-effort: on any
+    /// error it returns what it has gathered so far. Results are sorted by key.
+    pub async fn key_overview(&self) -> Vec<RedisKeyInfo> {
+        let mut conn = self.conn.clone();
+        let mut out: Vec<RedisKeyInfo> = Vec::new();
+        let mut cursor: u64 = 0;
+
+        loop {
+            let scan: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("COUNT")
+                .arg(512)
+                .query_async(&mut conn)
+                .await;
+            let (next, keys) = match scan {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Redis SCAN failed: {e}");
+                    break;
+                }
+            };
+
+            for key in keys {
+                let kind: String = redis::cmd("TYPE")
+                    .arg(&key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap_or_else(|_| "unknown".to_string());
+
+                let size_cmd = match kind.as_str() {
+                    "list" => Some("LLEN"),
+                    "set" => Some("SCARD"),
+                    "hash" => Some("HLEN"),
+                    "zset" => Some("ZCARD"),
+                    "stream" => Some("XLEN"),
+                    _ => None, // string / none → no element count
+                };
+                let size = match size_cmd {
+                    Some(cmd) => redis::cmd(cmd)
+                        .arg(&key)
+                        .query_async::<u64>(&mut conn)
+                        .await
+                        .ok(),
+                    None => None,
+                };
+
+                out.push(RedisKeyInfo {
+                    key,
+                    kind,
+                    size,
+                    data: None,
+                });
+            }
+
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        out
     }
 
     // ── Orderbook state ───────────────────────────────────────────────────────
