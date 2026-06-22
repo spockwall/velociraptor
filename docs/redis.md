@@ -4,7 +4,7 @@ This document is the authoritative map of every Redis key the workspace touches,
 
 ## TL;DR
 
-- **Single shared instance** at `redis://127.0.0.1:6379` (host) or `redis://redis:6379` (docker network). Configured by `redis.url` in the unified YAML (`configs/example.yaml` / `example.docker.yaml`).
+- **Single shared instance** at `redis://127.0.0.1:6379` (host) or `redis://redis:6379` (docker network). Configured by `redis.url` in the unified YAML (`configs/<env>/config.yaml`).
 - **Modes used:** plain strings, hashes, lists (capped), sets, and one stream (`executor:log`). **No** pub/sub channels are live today (`executor:kill_switch_chan` and `config:updates` are reserved names but nothing subscribes).
 - **No persistence.** docker-compose runs Redis with `--save "" --appendonly no` — Redis is treated as an ephemeral cache. Restarting Redis wipes every key listed below.
 - **Payloads** are mostly `rmp-serde` (msgpack with named fields). A few control keys are plain UTF-8 strings ("1" / unix-seconds).

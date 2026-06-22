@@ -1,6 +1,6 @@
 //! Long-running Polymarket `(market_id, yes_asset_id, no_asset_id)` fetcher.
 //!
-//! Reads `configs/example.yaml` and, for every enabled Polymarket market,
+//! Reads `configs/dev/recorder.yaml` and, for every enabled Polymarket market,
 //! drives a per-market loop that:
 //!
 //! 1. **Auto-backfills on startup**: walks every window between
@@ -24,7 +24,7 @@
 //! ticker, not a yes/no token pair, so there's nothing analogous to record.
 //!
 //! Run:
-//!   cargo run --bin asset_id_fetcher --release -- --config configs/fetcher.yaml
+//!   cargo run --bin asset_id_fetcher --release -- --config configs/dev/recorder.yaml or configs/prod/recorder.yaml 
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -48,7 +48,7 @@ const REQUEST_SPACING_MS: u64 = 100;
     about = "Continuously fetch Polymarket market_id + yes/no asset IDs into per-day CSV files"
 )]
 struct Args {
-    #[arg(long, default_value = "configs/example.yaml")]
+    #[arg(long, default_value = "configs/dev/recorder.yaml")]
     config: String,
 
     /// Seed start date for the auto-backfill on a fresh archive. If at least

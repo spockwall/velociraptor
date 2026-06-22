@@ -9,7 +9,8 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin orderbook_server -- --config configs/server.yaml
+//! cargo run --bin orderbook_server -- --config configs/dev/config.yaml
+//! cargo run --bin orderbook_server -- --config configs/prod/config.yaml
 //! ```
 
 use anyhow::Result;
@@ -27,17 +28,32 @@ use zmq_server::setup::{
 };
 use zmq_server::StreamSystemConfig;
 
-const KALSHI_CREDENTIALS_PATH: &str = "credentials/kalshi.yaml";
-const POLYMARKET_CREDENTIALS_PATH: &str = "credentials/polymarket.yaml";
-
 #[derive(Parser, Debug)]
 #[command(
     name = "orderbook_server",
     about = "Real-time orderbook server — streams live data from exchanges over ZMQ"
 )]
 struct Args {
-    #[arg(long, env = "CONFIG_FILE", default_value = "configs/server.yaml")]
+    #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/config.yaml")]
     config: String,
+
+    /// Path to the Polymarket credentials file (a `polymarket:` section). Used
+    /// only for the optional user-event channel; absent file/section → skipped.
+    #[arg(
+        long,
+        env = "POLYMARKET_CREDENTIALS_FILE",
+        default_value = "credentials/dev/polymarket.yaml"
+    )]
+    polymarket_credentials: String,
+
+    /// Path to the Kalshi credentials file (a `kalshi:` section). Absent
+    /// file/section → Kalshi schedulers run without authenticated WS upgrade.
+    #[arg(
+        long,
+        env = "KALSHI_CREDENTIALS_FILE",
+        default_value = "credentials/dev/kalshi.yaml"
+    )]
+    kalshi_credentials: String,
 }
 
 #[tokio::main]
@@ -54,13 +70,13 @@ async fn main() {
         cfg.logging.json,
     );
 
-    if let Err(e) = run(cfg).await {
+    if let Err(e) = run(cfg, &args).await {
         error!("Fatal: {e:#}");
         std::process::exit(1);
     }
 }
 
-async fn run(cfg: Config) -> Result<()> {
+async fn run(cfg: Config, args: &Args) -> Result<()> {
     // ── Static exchange config ─────────────────────────────────────────────────
 
     let mut system_cfg = StreamSystemConfig::new();
@@ -131,12 +147,12 @@ async fn run(cfg: Config) -> Result<()> {
     // condition-id filter), forwards UserEvents onto the main engine bus so
     // the ZmqServer user PUB publishes them as `user.polymarket.{kind}`.
     let _pm_user = libs::credentials::PolymarketCredentials::try_load(
-        POLYMARKET_CREDENTIALS_PATH,
+        &args.polymarket_credentials,
     )
     .and_then(|c| spawn_polymarket_user_channel(c, system.message_sender()));
     if _pm_user.is_none() {
         tracing::info!(
-            path = POLYMARKET_CREDENTIALS_PATH,
+            path = %args.polymarket_credentials,
             "Polymarket user channel: credentials missing or empty — skipping"
         );
     }
@@ -144,7 +160,7 @@ async fn run(cfg: Config) -> Result<()> {
     let _kal = spawn_kalshi_schedulers(
         &cfg.kalshi.market,
         cfg.storage.depth,
-        KALSHI_CREDENTIALS_PATH,
+        &args.kalshi_credentials,
         redis_handle.clone(),
         cfg.redis.snapshot_cap,
         cfg.redis.trade_cap,

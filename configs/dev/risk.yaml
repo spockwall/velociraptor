@@ -1,0 +1,21 @@
+# ── DEV pre-trade risk gate ──────────────────────────────────────────────────
+# Standalone risk config, loaded by the executor as the sibling of its --config
+# file (configs/dev/config.yaml → configs/dev/risk.yaml). This whole file IS the
+# risk config (no `risk:` wrapper). Hot-reload without a restart:
+# `SET executor:reload_config 1` (or "reload risk" on the Control page).
+#
+# Dev defaults to DISABLED — dev orders go to the Polymarket testnet anyway, so
+# the gate is off. Flip `enabled: true` and uncomment limits below to exercise
+# the gate during testing. See configs/prod/risk.yaml for the annotated rules.
+
+enabled: false
+exchanges:
+  polymarket:
+    default: {}
+      # max_qty: 100
+      # max_notional: 500
+    symbols: {}
+  kalshi:
+    default: {}
+      # max_qty: 200
+    symbols: {}

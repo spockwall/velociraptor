@@ -1,0 +1,90 @@
+# ── PROD recorder + fetcher config (HOST, not Docker) ────────────────────────
+# For binaries run directly on the host via `cargo run` (NOT the Docker
+# services) — they don't have the /app bind-mount, so paths are HOST paths.
+# In prod everything lives under the /data volume.
+#
+#   cargo run --release --bin orderbook_server      -- --config configs/prod/recorder.yaml
+#   cargo run --release --bin asset_id_fetcher      -- --config configs/prod/recorder.yaml
+#   cargo run --release --bin price_to_beat_fetcher -- --config configs/prod/recorder.yaml
+#
+# Pairs with credentials/prod/. The Docker services use configs/prod/config.yaml
+# instead (that one keeps /app/data container paths).
+
+server:
+  pub_endpoint: "tcp://*:5555"
+  router_endpoint: "tcp://*:5556"
+  render_interval: 300
+
+logging:
+  level: "info"
+  json: false
+  dir: "/data/syslog"
+
+redis:
+  enabled: true
+  url: "redis://127.0.0.1:6379"
+  snapshot_cap: 1000
+  trade_cap: 500
+  event_list_cap: 5000
+
+# Recorder: write daily archive files under /data/orderbook.
+storage:
+  enabled: true
+  base_path: "/data/orderbook"
+  depth: 20
+  flush_interval: 1000
+  rotation: "daily"
+  zstd_level: 0
+
+# Fetcher archive roots (host paths).
+fetcher:
+  asset_id_dir: "/data/asset_ids"
+  price_to_beat_dir: "/data/price_to_beat"
+
+binance:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+binance_spot:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+okx:
+  enabled: true
+  symbols:
+    - "BTC-USDT"
+    - "ETH-USDT"
+
+hyperliquid:
+  enabled: true
+  coins:
+    - "BTC"
+    - "ETH"
+
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
+
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300

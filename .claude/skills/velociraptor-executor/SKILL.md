@@ -20,7 +20,7 @@ For the wire types see `velociraptor-zmq-protocol`.
 
 ```bash
 cargo run --bin executor --release -- \
-  --config configs/server.yaml \
+  --config configs/dev/config.yaml \
   --credentials credentials/polymarket.yaml \
   --kalshi-credentials credentials/kalshi.yaml
 ```

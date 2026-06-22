@@ -25,7 +25,7 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # Suffix convention: `*-{N}m` (minutes) or `*-{N}s` (seconds). Matches
-# every Polymarket rolling slug currently in `configs/example.yaml`
+# every Polymarket rolling slug currently in `configs/<env>/config.yaml`
 # (btc-updown-15m, eth-updown-5m, ...). Anchored at the end so the
 # prefix can contain hyphens.
 _SUFFIX_RE = re.compile(r"-(\d+)([ms])$")

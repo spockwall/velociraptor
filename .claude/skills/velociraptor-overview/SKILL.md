@@ -69,10 +69,10 @@ cargo fmt
 cargo clippy
 
 # Servers
-cargo run --bin orderbook_server --release -- --config configs/server.yaml
-cargo run --bin backend          --release -- --config configs/server.yaml
-cargo run --bin executor         --release -- --config configs/example.yaml \
-    --credentials credentials/polymarket.yaml --skip-chmod-check
+cargo run --bin orderbook_server --release -- --config configs/dev/config.yaml
+cargo run --bin backend          --release -- --config configs/dev/config.yaml
+cargo run --bin executor         --release -- --config configs/dev/config.yaml \
+    --credentials credentials/dev/polymarket.yaml --skip-chmod-check
 
 # Terminal visualisers
 cargo run --example polymarket_orderbook --release
@@ -80,19 +80,19 @@ cargo run --example kalshi_orderbook     --release
 cargo run --example orderbook            --release   # multi-exchange TUI
 
 # Recorders
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
-cargo run --bin orderbook_recorder  --release -- --config configs/server.yaml
+cargo run --bin polymarket_recorder --release -- --config configs/dev/polymarket.yaml
+cargo run --bin orderbook_recorder  --release -- --config configs/dev/recorder.yaml
 
 # Archives
-cargo run --bin price_to_beat_fetcher --release -- --config configs/example.yaml
-cargo run --bin asset_id_fetcher      --release -- --config configs/example.yaml
+cargo run --bin price_to_beat_fetcher --release -- --config configs/dev/recorder.yaml
+cargo run --bin asset_id_fetcher      --release -- --config configs/dev/recorder.yaml
 ```
 
 ## Architecture (one-paragraph)
 
 Exchange WebSocket → `ClientBase.handle_message` → `MsgParserTrait.parse_message` → `Vec<StreamMessage>` → mpsc → `StreamEngine` loop fires `HookRegistry` (sync, before apply) → broadcasts `OrderbookRaw` → calls `Orderbook.apply_update` (copy-on-write via `Arc::make_mut`) → fires hooks (after apply) → broadcasts `OrderbookSnapshot` → consumers (ZmqServer PUB, StorageWriter). Stored as `DashMap<"exchange:symbol", Arc<Orderbook>>`.
 
-## Config layout (configs/server.yaml — minimal)
+## Config layout (configs/<env>/config.yaml — minimal)
 
 ```yaml
 server: { pub_endpoint: "tcp://*:5555", router_endpoint: "tcp://*:5556" }
@@ -122,7 +122,7 @@ For Kalshi RSA credentials see `velociraptor-kalshi`.
 
 | Flag | Env | Default |
 |---|---|---|
-| `--config` | `CONFIG_FILE` | `configs/server.yaml` |
+| `--config` | `CONFIG_FILE` | `configs/dev/config.yaml` |
 | `--log-level` | `LOG_LEVEL` | `info` |
 | `--log-json` | `LOG_JSON` | `false` |
 

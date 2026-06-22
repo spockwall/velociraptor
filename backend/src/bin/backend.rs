@@ -3,7 +3,8 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin backend -- --config configs/server.yaml
+//! cargo run --bin backend -- --config configs/dev/config.yaml
+//! cargo run --bin backend -- --config configs/prod/config.yaml
 //! ```
 
 use anyhow::Result;
@@ -20,7 +21,7 @@ use tracing::info;
 #[derive(Parser, Debug)]
 #[command(name = "backend", about = "HTTP API backend — reads Redis, exposes market data")]
 struct Args {
-    #[arg(long, env = "CONFIG_FILE", default_value = "configs/server.yaml")]
+    #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/config.yaml")]
     config: String,
 }
 

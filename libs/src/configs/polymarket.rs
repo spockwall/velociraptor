@@ -17,7 +17,7 @@ pub struct PolymarketConfig {
     pub markets: Vec<PolymarketMarketConfig>,
 }
 
-/// Top-level shape of `configs/polymarket.yaml`.
+/// Top-level shape of `configs/dev/polymarket.yaml`.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct PolymarketFileConfig {

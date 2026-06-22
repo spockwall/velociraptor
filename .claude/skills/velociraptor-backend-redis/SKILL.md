@@ -58,7 +58,7 @@ Start Redis: `docker compose up redis -d`.
 Lightweight server that reads the Redis keys and exposes them as JSON.
 
 ```bash
-cargo run --bin backend --release -- --config configs/example.yaml
+cargo run --bin backend --release -- --config configs/dev/config.yaml
 ```
 
 | Method | Path | Description |

@@ -1,0 +1,93 @@
+# ── DEV config (Docker) ──────────────────────────────────────────────────────
+# Selected by `make up LABEL=dev` (the default when LABEL is omitted).
+# Pairs with credentials/dev/. Paths here are CONTAINER paths (/app/...); the
+# host data root is ./data in dev (compose maps $DATA_DIR -> /app/data;
+# Makefile sets DATA_DIR=./data). Differs from prod: testnet executor, risk
+# gate OFF, debug logging.
+server:
+  pub_endpoint: "tcp://*:5555"
+  router_endpoint: "tcp://*:5556"
+  render_interval: 300
+
+logging:
+  level: "info,libs=debug,executor=debug"
+  json: false
+  dir: "/app/syslog"
+
+redis:
+  enabled: true
+  url: "redis://redis:6379"
+  snapshot_cap: 1000
+  trade_cap: 500
+  event_list_cap: 5000
+
+backend:
+  port: 3000
+  data_dir: "/app/data"
+
+storage:
+  enabled: false
+  base_path: "/app/data"
+  depth: 20
+  flush_interval: 1000
+  rotation: "daily"
+  zstd_level: 0
+
+binance:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+binance_spot:
+  enabled: true
+  symbols:
+    - "btcusdt"
+    - "ethusdt"
+
+okx:
+  enabled: true
+  symbols:
+    - "BTC-USDT"
+    - "ETH-USDT"
+
+hyperliquid:
+  enabled: true
+  coins:
+    - "BTC"
+    - "ETH"
+
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900
+
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300
+
+# Testnet trading — keep dev orders off the real CLOB.
+executor:
+  router_endpoint: "tcp://*:5557"
+  metrics_addr: "0.0.0.0:5558"
+  audit_dir: "/app/data/executor"
+  audit_stream_cap: 100000
+  polymarket_env: "testnet"
+
+# Pre-trade risk gate now lives in the sibling configs/dev/risk.yaml (loaded by
+# the executor; hot-reloadable via `SET executor:reload_config 1`). Off in dev.

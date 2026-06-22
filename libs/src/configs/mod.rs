@@ -98,8 +98,8 @@ mod tests {
 
     #[test]
     fn load_example_yaml() {
-        let cfg: Config = load_yaml(workspace_file("configs/example.yaml"))
-            .expect("configs/example.yaml should parse");
+        let cfg: Config = load_yaml(workspace_file("configs/dev/config.yaml"))
+            .expect("configs/dev/config.yaml should parse");
 
         assert_eq!(cfg.server.pub_endpoint, "tcp://*:5555");
         assert_eq!(cfg.server.router_endpoint, "tcp://*:5556");

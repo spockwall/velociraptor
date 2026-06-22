@@ -138,7 +138,7 @@ Single internal book, two panels side-by-side:
 - **UP (YES):** book as-is.
 - **DOWN (NO):** mirror — `no_bid(p) = 1 − yes_ask(p)`, `no_ask(p) = 1 − yes_bid(p)`, `no_mid = 1 − yes_mid`. Spread is identical in both panels.
 
-## Visualiser config (`configs/kalshi.yaml`)
+## Visualiser config (`configs/dev/kalshi.yaml`)
 
 ```yaml
 server:  { render_interval: 300 }
@@ -153,7 +153,7 @@ Run:
 
 ```bash
 cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.yaml --credentials credentials/kalshi.yaml
+    --config configs/dev/kalshi.yaml --credentials credentials/kalshi.yaml
 
 # CLI flags alternative
 cargo run --example kalshi_orderbook --release -- \

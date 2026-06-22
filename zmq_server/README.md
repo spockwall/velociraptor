@@ -81,10 +81,11 @@ python3 zmq_server/examples/zmq_subscriber.py \
 The shipping binary is `zmq_server::bin::orderbook_server`:
 
 ```bash
-cargo run --bin orderbook_server -- --config configs/server.yaml
+cargo run --bin orderbook_server -- --config configs/dev/config.yaml
+cargo run --bin orderbook_server -- --config configs/prod/config.yaml
 ```
 
-Reads `configs/server.yaml` (see `configs/example.yaml` for the full schema)
+Reads `configs/dev/config.yaml` (see `configs/dev/config.yaml` for the full schema)
 and wires Binance / OKX / Hyperliquid per the config. CLI flags
 (`--binance`, `--depth`, …) override the yaml; env vars override both.
 

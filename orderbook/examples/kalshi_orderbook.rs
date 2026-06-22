@@ -8,7 +8,7 @@
 //! the 15-min rotation loop. This example only provides `spawn_market_task` —
 //! the per-window connection logic — and the render loop.
 //!
-//! Reads markets from `configs/kalshi.yaml` and credentials from
+//! Reads markets from `configs/dev/kalshi.yaml` and credentials from
 //! `credentials/kalshi.yaml`.
 //!
 //! # Usage
@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const CONFIG_PATH: &str = "configs/kalshi.yaml";
+const CONFIG_PATH: &str = "configs/dev/kalshi.yaml";
 const CREDENTIALS_PATH: &str = "credentials/kalshi.yaml";
 const DEPTH: usize = 20;
 const RENDER_INTERVAL_MS: u64 = 300;

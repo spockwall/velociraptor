@@ -1,6 +1,6 @@
 //! Long-running price-to-beat fetcher for Polymarket and Kalshi.
 //!
-//! Reads `configs/example.yaml` and, for every enabled market, drives a
+//! Reads `configs/dev/recorder.yaml` and, for every enabled market, drives a
 //! per-market loop that:
 //!
 //! 1. **Auto-backfills on startup**: walks every window between
@@ -14,7 +14,7 @@
 //! gaps automatically.
 //!
 //! Run:
-//!   cargo run --bin price_to_beat_fetcher --release -- --config configs/fetcher.yaml
+//!   cargo run --bin price_to_beat_fetcher --release -- --config configs/dev/recorder.yaml or configs/prod/recorder.yaml
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -255,7 +255,7 @@ fn kalshi_ticker_for_window(series: &str, window_start: i64, interval_secs: i64)
     about = "Continuously fetch Polymarket / Kalshi target prices into per-day CSV files"
 )]
 struct Args {
-    #[arg(long, default_value = "configs/example.yaml")]
+    #[arg(long, default_value = "configs/dev/recorder.yaml")]
     config: String,
 
     /// How far back the targeted window should have closed before we fetch

@@ -8,7 +8,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin orderbook_recorder --release -- --config configs/server.yaml
+//! cargo run --bin orderbook_recorder --release -- --config configs/dev/recorder.yaml or configs/prod/recorder.yaml
 //! ```
 
 use anyhow::Result;
@@ -32,7 +32,7 @@ use tracing::{error, info};
     about = "Standalone recorder — streams market data from exchanges and writes to disk"
 )]
 struct Args {
-    #[arg(long, env = "CONFIG_FILE", default_value = "configs/server.yaml")]
+    #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/recorder.yaml")]
     config: String,
 }
 

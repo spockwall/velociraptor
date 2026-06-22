@@ -1,7 +1,7 @@
 //! Polymarket `last_trade_price` stream.
 //!
 //! Connects to the **public** market channel, subscribes to the token IDs
-//! resolved from `configs/polymarket.yaml`, and prints every
+//! resolved from `configs/dev/polymarket.yaml`, and prints every
 //! `last_trade_price` event to stderr as it arrives.
 //!
 //! Runs with the same rolling-window scheduler as `polymarket_orderbook.rs`.
@@ -25,7 +25,7 @@ use orderbook::exchanges::polymarket::{
 use orderbook::types::orderbook::StreamMessage;
 use tokio::sync::mpsc;
 
-const CONFIG_PATH: &str = "configs/polymarket.yaml";
+const CONFIG_PATH: &str = "configs/dev/polymarket.yaml";
 
 // ── Per-window task ───────────────────────────────────────────────────────────
 

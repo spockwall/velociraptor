@@ -27,18 +27,26 @@ use tracing::{info, warn};
 #[derive(Parser, Debug)]
 #[command(name = "executor", about = "Velociraptor order executor")]
 struct Args {
-    /// Path to the unified YAML config (e.g. `configs/example.yaml`).
-    #[arg(long, env = "CONFIG_FILE", default_value = "configs/example.yaml")]
+    /// Path to the unified YAML config (e.g. `configs/dev/config.yaml`).
+    #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/config.yaml")]
     config: String,
 
     /// Path to the credentials file (must contain a `polymarket:` section).
-    #[arg(long, default_value = "credentials/polymarket.yaml")]
+    #[arg(
+        long,
+        env = "POLYMARKET_CREDENTIALS_FILE",
+        default_value = "credentials/dev/polymarket.yaml"
+    )]
     credentials: String,
 
     /// Path to the Kalshi credentials file (a `kalshi:` section). Kept separate
     /// from `--credentials` because Kalshi creds live in their own file. If the
     /// file/section is absent the Kalshi REST client is simply not built.
-    #[arg(long, default_value = "credentials/kalshi.yaml")]
+    #[arg(
+        long,
+        env = "KALSHI_CREDENTIALS_FILE",
+        default_value = "credentials/dev/kalshi.yaml"
+    )]
     kalshi_credentials: String,
 
     /// Skip the credentials file-mode check (useful in dev / docker).
@@ -172,6 +180,12 @@ async fn main() -> anyhow::Result<()> {
         redis: redis.clone(),
         config_path: PathBuf::from(&args.config),
     }));
+
+    // Seed the pre-trade risk gate from the sibling `risk.yaml` (e.g.
+    // `configs/<label>/risk.yaml`) before serving, so limits are active from the
+    // first order. Hot-reload (`executor:reload_config`) re-reads the same file.
+    executor.load_risk_config();
+    info!(risk_config = %executor.risk_config_path().display(), "executor: risk gate seeded");
 
     // Boot-time registry rehydrate + per-exchange reconcile.
     executor.rehydrate_registry(&audit_dir_path).await;

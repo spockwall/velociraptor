@@ -1,0 +1,43 @@
+# ── PROD Polymarket recorder config (HOST, not Docker) ───────────────────────
+# Used by `polymarket_recorder` so it writes to a SEPARATE storage tree from the
+# generic `orderbook_recorder` (which uses configs/prod/recorder.yaml →
+# /data/orderbook). This one writes under /data/polymarket:
+#   {storage.base_path}/{slug}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}-{up,down,trades}.mpack
+#
+#   cargo run --release --bin polymarket_recorder -- --config configs/prod/polymarket.yaml
+#
+# (The example/visualiser binaries use configs/dev/polymarket.yaml, which keeps
+# storage.enabled: false.)
+
+server:
+  render_interval: 300
+
+storage:
+  enabled: true
+  base_path: "/data/polymarket"
+  depth: 20            # depth levels to store (bids + asks)
+  flush_interval: 500  # ms between BufWriter flushes
+  rotation: "none"     # "daily" | "none"
+  zstd_level: 3        # 0 = disabled, 1–22 = zstd compression level
+
+logging:
+  level: "info"          # env-filter string, e.g. "info,libs=debug"
+  json: false            # set true to emit JSON-formatted records
+  dir: "/data/syslog"    # files: {dir}/polymarket_recorder/{YYYY-MM-DD}.log and …/{YYYY-MM-DD}.error.log
+
+# Rolling up/down markets — token IDs resolved automatically from the Gamma API.
+# interval_secs: window size in seconds (900 = 15min, 300 = 5min, 0 = static market)
+polymarket:
+  markets:
+    - enabled: true
+      slug: "btc-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "eth-updown-15m"
+      interval_secs: 900
+    - enabled: true
+      slug: "btc-updown-5m"
+      interval_secs: 300
+    - enabled: true
+      slug: "eth-updown-5m"
+      interval_secs: 300

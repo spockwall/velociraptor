@@ -6,10 +6,10 @@ no systemd).
 
 | Unit | Binary | Config |
 |---|---|---|
-| `velociraptor-polymarket-recorder.service` | `polymarket_recorder` | `configs/polymarket.yaml` |
-| `velociraptor-orderbook-recorder.service` | `orderbook_recorder` | `configs/server.yaml` |
-| `velociraptor-price-to-beat-fetcher.service` | `price_to_beat_fetcher` | `configs/fetcher.yaml` |
-| `velociraptor-asset-id-fetcher.service` | `asset_id_fetcher` | `configs/fetcher.yaml` |
+| `velociraptor-polymarket-recorder.service` | `polymarket_recorder` | `configs/prod/polymarket.yaml` |
+| `velociraptor-orderbook-recorder.service` | `orderbook_recorder` | `configs/prod/recorder.yaml` |
+| `velociraptor-price-to-beat-fetcher.service` | `price_to_beat_fetcher` | `configs/prod/recorder.yaml` |
+| `velociraptor-asset-id-fetcher.service` | `asset_id_fetcher` | `configs/prod/recorder.yaml` |
 
 `velociraptor.target` groups all four. Binaries are pre-built and run from
 `/home/ben/velociraptor/target/release/` — **not** `cargo run`.
@@ -84,13 +84,13 @@ setup is short.
 #      logging.dir            -> recorders PANIC on startup if missing
 #      storage.base_path      -> orderbook_recorder errors per-file, stays up
 #      fetcher.{asset_id,price_to_beat}_dir -> fetchers can't write CSVs
-#    Config defaults:
-#      server.yaml    = /data/syslog + /data/orderbook_3
-#      polymarket.yaml = /data/syslog + /data/polymarket_3
-#      fetcher.yaml   = /data/asset_ids + /data/price_to_beat
-sudo mkdir -p /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
+#    Paths the prod configs write to:
+#      configs/prod/recorder.yaml   = /data/syslog + /data/orderbook
+#                                     + /data/asset_ids + /data/price_to_beat
+#      configs/prod/polymarket.yaml = /data/syslog + /data/polymarket
+sudo mkdir -p /data/syslog /data/orderbook /data/polymarket /data/asset_ids /data/price_to_beat
 sudo chown -R ben:ben \
-  /data/syslog /data/orderbook_3 /data/polymarket_3 /data/asset_ids /data/price_to_beat
+  /data/syslog /data/orderbook /data/polymarket /data/asset_ids /data/price_to_beat
 
 # 2. Build (clean env — an active conda/venv can contaminate the binary)
 env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin" \
@@ -190,7 +190,7 @@ Use `-R` on the chown to fix dirs an earlier crash already made as root.
 | Recorder exits at once; log mentions creating `/data/syslog` | `logging.dir` not writable → `init_logging` panics. `mkdir -p` + `chown -R ben:ben` it. |
 | `StorageWriter: failed to open /data/… : Permission denied (os error 13)` | `storage.base_path` not writable. `mkdir -p` + `chown -R ben:ben`. Service stays up but records nothing. |
 | Built fine but won't run / linker or libc errors | Built with conda/venv active. Rebuild with the `env -i` clean-env command. |
-| Fetcher: exits immediately, `inactive`, log says `no enabled … markets` | `configs/fetcher.yaml` has no enabled markets, or the file is missing. Fix the config, restart. |
+| Fetcher: exits immediately, `inactive`, log says `no enabled … markets` | `configs/prod/recorder.yaml` has no enabled markets, or the file is missing. Fix the config, restart. |
 | `failed (Result: start-limit-hit)` | Crash-looping (bad config, unreachable Redis, panic) or unbuilt. Inspect journal, fix, `reset-failed`. |
 | Config not found | `--config configs/…` is relative to `/home/ben/velociraptor`. Confirm the YAML exists there. |
 

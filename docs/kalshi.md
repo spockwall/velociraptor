@@ -91,7 +91,7 @@ kalshi:
 
 ```bash
 cargo run --example kalshi_orderbook --release -- \
-    --config configs/kalshi.yaml --credentials credentials/kalshi.yaml
+    --config configs/dev/kalshi.yaml --credentials credentials/kalshi.yaml
 ```
 
 ## Auto-rotation scheduler (per series)

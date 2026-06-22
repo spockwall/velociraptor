@@ -2,7 +2,7 @@
 //!
 //! Connects to `wss://ws-subscriptions-clob.polymarket.com/ws/user` with the
 //! L2 credentials from `credentials/polymarket.yaml`, subscribes to every
-//! enabled market in `configs/polymarket.yaml`, and pretty-prints every
+//! enabled market in `configs/dev/polymarket.yaml`, and pretty-prints every
 //! incoming message to stderr.
 //!
 //! Each market runs under the shared rolling-window scheduler: a per-window
@@ -35,7 +35,7 @@ use orderbook::{PolymarketClient, PolymarketSubMsgBuilder};
 use tokio::sync::mpsc;
 
 const CREDENTIALS_PATH: &str = "credentials/polymarket.yaml";
-const CONFIG_PATH: &str = "configs/polymarket.yaml";
+const CONFIG_PATH: &str = "configs/dev/polymarket.yaml";
 
 // ── Per-window user-channel task ──────────────────────────────────────────────
 

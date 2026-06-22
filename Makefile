@@ -18,6 +18,23 @@
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
+# Environment label — selects which config + credentials each service loads:
+#   configs/$(LABEL)/config.yaml  and  credentials/$(LABEL)/{polymarket,kalshi}.yaml
+# Override per-invocation:  make up LABEL=dev   (defaults to prod).
+# Exported so docker-compose's ${LABEL} substitution picks it up.
+LABEL ?= prod
+export LABEL
+
+# Host data root, derived from LABEL: prod writes to /data, dev to ./data.
+# Override explicitly with  make up LABEL=prod DATA_DIR=/mnt/whatever.
+# Container paths stay /app/data regardless (compose maps $(DATA_DIR) -> /app/data).
+ifeq ($(LABEL),dev)
+DATA_DIR ?= ./data
+else
+DATA_DIR ?= /data
+endif
+export DATA_DIR
+
 build:
 	DOCKER_BUILDKIT=1 docker compose --profile build-only build builder
 	DOCKER_BUILDKIT=1 docker compose build backend orderbook_server executor
@@ -40,6 +57,9 @@ rebuild:
 	DOCKER_BUILDKIT=1 docker compose build --no-cache backend orderbook_server executor frontend
 
 up:
+	@test -f configs/$(LABEL)/config.yaml || { echo "ERROR: configs/$(LABEL)/config.yaml not found (LABEL=$(LABEL))"; exit 1; }
+	@test -f credentials/$(LABEL)/polymarket.yaml || { echo "ERROR: credentials/$(LABEL)/polymarket.yaml not found (LABEL=$(LABEL))"; exit 1; }
+	@echo "==> bringing up stack with LABEL=$(LABEL)  DATA_DIR=$(DATA_DIR)"
 	docker compose up -d
 
 down:

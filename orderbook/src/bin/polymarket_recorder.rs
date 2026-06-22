@@ -17,7 +17,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin polymarket_recorder -- --config configs/polymarket.yaml
+//! cargo run --bin polymarket_recorder -- --config configs/dev/polymarket.yaml or configs/prod/polymarket.yaml 
 //! ```
 
 use anyhow::Result;
@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-const DEFAULT_CONFIG: &str = "configs/polymarket.yaml";
+const DEFAULT_CONFIG: &str = "configs/dev/polymarket.yaml";
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 

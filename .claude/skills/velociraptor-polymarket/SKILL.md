@@ -53,7 +53,7 @@ polymarket:
 ### Visualiser
 
 ```bash
-cargo run --example polymarket_orderbook --release -- --config configs/polymarket.yaml
+cargo run --example polymarket_orderbook --release -- --config configs/dev/polymarket.yaml
 # or
 cargo run --example polymarket_orderbook --release -- \
     --slug btc-updown-5m --interval-secs 300 \
@@ -65,7 +65,7 @@ cargo run --example polymarket_orderbook --release -- \
 Writes every snapshot to disk immediately (not at render rate):
 
 ```bash
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
+cargo run --bin polymarket_recorder --release -- --config configs/dev/polymarket.yaml
 # or
 cargo run --bin polymarket_recorder --release -- \
     --slug btc-updown-5m --interval-secs 300 \
@@ -185,7 +185,7 @@ Run examples:
 
 ```bash
 # Fetcher (long-running daemon, all enabled markets)
-cargo run --release --bin price_to_beat_fetcher -- --config configs/example.yaml
+cargo run --release --bin price_to_beat_fetcher -- --config configs/dev/recorder.yaml
 
 # One-shot backfill
 cargo run --release --bin price_to_beat_backfill -- polymarket \
@@ -193,6 +193,6 @@ cargo run --release --bin price_to_beat_backfill -- polymarket \
     --from 2026-04-25T00:00:00Z
 
 # Asset IDs
-cargo run --release --bin asset_id_fetcher -- --config configs/example.yaml \
+cargo run --release --bin asset_id_fetcher -- --config configs/dev/recorder.yaml \
     --seed-from 2026-04-10T00:00:00Z --archive-dir ./data/asset_ids
 ```

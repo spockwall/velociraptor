@@ -17,10 +17,10 @@ knowledge; the README is the full reference.
 
 | Unit | Binary | Config |
 |---|---|---|
-| `velociraptor-polymarket-recorder.service` | `polymarket_recorder` | `configs/polymarket.yaml` |
-| `velociraptor-orderbook-recorder.service` | `orderbook_recorder` | `configs/server.yaml` |
-| `velociraptor-price-to-beat-fetcher.service` | `price_to_beat_fetcher` | `configs/fetcher.yaml` |
-| `velociraptor-asset-id-fetcher.service` | `asset_id_fetcher` | `configs/fetcher.yaml` |
+| `velociraptor-polymarket-recorder.service` | `polymarket_recorder` | `configs/prod/polymarket.yaml` |
+| `velociraptor-orderbook-recorder.service` | `orderbook_recorder` | `configs/prod/recorder.yaml` |
+| `velociraptor-price-to-beat-fetcher.service` | `price_to_beat_fetcher` | `configs/prod/recorder.yaml` |
+| `velociraptor-asset-id-fetcher.service` | `asset_id_fetcher` | `configs/prod/recorder.yaml` |
 
 `velociraptor.target` groups all four (it uses `Wants=`; the services are
 pulled into boot by their own `WantedBy=multi-user.target`, *not* by the
@@ -97,10 +97,10 @@ distinct symptoms from three distinct config keys:
 - **`{logging.dir}`** (e.g. `/data/syslog`) — both recorders call
   `init_logging` → `create_dir_all` and **panic on startup** if it fails. The
   service won't stay up.
-- **`{storage.base_path}`** (e.g. `/data/orderbook_3`, `/data/polymarket_3`) —
-  `orderbook_recorder` logs `StorageWriter: failed to open /data/... :
-  Permission denied (os error 13)` *per file*; the service stays up but
-  records nothing.
+- **`{storage.base_path}`** (`/data/orderbook` for `orderbook_recorder`,
+  `/data/polymarket` for `polymarket_recorder`) — `orderbook_recorder` logs
+  `StorageWriter: failed to open /data/... : Permission denied (os error 13)`
+  *per file*; the service stays up but records nothing.
 - **`{fetcher.asset_id_dir}` / `{fetcher.price_to_beat_dir}`** (e.g.
   `/data/asset_ids`, `/data/price_to_beat`) — the fetchers can't write their
   per-day CSVs; no archive is produced.
@@ -109,10 +109,13 @@ Fix all: `sudo mkdir -p <path> && sudo chown -R ben:ben <path>`. **`-R` is
 mandatory** — a crash-looping recorder may already have created subdirs as
 root on earlier failed starts. **Stop the service before chowning** —
 otherwise it recreates root-owned dirs between your `chown` and its next
-restart. Paths come from the configs:
-- `configs/server.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/orderbook_3`
-- `configs/polymarket.yaml` → `logging.dir` `/data/syslog`, `storage.base_path` `/data/polymarket_3` (storage only if `storage.enabled: true`)
-- `configs/fetcher.yaml` → `fetcher.asset_id_dir` `/data/asset_ids`, `fetcher.price_to_beat_dir` `/data/price_to_beat`
+restart. The prod configs and the paths they write:
+- `configs/prod/recorder.yaml` (orderbook_recorder + both fetchers):
+  `logging.dir` → `/data/syslog`, `storage.base_path` → `/data/orderbook`,
+  `fetcher.asset_id_dir` → `/data/asset_ids`, `fetcher.price_to_beat_dir` → `/data/price_to_beat`
+- `configs/prod/polymarket.yaml` (polymarket_recorder):
+  `logging.dir` → `/data/syslog`, `storage.base_path` → `/data/polymarket`
+  (files land at `/data/polymarket/{slug}/{date}/…`)
 
 The fetcher archive dir resolves as: `--archive-dir` CLI flag (if passed) >
 `fetcher.{asset_id,price_to_beat}_dir` in the config > built-in default
@@ -135,7 +138,7 @@ mandatory** before `start` will be accepted again — fix the root cause first.
 To soften boot recovery, add `StartLimitIntervalSec=0` to `[Service]`.
 
 ### 4. Fetcher exits immediately, `inactive`
-Log says `no enabled … markets` → `configs/fetcher.yaml` has no enabled
+Log says `no enabled … markets` → `configs/prod/recorder.yaml` has no enabled
 markets or the file is missing. The fetchers are genuine daemons (infinite
 poll loop after backfill) — any clean exit is an error path. Fix config,
 restart.

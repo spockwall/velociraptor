@@ -235,7 +235,7 @@ let has_static = [
 ].iter().any(|&v| v);
 ```
 
-**`configs/server.yaml`**:
+**`configs/dev/config.yaml`**:
 
 ```yaml
 myexchange:
@@ -258,7 +258,7 @@ myexchange:
 - [ ] `libs/src/configs/` — config struct + add to `Config`
 - [ ] `zmq_server/src/setup.rs` — `add_myexchange` helper
 - [ ] `zmq_server/src/bin/orderbook_server.rs` — call helper
-- [ ] `configs/server.yaml` — config section
+- [ ] `configs/dev/config.yaml` — config section
 - [ ] `cargo check --workspace` — fix any exhaustive match errors
 
 ## Reference matrix

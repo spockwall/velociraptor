@@ -26,6 +26,14 @@ target
 
 credentials/*
 !credentials/example.yaml
+# Re-include the per-env dirs so the example templates inside them can be tracked,
+# then re-ignore everything else within those dirs (real keys stay ignored).
+!credentials/dev/
+!credentials/prod/
+credentials/dev/*
+credentials/prod/*
+!credentials/dev/example.yaml
+!credentials/prod/example.yaml
 
 CLAUDE.md
 

@@ -33,10 +33,10 @@ polymarket:
 
 ```bash
 # Visualiser
-cargo run --example polymarket_orderbook --release -- --config configs/polymarket.yaml
+cargo run --example polymarket_orderbook --release -- --config configs/dev/polymarket.yaml
 
 # Recorder (writes every snapshot immediately, not at render rate)
-cargo run --bin polymarket_recorder --release -- --config configs/polymarket.yaml
+cargo run --bin polymarket_recorder --release -- --config configs/dev/polymarket.yaml
 ```
 
 ## File layout

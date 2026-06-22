@@ -1,0 +1,47 @@
+# ── PROD pre-trade risk gate ─────────────────────────────────────────────────
+# Standalone risk config, loaded by the executor as the sibling of its --config
+# file (configs/prod/config.yaml → configs/prod/risk.yaml). This whole file IS
+# the risk config (no `risk:` wrapper). Hot-reload without a restart:
+# `SET executor:reload_config 1` (or click "reload risk" on the frontend Control
+# page) after editing this file.
+#
+# When enabled, every Place (and each PlaceBatch leg) is checked against the
+# resolved limits for its (exchange, symbol). A symbol override is per-field
+# merged over the exchange `default`; an exchange with no entry is unrestricted.
+#
+# Every field under `default` / `<symbol>` is optional — leave it unset (or
+# comment it out) to disable that rule for the scope. The six rules:
+#   min_qty                       — reject qty below this floor
+#   max_qty                       — reject qty above this ceiling
+#   max_notional                  — reject px*qty above this
+#   price_ref_max_deviation_pct   — reject |px - bba_mid| / bba_mid > pct
+#                                   (fails open if no bba mid is available)
+#   max_orders_per_min            — rolling 60s placement rate per (ex, sym)
+#   max_open_orders               — best-effort concurrent open-order cap
+
+enabled: true
+exchanges:
+  polymarket:
+    default:
+      min_qty: 1                          # floor (Polymarket min is 5 USDC notional anyway)
+      max_qty: 100                        # ceiling per single order
+      max_notional: 500                   # per-order $ cap
+      price_ref_max_deviation_pct: 20     # fat-finger guard vs bba mid
+      max_orders_per_min: 30              # rolling 60s, per (exchange,symbol)
+      max_open_orders: 10                 # best-effort concurrent cap
+    symbols: {}
+      # Per-token-id override; per-field merged over `default` above.
+      # "21742633143463906290569050155826241533067272736897614950488156847949938836455":
+      #   max_qty: 50
+      #   max_notional: 100
+  kalshi:
+    default:
+      min_qty: 1
+      max_qty: 200
+      max_notional: 500
+      price_ref_max_deviation_pct: 20
+      max_orders_per_min: 30
+      max_open_orders: 10
+    symbols: {}
+      # "KXBTC15M-26MAY2510-T100000":
+      #   max_qty: 100

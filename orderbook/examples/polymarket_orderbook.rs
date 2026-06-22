@@ -9,7 +9,7 @@
 //!     MarketTask is started with the prefetched tokens — no overlap.
 //!   - The render loop reads from a shared SnapStore and draws at a fixed interval.
 //!
-//! Config is read from `configs/polymarket.yaml`.
+//! Config is read from `configs/dev/polymarket.yaml`.
 //!
 //! # Usage
 //!
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const CONFIG_PATH: &str = "configs/polymarket.yaml";
+const CONFIG_PATH: &str = "configs/dev/polymarket.yaml";
 
 // ── Shared store ──────────────────────────────────────────────────────────────
 
