@@ -62,7 +62,12 @@ def _to_df(records: list) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
-    if "ts_ns" in df.columns:
+    # `recv_timestamp` (local receive ns) drives the human-facing `ts`;
+    # `ex_timestamp` (exchange ns) is kept alongside. Fall back to the old
+    # single `ts_ns` column for pre-rename files.
+    if "recv_timestamp" in df.columns:
+        df.insert(0, "ts", pd.to_datetime(df["recv_timestamp"], unit="ns", utc=True))
+    elif "ts_ns" in df.columns:
         df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
     # Derive mid, spread, wmid from bids/asks if present.
     if "bids" in df.columns and "asks" in df.columns:

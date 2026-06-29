@@ -69,7 +69,13 @@ class Quote:
     best_ask: Optional[float]
     mid: Optional[float]
     sequence: int
-    received_ns: int  # local wall clock at receive
+    received_ns: int  # local wall clock at receive (Python side)
+    # Exchange-stamped time in Unix ns from the wire payload (`0` when the
+    # venue sends none). Distinct from `received_ns`, which is the Python
+    # SUB-thread receive time.
+    ex_timestamp: int = 0
+    # Rust-side receive time in Unix ns from the wire payload.
+    recv_timestamp: int = 0
     full_slug: Optional[str] = None
 
     @property
@@ -93,6 +99,8 @@ class Snapshot:
     mid: Optional[float]
     sequence: int
     received_ns: int
+    ex_timestamp: int = 0
+    recv_timestamp: int = 0
     full_slug: Optional[str] = None
     bids: list[tuple[float, float]] = dataclasses.field(default_factory=list)
     asks: list[tuple[float, float]] = dataclasses.field(default_factory=list)
@@ -108,6 +116,8 @@ class Snapshot:
             mid=self.mid,
             sequence=self.sequence,
             received_ns=self.received_ns,
+            ex_timestamp=self.ex_timestamp,
+            recv_timestamp=self.recv_timestamp,
             full_slug=self.full_slug,
         )
 
@@ -124,9 +134,13 @@ class Trade:
     price: float
     size: float
     side: str  # taker side: "BUY" | "SELL"
-    timestamp: str  # RFC3339 from the payload (as-is)
     trade_id: Optional[int]
-    received_ns: int  # local wall clock at receive
+    received_ns: int  # local wall clock at receive (Python side)
+    # Exchange-stamped trade time in Unix ns from the wire payload (`0` if
+    # the venue sends none).
+    ex_timestamp: int = 0
+    # Rust-side receive time in Unix ns from the wire payload.
+    recv_timestamp: int = 0
     full_slug: Optional[str] = None
 
 
@@ -407,6 +421,8 @@ class MarketFeed:
             mid=mid,
             sequence=int(snap.get("sequence", 0)),
             received_ns=received_ns,
+            ex_timestamp=int(snap.get("ex_timestamp", 0) or 0),
+            recv_timestamp=int(snap.get("recv_timestamp", 0) or 0),
             full_slug=full_slug if isinstance(full_slug, str) else None,
             bids=bids,
             asks=asks,
@@ -466,9 +482,10 @@ class MarketFeed:
             price=price,
             size=size,
             side=str(msg.get("side", "")),
-            timestamp=str(msg.get("timestamp", "")),
             trade_id=int(tid) if isinstance(tid, (int, float)) else None,
             received_ns=received_ns,
+            ex_timestamp=int(msg.get("ex_timestamp", 0) or 0),
+            recv_timestamp=int(msg.get("recv_timestamp", 0) or 0),
             full_slug=full_slug if isinstance(full_slug, str) else None,
         )
         if self._on_trade is None:

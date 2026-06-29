@@ -96,7 +96,9 @@ def _fmt_event(topic: str, ev: dict[str, Any]) -> str:
     import json
 
     kind = ev.get("type", "?")
-    ts_ns = ev.get("ts_ns", 0)
+    # Prefer the local receive time (always set); fall back to the exchange
+    # time when present.
+    ts_ns = ev.get("recv_timestamp", 0) or ev.get("ex_timestamp", 0)
     ts = time.strftime("%H:%M:%S", time.localtime(ts_ns / 1e9)) if ts_ns else "????????"
     if kind == "fill":
         return (

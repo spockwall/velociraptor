@@ -3,7 +3,7 @@
 Mirrors the Rust `libs/src/protocol/orders.rs` structs that the executor
 msgpack-encodes into `OrderResponse.result.Ok.Ack`:
 
-    OrderAck { client_oid, exchange_oid, status, ts_ns, fill? }
+    OrderAck { client_oid, exchange_oid, status, ex_timestamp, recv_timestamp, fill? }
     FillInfo { making_amount, taking_amount, success, error_msg?,
                transaction_hashes[], trade_ids[] }
 
@@ -77,7 +77,11 @@ class OrderAck:
     client_oid: str = ""
     exchange_oid: str = ""
     status: str = ""
-    ts_ns: int = 0
+    # Exchange-stamped ack time in Unix ns (`0` when the venue's ack carries
+    # no timestamp — true for Polymarket CLOB and Kalshi today).
+    ex_timestamp: int = 0
+    # Executor-side time the ack was constructed, in Unix ns.
+    recv_timestamp: int = 0
     fill: Optional[FillInfo] = None
 
     @classmethod
@@ -85,11 +89,13 @@ class OrderAck:
         """Parse the inner Ack dict (i.e. `unwrap(resp)` on a place reply)."""
         if not isinstance(d, dict):
             return cls()
-        ts = d.get("ts_ns")
+        ex = d.get("ex_timestamp")
+        recv = d.get("recv_timestamp")
         return cls(
             client_oid=str(d.get("client_oid") or ""),
             exchange_oid=str(d.get("exchange_oid") or ""),
             status=str(d.get("status") or ""),
-            ts_ns=int(ts) if isinstance(ts, (int, float)) else 0,
+            ex_timestamp=int(ex) if isinstance(ex, (int, float)) else 0,
+            recv_timestamp=int(recv) if isinstance(recv, (int, float)) else 0,
             fill=FillInfo.from_wire(d.get("fill")),
         )

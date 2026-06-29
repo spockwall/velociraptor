@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import { api, type LastTradePrice, exchangeName } from "../lib/api";
-import { fmtPrice, fmtQty, fmtTs } from "../lib/format";
+import { fmtPrice, fmtQty, fmtTs, fmtLatency } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -14,8 +14,11 @@ export default function TradesPage() {
     const fetcher = useCallback(async () => {
         const results = await Promise.all(PRESETS.map((p) => api.trades(p.exchange, p.symbol, limit).catch(() => [])));
         const flat = results.flat();
-        // sort newest first
-        return flat.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+        // Sort newest first by local receive time (Unix ns, always present).
+        // Falls back to 0 so a malformed row never throws (the old code did
+        // `b.timestamp.localeCompare` and crashed when `timestamp` was
+        // undefined after the ex_timestamp/recv_timestamp rename).
+        return flat.sort((a, b) => (b.recv_timestamp ?? 0) - (a.recv_timestamp ?? 0));
     }, [limit]);
 
     const { data: trades, error, loading } = usePolling<LastTradePrice[]>(fetcher, 1200);
@@ -23,6 +26,22 @@ export default function TradesPage() {
     const buys = trades?.filter((t) => t.side === "BUY" || t.side === "buy") ?? [];
     const sells = trades?.filter((t) => t.side === "SELL" || t.side === "sell") ?? [];
     const totalVol = trades?.reduce((a, t) => a + t.size, 0) ?? 0;
+
+    // Average venue→receive latency over the 100 most recent trades. `trades`
+    // is already newest-first; only rows with a real venue timestamp
+    // (ex_timestamp != 0) count, so feeds without one (none today) are skipped.
+    const avgLatencyMs = useMemo(() => {
+        if (!trades) return null;
+        const lats: number[] = [];
+        for (const t of trades) {
+            if (lats.length >= 100) break;
+            if (t.ex_timestamp && t.recv_timestamp) {
+                lats.push((t.recv_timestamp - t.ex_timestamp) / 1e6);
+            }
+        }
+        if (lats.length === 0) return null;
+        return lats.reduce((a, b) => a + b, 0) / lats.length;
+    }, [trades]);
 
     const filteredTrades = useMemo(() => {
         if (!trades) return [];
@@ -71,11 +90,12 @@ export default function TradesPage() {
             )}
 
             {/* Stats row */}
-            <div className="grid grid-cols-3 gap-px bg-border-strong rounded-md overflow-hidden shadow-sm">
+            <div className="grid grid-cols-4 gap-px bg-border-strong rounded-md overflow-hidden shadow-sm">
                 {[
                     { label: "total trades", value: trades?.length ?? "—" },
                     { label: "total volume", value: fmtQty(totalVol) },
                     { label: "buy / sell", value: `${buys.length} / ${sells.length}` },
+                    { label: "avg latency · 100", value: fmtLatency(avgLatencyMs) },
                 ].map((s) => (
                     <div key={s.label} className="px-5 py-4 bg-bg-surface">
                         <p className="text-[11px] mb-1 uppercase tracking-wider font-medium text-text-muted">
@@ -115,7 +135,7 @@ export default function TradesPage() {
                                             className="border-b border-border-strong hover:bg-bg-hover transition-colors text-xs"
                                         >
                                             <td className="px-5 py-2.5 text-text-muted whitespace-nowrap">
-                                                {fmtTs(t.timestamp)}
+                                                {fmtTs(t.recv_timestamp)}
                                             </td>
                                             <td className="px-5 py-2.5 text-text-primary capitalize">
                                                 {exchangeName(t)}

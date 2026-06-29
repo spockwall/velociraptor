@@ -47,8 +47,14 @@ def load_csv(
     if not path.exists():
         raise FileNotFoundError(f"no CSV at {path}")
     df = pd.read_csv(path)
-    if "ts_ns" in df.columns and not df.empty:
-        df.insert(0, "ts", pd.to_datetime(df["ts_ns"], unit="ns", utc=True))
+    if not df.empty:
+        # Server-recorder user-event CSVs carry `recv_timestamp` (+ `ex_timestamp`)
+        # after the timestamp rename; the engine's own events/actions CSVs use a
+        # single `ts_ns` receive-clock column. Support both.
+        if "recv_timestamp" in df.columns:
+            df.insert(0, "ts", pd.to_datetime(df["recv_timestamp"], unit="ns", utc=True))
+        elif "ts_ns" in df.columns:
+            df.insert(0, "ts", pd.to_datetime(df["ts_ns"], unit="ns", utc=True))
     return df
 
 

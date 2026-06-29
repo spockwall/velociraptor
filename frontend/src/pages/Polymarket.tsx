@@ -6,8 +6,9 @@ import {
     type BbaPayload,
     type PolymarketMarket,
 } from "../lib/api";
-import { fmtPrice, fmtQty, fmtTs } from "../lib/format";
+import { fmtPrice, fmtQty, fmtTs, fmtLatency } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
+import { useLatency } from "../lib/useLatency";
 import Card from "../components/Card";
 
 /// Spot price snapshotted at the window's open and frozen for the lifetime
@@ -165,6 +166,15 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
     const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 1000);
     const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 600);
 
+    // Avg venue→receive latency over the last 100 distinct snapshots
+    // (deduped by sequence). Polymarket book frames carry a server timestamp,
+    // so this is a real venue→our-box figure (subject to clock skew between
+    // the two machines).
+    const { push, avgMs, count } = useLatency();
+    useEffect(() => {
+        if (snap) push(snap, snap.sequence);
+    }, [snap, push]);
+
     const source = bba ?? snap;
     const bid = source?.best_bid?.[0];
     const ask = source?.best_ask?.[0];
@@ -184,7 +194,13 @@ function MarketPanel({ market }: { market: PolymarketMarket }) {
                     UP / YES
                 </span>
                 <span className="text-[10px] font-mono text-text-muted opacity-80">
-                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.timestamp)}` : loading ? "loading…" : "waiting"}
+                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.recv_timestamp)}` : loading ? "loading…" : "waiting"}
+                </span>
+                <span
+                    className="text-[10px] font-mono text-text-muted opacity-80"
+                    title={`avg venue→receive latency over last ${count} snapshot${count === 1 ? "" : "s"}`}
+                >
+                    lat <span className="text-text-primary">{fmtLatency(avgMs)}</span>
                 </span>
                 <button
                     onClick={refetch}

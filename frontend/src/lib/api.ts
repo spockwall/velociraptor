@@ -7,7 +7,11 @@ export interface OrderbookSnapshot {
      *  `btc-updown-15m-1715423400`). `null`/absent for static exchanges. */
     full_slug?: string | null;
     sequence: number;
-    timestamp: string;
+    /** Exchange-stamped time in Unix nanoseconds (`0` when the venue sends
+     *  none — e.g. Binance spot depth, Kalshi snapshot). */
+    ex_timestamp: number;
+    /** Local receive time in Unix nanoseconds (always populated). */
+    recv_timestamp: number;
     best_bid: [number, number] | null;
     best_ask: [number, number] | null;
     spread: number | null;
@@ -23,7 +27,10 @@ export interface BbaPayload {
     /** Mirrors `OrderbookSnapshot.full_slug` for rolling markets. */
     full_slug?: string | null;
     sequence: number;
-    timestamp: string;
+    /** Exchange-stamped time in Unix nanoseconds (`0` when unavailable). */
+    ex_timestamp: number;
+    /** Local receive time in Unix nanoseconds. */
+    recv_timestamp: number;
     best_bid: [number, number] | null;
     best_ask: [number, number] | null;
     spread: number | null;
@@ -39,7 +46,11 @@ export interface LastTradePrice {
     side: string;
     fee_rate_bps: number;
     market: string;
-    timestamp: string;
+    /** Exchange-stamped trade time in Unix nanoseconds (`0` if the venue
+     *  sends none). */
+    ex_timestamp: number;
+    /** Local receive time in Unix nanoseconds. */
+    recv_timestamp: number;
 }
 
 function resolveExchange(e: Record<string, number> | string): string {

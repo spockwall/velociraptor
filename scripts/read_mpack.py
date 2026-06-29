@@ -4,10 +4,11 @@ Read recorder MessagePack snapshot files into a pandas DataFrame.
 Supports both raw (.mpack) and zstd-compressed (.mpack.zst) files.
 
 Record schema (see docs/storage.md):
-    sequence: u64
-    ts_ns:    i64  — UTC nanoseconds since Unix epoch
-    bids:     [[price, qty], ...]  top-N, best first
-    asks:     [[price, qty], ...]  top-N, best first
+    sequence:       u64
+    ex_timestamp:   i64  — exchange-stamped UTC ns (0 when venue sends none)
+    recv_timestamp: i64  — local receive UTC ns
+    bids:           [[price, qty], ...]  top-N, best first
+    asks:           [[price, qty], ...]  top-N, best first
 
 File format: [u32 LE length][msgpack bytes] repeated.
 
@@ -97,7 +98,12 @@ def _to_dataframe(records: list, path: Path) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
         return df
-    if "ts_ns" in df.columns:
+    # Records carry `recv_timestamp` (local receive ns) and `ex_timestamp`
+    # (exchange-stamped ns, 0 when the venue sends none). Use recv for the
+    # human-facing `ts` column; keep both raw ns columns alongside.
+    if "recv_timestamp" in df.columns:
+        df.insert(0, "ts", pd.to_datetime(df["recv_timestamp"], unit="ns", utc=True))
+    elif "ts_ns" in df.columns:  # back-compat: old-schema files
         df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
 
     exchange, symbol = _exchange_symbol_from_path(path)

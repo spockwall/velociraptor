@@ -10,8 +10,20 @@ export function fmtQty(v: number | null | undefined, decimals = 4): string {
     return v.toFixed(decimals);
 }
 
-export function fmtTs(iso: string): string {
-    return new Date(iso).toLocaleTimeString("en-US", { hour12: false });
+/** Format a timestamp as HH:MM:SS. Accepts either an RFC3339 string or a
+ *  Unix-nanosecond number (the wire now ships `recv_timestamp` as i64 ns). */
+export function fmtTs(ts: string | number): string {
+    const ms = typeof ts === "number" ? ts / 1e6 : Date.parse(ts);
+    if (!Number.isFinite(ms)) return "—";
+    return new Date(ms).toLocaleTimeString("en-US", { hour12: false });
+}
+
+/** Format a latency in milliseconds for display. `null` → em dash. */
+export function fmtLatency(ms: number | null): string {
+    if (ms == null || !Number.isFinite(ms)) return "—";
+    if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
+    if (ms < 1000) return `${ms.toFixed(1)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
 }
 
 export function fmtSpread(v: number | null | undefined): string {

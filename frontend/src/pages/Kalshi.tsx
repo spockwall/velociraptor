@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import { api, type OrderbookSnapshot, type BbaPayload, type KalshiMarket } from "../lib/api";
-import { fmtPrice, fmtQty, fmtTs } from "../lib/format";
+import { fmtPrice, fmtQty, fmtTs, fmtLatency } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
+import { useLatency } from "../lib/useLatency";
 import Card from "../components/Card";
 
 const classMap = {
@@ -97,6 +98,14 @@ function MarketPanel({ market }: { market: KalshiMarket }) {
     const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 1000);
     const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 600);
 
+    // Avg venue→receive latency over the last 100 distinct snapshots. Kalshi
+    // *snapshots* carry no server time (ex_timestamp = 0), so this shows "—"
+    // unless the BBA/delta path supplies one.
+    const { push, avgMs, count } = useLatency();
+    useEffect(() => {
+        if (snap) push(snap, snap.sequence);
+    }, [snap, push]);
+
     const source = bba ?? snap;
     const bid = source?.best_bid?.[0];
     const ask = source?.best_ask?.[0];
@@ -118,7 +127,13 @@ function MarketPanel({ market }: { market: KalshiMarket }) {
                     {market.series}
                 </span>
                 <span className="text-[10px] font-mono text-text-muted opacity-80">
-                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.timestamp)}` : loading ? "loading…" : "waiting"}
+                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.recv_timestamp)}` : loading ? "loading…" : "waiting"}
+                </span>
+                <span
+                    className="text-[10px] font-mono text-text-muted opacity-80"
+                    title={`avg venue→receive latency over last ${count} snapshot${count === 1 ? "" : "s"}`}
+                >
+                    lat <span className="text-text-primary">{fmtLatency(avgMs)}</span>
                 </span>
                 <button
                     onClick={refetch}

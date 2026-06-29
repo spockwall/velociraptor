@@ -16,9 +16,9 @@ Schema (loose; consumers should treat extra fields as optional):
         px, qty, client_oid, exchange_oid, ok, latency_ms, error, count
 
     events/*.csv columns:
-        ts, ts_ns, topic, type, exchange, symbol, side, px, qty,
-        filled, status, fee, taker_oid, client_oid, exchange_oid,
-        maker_orders
+        ts, ts_ns, ex_timestamp, recv_timestamp, topic, type, exchange,
+        symbol, side, px, qty, filled, status, fee, taker_oid, client_oid,
+        exchange_oid, maker_orders
 
 Variant-irrelevant fields are blank cells (e.g. `fee` on order_update,
 `filled`/`status` on fill). `maker_orders` is a Polymarket-only
@@ -72,6 +72,12 @@ _ACTION_COLS = [
 _EVENT_COLS = [
     "ts",
     "ts_ns",
+    # Wire timestamps carried on the UserEvent itself: exchange-stamped event
+    # time and the Rust-side receive time (both Unix ns; `0` when absent).
+    # Distinct from the `ts_ns` column above, which is when *we* (the Python
+    # engine) saw the event.
+    "ex_timestamp",
+    "recv_timestamp",
     "topic",
     "type",
     "exchange",
@@ -239,10 +245,9 @@ class EventLog:
                     row[k] = json.dumps(v, default=str)
                 else:
                     row[k] = v
-            # Some Polymarket fills carry ts_ns inside the event; prefer
-            # ours (wall clock at receive) for ordering.
-            # The event's own ts_ns is lost — that's fine, the on-disk
-            # `ts_ns` column captures when we *saw* the event.
+            # The event's wire timestamps (ex_timestamp / recv_timestamp) are
+            # captured as their own columns above. The on-disk `ts_ns` column
+            # still records when *we* (the Python engine) saw the event.
         self._append("events", row)
 
     def close(self) -> None:

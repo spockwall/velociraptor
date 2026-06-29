@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import { api, type OrderbookSnapshot, type BbaPayload } from "../lib/api";
-import { fmtPrice, fmtQty, fmtTs } from "../lib/format";
+import { fmtPrice, fmtQty, fmtTs, fmtLatency } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
+import { useLatency } from "../lib/useLatency";
 import Card from "../components/Card";
 import { PRESETS } from "../components/ExchangeSymbolPicker";
 
@@ -124,11 +125,25 @@ function OrderbookPanel({ exchange, symbol }: { exchange: string; symbol: string
     const { data: snap, error, loading, refetch } = usePolling<OrderbookSnapshot>(snapFetcher, 300);
     const { data: bba } = usePolling<BbaPayload>(bbaFetcher, 300);
 
+    // Rolling average venue→receive latency over the last 100 distinct
+    // snapshots (deduped by sequence). `0` ex_timestamp (e.g. Binance spot
+    // depth) is skipped, so panels with no venue clock show "—".
+    const { push, avgMs, count } = useLatency();
+    useEffect(() => {
+        if (snap) push(snap, snap.sequence);
+    }, [snap, push]);
+
     return (
         <Card title={`${exchange} / ${symbol}`} subtitle="live depth · 800ms" noPad>
             <div className="flex items-center justify-between px-4 py-2 border-b border-border-strong bg-bg-surface/50">
                 <span className="text-[10px] font-mono text-text-muted opacity-80">
-                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.timestamp)}` : loading ? "loading…" : "waiting"}
+                    {snap ? `seq ${snap.sequence} · ${fmtTs(snap.recv_timestamp)}` : loading ? "loading…" : "waiting"}
+                </span>
+                <span
+                    className="text-[10px] font-mono text-text-muted opacity-80"
+                    title={`avg venue→receive latency over last ${count} snapshot${count === 1 ? "" : "s"}`}
+                >
+                    lat <span className="text-text-primary">{fmtLatency(avgMs)}</span>
                 </span>
                 <button
                     onClick={refetch}
