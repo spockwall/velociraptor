@@ -109,12 +109,8 @@ async fn spawn_trade_task(
 
 fn print_trade(base: &str, full: &str, t: &LastTradePrice) {
     eprintln!(
-        "[{base}@{full}] TRADE {} px={:.4} sz={:.6} fee={} ts={}",
-        t.side,
-        t.price,
-        t.size,
-        t.fee_rate_bps,
-        t.timestamp.format("%H:%M:%S%.3f"),
+        "[{base}@{full}] TRADE {} px={:.4} sz={:.6} fee={} ex_ts={} recv_ts={}",
+        t.side, t.price, t.size, t.fee_rate_bps, t.ex_timestamp, t.recv_timestamp,
     );
 }
 

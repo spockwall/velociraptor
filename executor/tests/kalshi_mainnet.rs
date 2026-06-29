@@ -71,8 +71,8 @@ async fn get_orders_returns_array() {
     eprintln!("get_orders: {} order(s)", orders.len());
     for ack in &orders {
         eprintln!(
-            "  oid={} client_oid={} status={:?} ts_ns={}",
-            ack.exchange_oid, ack.client_oid, ack.status, ack.ts_ns
+            "  oid={} client_oid={} status={:?} recv_timestamp={}",
+            ack.exchange_oid, ack.client_oid, ack.status, ack.recv_timestamp
         );
     }
 }

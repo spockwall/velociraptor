@@ -119,7 +119,8 @@ mod tests {
                 client_oid: "".into(),
                 exchange_oid: "".into(),
                 status: OrderStatus::Canceled,
-                ts_ns: 0,
+                ex_timestamp: 0,
+                recv_timestamp: 0,
                 fill: None,
             })
         }
@@ -158,7 +159,8 @@ mod tests {
                 client_oid: "".into(),
                 exchange_oid: "live-1".into(),
                 status: OrderStatus::New,
-                ts_ns: 0,
+                ex_timestamp: 0,
+                recv_timestamp: 0,
                 fill: None,
             }],
         });
@@ -182,8 +184,7 @@ mod tests {
             },
         );
 
-        let (unknown, lost) =
-            reconcile_one(&audit, ExchangeName::Kalshi, client, &registry).await;
+        let (unknown, lost) = reconcile_one(&audit, ExchangeName::Kalshi, client, &registry).await;
         assert_eq!(unknown, 1);
         assert_eq!(lost, 1);
     }

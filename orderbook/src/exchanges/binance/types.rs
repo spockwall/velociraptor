@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 pub struct BinanceDepthData {
     #[serde(rename = "s", alias = "symbol", default)]
     pub symbol: String,
+    /// Transaction time in ms (futures `depthUpdate` `T` field) — the moment
+    /// the book change occurred at the matching engine. Absent on the spot
+    /// `@depth20@100ms` partial-book stream (`{lastUpdateId,bids,asks}`),
+    /// which carries no transaction time — `0` there.
+    #[serde(rename = "T", default)]
+    pub transaction_time: i64,
     #[serde(rename = "b", alias = "bids")]
     pub bids: Vec<[String; 2]>,
     #[serde(rename = "a", alias = "asks")]

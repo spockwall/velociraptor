@@ -301,9 +301,9 @@ const MARKETABLE_SELL_PX: &str = "0.0100";
 struct CreateOrderReq<'a> {
     ticker: &'a str,
     client_order_id: &'a str,
-    side: &'a str,  // "bid" | "ask"
-    count: String,  // "10.00"
-    price: String,  // "0.5600"
+    side: &'a str, // "bid" | "ask"
+    count: String, // "10.00"
+    price: String, // "0.5600"
     time_in_force: &'a str,
     /// Required by the events-orders API (see [`SELF_TRADE_PREVENTION`]).
     self_trade_prevention_type: &'a str,
@@ -494,7 +494,8 @@ impl RestOrderClient for KalshiRestClient {
                 resp.remaining_count,
                 resp.fill_count + resp.remaining_count,
             ),
-            ts_ns: now_ns(),
+            ex_timestamp: 0,
+            recv_timestamp: now_ns(),
             fill: None,
         })
     }
@@ -564,7 +565,8 @@ impl RestOrderClient for KalshiRestClient {
                         r.remaining_count,
                         r.fill_count + r.remaining_count,
                     ),
-                    ts_ns: now_ns(),
+                    ex_timestamp: 0,
+                    recv_timestamp: now_ns(),
                     fill: None,
                 }),
                 Err(e) => Err(e.clone()),
@@ -647,7 +649,8 @@ impl RestOrderClient for KalshiRestClient {
                 resp.remaining_count,
                 resp.fill_count + resp.remaining_count,
             ),
-            ts_ns: now_ns(),
+            ex_timestamp: 0,
+            recv_timestamp: now_ns(),
             fill: None,
         })
     }
@@ -672,7 +675,8 @@ impl RestOrderClient for KalshiRestClient {
             client_oid,
             exchange_oid: exchange_oid.to_string(),
             status: OrderStatus::Canceled,
-            ts_ns: now_ns(),
+            ex_timestamp: 0,
+            recv_timestamp: now_ns(),
             fill: None,
         })
     }
@@ -713,7 +717,8 @@ impl RestOrderClient for KalshiRestClient {
                 client_oid: row.client_order_id.clone(),
                 status: row.status(),
                 exchange_oid: row.order_id,
-                ts_ns: now_ns(),
+                ex_timestamp: 0,
+                recv_timestamp: now_ns(),
                 fill: None,
             })
             .collect())

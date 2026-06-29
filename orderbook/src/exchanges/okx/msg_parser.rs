@@ -1,8 +1,8 @@
 use crate::connection::{BasicClientMsgTrait, MsgParserTrait};
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::{Result, anyhow};
-use chrono::Utc;
 use libs::protocol::ExchangeName;
+use libs::time::{now_ns, parse_ms_to_ns};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{error, info, warn};
@@ -139,6 +139,9 @@ impl OkxMessageParser {
             .map(|arg| arg.inst_id.clone())
             .unwrap_or_else(|| "UNKNOWN".to_string());
 
+        // OKX sends a server timestamp (`ts`, Unix ms string) on the book.
+        let ex_timestamp = parse_ms_to_ns(&orderbook_data.ts);
+        let recv_timestamp = now_ns();
         let mut orders = Vec::new();
 
         // Parse asks
@@ -152,7 +155,8 @@ impl OkxMessageParser {
                     side: "Ask".to_string(),
                     qty,
                     symbol: symbol.clone(),
-                    timestamp: orderbook_data.ts.clone(),
+                    ex_timestamp,
+                    recv_timestamp,
                 });
             } else {
                 error!("Invalid ask length: {:?}", ask);
@@ -170,7 +174,8 @@ impl OkxMessageParser {
                     side: "Bid".to_string(),
                     qty,
                     symbol: symbol.clone(),
-                    timestamp: orderbook_data.ts.clone(),
+                    ex_timestamp,
+                    recv_timestamp,
                 });
             } else {
                 error!("Invalid bid length: {:?}", bid);
@@ -184,8 +189,9 @@ impl OkxMessageParser {
         Ok(OrderbookUpdate {
             action,
             orders,
+            ex_timestamp,
+            recv_timestamp,
             symbol,
-            timestamp: Utc::now(),
             exchange: self.exchange_name.clone(),
         })
     }

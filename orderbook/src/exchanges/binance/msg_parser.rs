@@ -4,8 +4,8 @@ use crate::exchanges::binance::types::{
 };
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
 use libs::protocol::{ExchangeName, LastTradePrice};
+use libs::time::now_ns;
 use tracing::{error, info};
 
 pub struct BinanceMessageParser {
@@ -26,10 +26,8 @@ impl BinanceMessageParser {
     fn parse_trade(&self, ev: BinanceTradeEvent) -> Option<StreamMessage> {
         let price: f64 = ev.price.parse().ok()?;
         let qty: f64 = ev.qty.parse().ok()?;
-        let ts = Utc
-            .timestamp_millis_opt(ev.trade_time)
-            .single()
-            .unwrap_or_else(Utc::now);
+        // Binance trade events carry the execution time `T` (ms since epoch).
+        let ex_timestamp = ev.trade_time * 1_000_000;
         // On Binance, `m = true` means the buyer was the maker, so the taker
         // (the side that crossed the book) was the seller.
         let side = if ev.buyer_is_maker { "SELL" } else { "BUY" }.to_string();
@@ -43,7 +41,8 @@ impl BinanceMessageParser {
             side,
             fee_rate_bps: 0.0,
             market: String::new(),
-            timestamp: ts,
+            ex_timestamp,
+            recv_timestamp: now_ns(),
             trade_id: Some(ev.trade_id),
         }))
     }
@@ -72,8 +71,16 @@ impl BinanceMessageParser {
 
     fn parse_depth(&self, msg: BinanceDepthData) -> Option<StreamMessage> {
         let symbol = msg.symbol.to_lowercase();
-        let timestamp = Utc::now();
-        let ts_str = timestamp.to_rfc3339();
+        // Futures `depthUpdate` carries `T` (transaction time, ms) — the time
+        // the book change happened at the matching engine; the spot
+        // partial-book stream does not, so `transaction_time` defaults to 0
+        // there and we report no exchange timestamp.
+        let ex_timestamp = if msg.transaction_time > 0 {
+            msg.transaction_time * 1_000_000
+        } else {
+            0
+        };
+        let recv_timestamp = now_ns();
 
         let mut orders = Vec::with_capacity(msg.bids.len() + msg.asks.len());
 
@@ -85,7 +92,8 @@ impl BinanceMessageParser {
                 side: "Ask".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -97,7 +105,8 @@ impl BinanceMessageParser {
                 side: "Bid".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -109,7 +118,8 @@ impl BinanceMessageParser {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
-            timestamp,
+            ex_timestamp,
+            recv_timestamp,
             exchange: self.exchange_name.clone(),
         }))
     }

@@ -82,7 +82,12 @@ pub struct OrderAck {
     pub client_oid: String,
     pub exchange_oid: String,
     pub status: OrderStatus,
-    pub ts_ns: i64,
+    /// Exchange-stamped ack time in Unix nanoseconds (`0` when the venue's
+    /// order-ack response carries no timestamp — true for Polymarket CLOB
+    /// and Kalshi today).
+    pub ex_timestamp: i64,
+    /// Local time the ack was constructed, in Unix nanoseconds.
+    pub recv_timestamp: i64,
     /// Rich fill/settlement info echoed straight from the exchange's order
     /// acknowledgement (e.g. Polymarket CLOB `PostOrderResponse`). `None` for
     /// exchanges/paths that don't surface fill detail at ack time.
@@ -216,7 +221,8 @@ mod tests {
                 client_oid: "c1".into(),
                 exchange_oid: "x1".into(),
                 status: OrderStatus::New,
-                ts_ns: 1_700_000_000_000_000_000,
+                ex_timestamp: 0,
+                recv_timestamp: 1_700_000_000_000_000_000,
                 fill: None,
             })),
         };
@@ -236,7 +242,8 @@ mod tests {
                         client_oid: "c1".into(),
                         exchange_oid: "x1".into(),
                         status: OrderStatus::New,
-                        ts_ns: 1,
+                        ex_timestamp: 0,
+                        recv_timestamp: 1,
                         fill: None,
                     }),
                     Err(OrderError::Timeout),

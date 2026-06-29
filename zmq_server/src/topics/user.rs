@@ -51,7 +51,8 @@ mod tests {
             px: 0.5,
             qty: 10.0,
             fee: 0.01,
-            ts_ns: 0,
+            ex_timestamp: 0,
+            recv_timestamp: 0,
             trade_status: None,
             maker_orders: None,
         }

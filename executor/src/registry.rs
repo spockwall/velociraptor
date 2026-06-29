@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use libs::protocol::orders::{
-    OrderAction, OrderAck, OrderError, OrderRequest, OrderResponse, OrderResult, OrderStatus,
+    OrderAck, OrderAction, OrderError, OrderRequest, OrderResponse, OrderResult, OrderStatus,
     PlaceOne,
 };
 use libs::protocol::ExchangeName;
@@ -100,19 +100,26 @@ impl OrderRegistry {
     /// Record the result of a Place or Cancel dispatch.
     pub fn record(&self, req: &OrderRequest, response: &OrderResponse) {
         let (client_oid, symbol, kind) = match &req.action {
-            OrderAction::Place(p) => (p.client_oid.clone(), Some(p.symbol.clone()), IdemKind::Place),
+            OrderAction::Place(p) => (
+                p.client_oid.clone(),
+                Some(p.symbol.clone()),
+                IdemKind::Place,
+            ),
             OrderAction::PlaceBatch { orders } => {
                 for leg in orders {
-                    self.insert_entry(OrderEntry {
-                        exchange: req.exchange,
-                        symbol: Some(leg.symbol.clone()),
-                        response: response.clone(),
-                        exchange_oid: exchange_oid_for(&response.result, &leg.client_oid),
-                        status: OrderStatus::New,
-                        placed_at: Instant::now(),
-                        kind: IdemKind::Place,
-                        idem_expires_at: Instant::now() + PLACE_TTL,
-                    }, leg.client_oid.clone());
+                    self.insert_entry(
+                        OrderEntry {
+                            exchange: req.exchange,
+                            symbol: Some(leg.symbol.clone()),
+                            response: response.clone(),
+                            exchange_oid: exchange_oid_for(&response.result, &leg.client_oid),
+                            status: OrderStatus::New,
+                            placed_at: Instant::now(),
+                            kind: IdemKind::Place,
+                            idem_expires_at: Instant::now() + PLACE_TTL,
+                        },
+                        leg.client_oid.clone(),
+                    );
                 }
                 return;
             }
@@ -121,9 +128,7 @@ impl OrderRegistry {
                 // exchange_oid so a retried cancel finds the prior result.
                 (exchange_oid.clone(), None, IdemKind::Cancel)
             }
-            OrderAction::Update { client_oid, .. } => {
-                (client_oid.clone(), None, IdemKind::Cancel)
-            }
+            OrderAction::Update { client_oid, .. } => (client_oid.clone(), None, IdemKind::Cancel),
             // CancelAll / CancelMarket / Heartbeat aren't idempotency-keyed.
             _ => return,
         };
@@ -221,10 +226,7 @@ impl OrderRegistry {
                     let Some(req) = pending.remove(&req_id) else {
                         continue;
                     };
-                    let resp = OrderResponse {
-                        req_id,
-                        result,
-                    };
+                    let resp = OrderResponse { req_id, result };
                     self.record(&req, &resp);
                 }
                 Payload::Synthetic { .. } => {}
@@ -245,10 +247,7 @@ fn starting_status(result: &Result<OrderResult, OrderError>) -> OrderStatus {
     }
 }
 
-fn exchange_oid_for(
-    result: &Result<OrderResult, OrderError>,
-    client_oid: &str,
-) -> Option<String> {
+fn exchange_oid_for(result: &Result<OrderResult, OrderError>, client_oid: &str) -> Option<String> {
     match result {
         Ok(OrderResult::Ack(a)) => Some(a.exchange_oid.clone()),
         Ok(OrderResult::BatchAck { results }) => results.iter().find_map(|r| match r {
@@ -291,7 +290,8 @@ mod tests {
                 client_oid: client_oid.into(),
                 exchange_oid: exchange_oid.into(),
                 status: OrderStatus::New,
-                ts_ns: 0,
+                ex_timestamp: 0,
+                recv_timestamp: 0,
                 fill: None,
             })),
         }

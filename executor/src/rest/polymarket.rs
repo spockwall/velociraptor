@@ -306,11 +306,7 @@ fn fill_info(resp: &PostOrderResponse) -> FillInfo {
         making_amount: dec_to_f64(resp.making_amount),
         taking_amount: dec_to_f64(resp.taking_amount),
         success: resp.success,
-        error_msg: resp
-            .error_msg
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .cloned(),
+        error_msg: resp.error_msg.as_ref().filter(|s| !s.is_empty()).cloned(),
         transaction_hashes: resp
             .transaction_hashes
             .iter()
@@ -360,7 +356,8 @@ impl RestOrderClient for PolymarketRestClient {
             client_oid: p.client_oid.clone(),
             exchange_oid: resp.order_id.clone(),
             status: map_status(&resp.status),
-            ts_ns: now_ns(),
+            ex_timestamp: 0,
+            recv_timestamp: now_ns(),
             fill: Some(fill_info(&resp)),
         })
     }
@@ -403,7 +400,8 @@ impl RestOrderClient for PolymarketRestClient {
             client_oid: String::new(),
             exchange_oid: exchange_oid.to_string(),
             status: OrderStatus::Canceled,
-            ts_ns: now_ns(),
+            ex_timestamp: 0,
+            recv_timestamp: now_ns(),
             fill: None,
         })
     }
@@ -446,7 +444,8 @@ impl RestOrderClient for PolymarketRestClient {
                 client_oid: String::new(),
                 exchange_oid: o.id,
                 status: map_status(&o.status),
-                ts_ns: now_ns(),
+                ex_timestamp: 0,
+                recv_timestamp: now_ns(),
                 fill: None,
             })
             .collect())

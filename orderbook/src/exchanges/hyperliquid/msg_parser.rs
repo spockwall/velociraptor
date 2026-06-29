@@ -2,8 +2,8 @@ use crate::connection::MsgParserTrait;
 use crate::exchanges::hyperliquid::types::{HlBookData, HlWsMessage};
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
 use libs::protocol::ExchangeName;
+use libs::time::now_ns;
 use tracing::{error, info, warn};
 
 pub struct HyperliquidMessageParser {
@@ -64,11 +64,9 @@ impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
         };
 
         let symbol = book.coin.to_uppercase();
-        let timestamp = Utc
-            .timestamp_millis_opt(book.time as i64)
-            .single()
-            .unwrap_or_else(Utc::now);
-        let ts_str = timestamp.to_rfc3339();
+        // Hyperliquid l2Book carries the server time (`book.time`, ms).
+        let ex_timestamp = (book.time as i64) * 1_000_000;
+        let recv_timestamp = now_ns();
 
         let mut orders = Vec::new();
 
@@ -87,7 +85,8 @@ impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
                 side: "Bid".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -105,7 +104,8 @@ impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
                 side: "Ask".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -118,7 +118,8 @@ impl MsgParserTrait<StreamMessage> for HyperliquidMessageParser {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
-            timestamp,
+            ex_timestamp,
+            recv_timestamp,
             exchange: self.exchange_name.clone(),
         })])
     }

@@ -24,7 +24,11 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub struct SnapshotRecord {
     pub sequence: u64,
-    pub ts_ns: i64,
+    /// Exchange-stamped time in Unix nanoseconds (`0` when the venue sends
+    /// none — see [`OrderbookSnapshot::ex_timestamp`]).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     pub bids: Vec<(f64, f64)>,
     pub asks: Vec<(f64, f64)>,
 }
@@ -33,7 +37,8 @@ impl SnapshotRecord {
     pub fn from_snapshot(snap: &OrderbookSnapshot, depth: usize) -> Self {
         Self {
             sequence: snap.sequence,
-            ts_ns: snap.timestamp.timestamp_nanos_opt().unwrap_or(0),
+            ex_timestamp: snap.ex_timestamp,
+            recv_timestamp: snap.recv_timestamp,
             bids: snap.bids[..snap.bids.len().min(depth)].to_vec(),
             asks: snap.asks[..snap.asks.len().min(depth)].to_vec(),
         }
@@ -44,8 +49,10 @@ impl SnapshotRecord {
 
 #[derive(Serialize)]
 pub struct TradeRecord {
-    /// Unix nanosecond timestamp.
-    pub ts_ns: i64,
+    /// Exchange-stamped trade time in Unix nanoseconds (`0` if none).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     pub price: f64,
     pub size: f64,
     /// Taker side: `"BUY"` or `"SELL"`.
@@ -60,7 +67,8 @@ pub struct TradeRecord {
 impl TradeRecord {
     pub fn from_trade(trade: &LastTradePrice) -> Self {
         Self {
-            ts_ns: trade.timestamp.timestamp_nanos_opt().unwrap_or(0),
+            ex_timestamp: trade.ex_timestamp,
+            recv_timestamp: trade.recv_timestamp,
             price: trade.price,
             size: trade.size,
             side: trade.side.clone(),
@@ -84,7 +92,10 @@ impl TradeRecord {
 /// expand this struct (or fork a separate record) at that point.
 #[derive(Serialize)]
 pub struct UserEventRecord {
-    pub ts_ns: i64,
+    /// Exchange-stamped event time in Unix nanoseconds (`0` if none).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     #[serde(rename = "type")]
     pub kind: &'static str,
     pub exchange: String,
@@ -127,11 +138,13 @@ impl UserEventRecord {
                 px,
                 qty,
                 fee,
-                ts_ns,
+                ex_timestamp,
+                recv_timestamp,
                 trade_status,
                 maker_orders,
             } => Self {
-                ts_ns: *ts_ns,
+                ex_timestamp: *ex_timestamp,
+                recv_timestamp: *recv_timestamp,
                 kind: "fill",
                 exchange: exchange.clone(),
                 symbol: symbol.clone(),
@@ -159,9 +172,11 @@ impl UserEventRecord {
                 qty,
                 filled,
                 status,
-                ts_ns,
+                ex_timestamp,
+                recv_timestamp,
             } => Self {
-                ts_ns: *ts_ns,
+                ex_timestamp: *ex_timestamp,
+                recv_timestamp: *recv_timestamp,
                 kind: "order_update",
                 exchange: exchange.clone(),
                 symbol: symbol.clone(),

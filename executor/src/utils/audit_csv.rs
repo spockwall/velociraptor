@@ -177,7 +177,8 @@ mod tests {
                     client_oid: "c-1".into(),
                     exchange_oid: "ex-1".into(),
                     status: OrderStatus::New,
-                    ts_ns: 0,
+                    ex_timestamp: 0,
+                    recv_timestamp: 0,
                     fill: None,
                 })),
             },
@@ -413,7 +414,8 @@ mod tests {
             client_oid: "x".into(),
             exchange_oid: "e".into(),
             status: OrderStatus::New,
-            ts_ns: 0,
+            ex_timestamp: 0,
+            recv_timestamp: 0,
             fill: None,
         });
         let cases: Vec<(Result<OrderResult, OrderError>, &str)> = vec![

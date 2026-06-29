@@ -303,7 +303,8 @@ mod tests {
             symbol: "btcusdt".into(),
             full_slug: None,
             sequence: 7,
-            timestamp: Utc::now(),
+            ex_timestamp: 0,
+            recv_timestamp: libs::time::now_ns(),
             best_bid: Some((100.0, 1.0)),
             best_ask: Some((101.0, 2.0)),
             spread: Some(1.0),
@@ -364,7 +365,8 @@ mod tests {
             side: "BUY".into(),
             fee_rate_bps: 0.0,
             market: String::new(),
-            timestamp: Utc::now(),
+            ex_timestamp: 0,
+            recv_timestamp: libs::time::now_ns(),
             trade_id: Some(42),
         }))
         .unwrap();

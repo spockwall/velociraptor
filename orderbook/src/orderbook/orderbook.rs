@@ -1,5 +1,4 @@
 use crate::types::orderbook::*;
-use chrono::{DateTime, Utc};
 use libs::protocol::ExchangeName;
 use ordered_float::OrderedFloat;
 use std::collections::BTreeMap;
@@ -16,7 +15,11 @@ pub struct PriceLevel {
 pub struct Orderbook {
     pub symbol: String,
     pub exchange: ExchangeName,
-    pub last_update: DateTime<Utc>,
+    /// Exchange-stamped time of the last applied update, Unix nanoseconds
+    /// (`0` when the venue provides none).
+    pub last_ex_timestamp: i64,
+    /// Local receive time of the last applied update, Unix nanoseconds.
+    pub last_recv_timestamp: i64,
     pub sequence: u64,
 
     // Primary storage - by price level
@@ -32,7 +35,8 @@ impl Orderbook {
         Self {
             symbol,
             exchange: exchange.clone(),
-            last_update: Utc::now(),
+            last_ex_timestamp: 0,
+            last_recv_timestamp: libs::time::now_ns(),
             sequence: 0,
             bid_levels: BTreeMap::new(),
             ask_levels: BTreeMap::new(),
@@ -41,7 +45,8 @@ impl Orderbook {
     }
 
     pub fn apply_update(&mut self, update: OrderbookUpdate) {
-        self.last_update = update.timestamp;
+        self.last_ex_timestamp = update.ex_timestamp;
+        self.last_recv_timestamp = update.recv_timestamp;
         self.sequence += 1;
 
         match update.action {

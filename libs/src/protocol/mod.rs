@@ -19,7 +19,6 @@ pub mod control;
 pub mod events;
 pub mod orders;
 
-use chrono::{DateTime, Utc};
 pub use control::ControlMessage;
 use core::fmt;
 pub use events::{BbaPayload, EventKind, UserEvent};
@@ -96,7 +95,12 @@ pub struct OrderbookSnapshot {
     #[serde(default)]
     pub full_slug: Option<String>,
     pub sequence: u64,
-    pub timestamp: DateTime<Utc>,
+    /// Exchange-stamped time in Unix nanoseconds, when the venue provides
+    /// one (OKX, Polymarket, Hyperliquid, Kalshi delta). `0` when the venue
+    /// sends no usable timestamp (Binance depth, Kalshi snapshot).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds (when we parsed the frame).
+    pub recv_timestamp: i64,
     pub best_bid: Option<PriceLevelTuple>,
     pub best_ask: Option<(f64, f64)>,
     pub spread: Option<f64>,
@@ -113,7 +117,8 @@ impl From<&OrderbookSnapshot> for BbaPayload {
             symbol: snap.symbol.clone(),
             full_slug: snap.full_slug.clone(),
             sequence: snap.sequence,
-            timestamp: snap.timestamp,
+            ex_timestamp: snap.ex_timestamp,
+            recv_timestamp: snap.recv_timestamp,
             best_bid: snap.best_bid,
             best_ask: snap.best_ask,
             spread: snap.spread,
@@ -143,7 +148,11 @@ pub struct LastTradePrice {
     pub fee_rate_bps: f64,
     /// Condition market hash (Polymarket: `market` field).
     pub market: String,
-    pub timestamp: DateTime<Utc>,
+    /// Exchange-stamped trade time in Unix nanoseconds (Binance `T`,
+    /// Polymarket `timestamp`). `0` if the venue sends none.
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     /// Exchange-assigned trade identifier. Present when the upstream feed
     /// emits one (e.g. Binance `t`); `None` for sources that don't (e.g.
     /// Polymarket `last_trade_price`).

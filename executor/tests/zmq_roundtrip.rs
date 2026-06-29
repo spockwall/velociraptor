@@ -35,7 +35,8 @@ impl RestOrderClient for StubClient {
             client_oid: p.client_oid.clone(),
             exchange_oid: format!("ex-{}", p.client_oid),
             status: OrderStatus::New,
-            ts_ns: 0,
+            ex_timestamp: 0,
+            recv_timestamp: 0,
             fill: None,
         })
     }

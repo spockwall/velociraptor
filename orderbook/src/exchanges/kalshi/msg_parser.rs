@@ -2,8 +2,8 @@ use crate::connection::MsgParserTrait;
 use crate::exchanges::kalshi::types::{KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg};
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use chrono::Utc;
 use libs::protocol::ExchangeName;
+use libs::time::{now_ns, parse_rfc3339_to_ns};
 use tracing::{error, info, warn};
 
 pub struct KalshiMessageParser {
@@ -86,8 +86,9 @@ impl KalshiMessageParser {
         };
 
         let symbol = snap.market_ticker.clone();
-        let timestamp = Utc::now();
-        let ts_str = timestamp.to_rfc3339();
+        // Kalshi snapshots carry no server timestamp — receive time only.
+        let ex_timestamp = 0;
+        let recv_timestamp = now_ns();
         let mut orders = Vec::new();
 
         // Kalshi sends two bid-ladders per market: one for YES buyers, one for
@@ -104,7 +105,8 @@ impl KalshiMessageParser {
                 qty,
                 side: "Bid".to_string(),
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -118,7 +120,8 @@ impl KalshiMessageParser {
                 qty,
                 side: "Ask".to_string(),
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -130,7 +133,8 @@ impl KalshiMessageParser {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
-            timestamp,
+            ex_timestamp,
+            recv_timestamp,
             exchange: self.exchange_name.clone(),
         })])
     }
@@ -165,14 +169,9 @@ impl KalshiMessageParser {
             }
         };
 
-        // Determine timestamp: prefer server ts, fall back to now.
-        let timestamp = delta
-            .ts
-            .as_deref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
-        let ts_str = timestamp.to_rfc3339();
+        // Kalshi deltas may carry a server `ts` (RFC3339); 0 when absent.
+        let ex_timestamp = delta.ts.as_deref().map(parse_rfc3339_to_ns).unwrap_or(0);
+        let recv_timestamp = now_ns();
 
         // View the book from the YES contract's perspective: YES-side deltas
         // are bids at `price`; NO-side deltas are asks at `1 - price`.
@@ -203,14 +202,16 @@ impl KalshiMessageParser {
             qty,
             side: side.to_string(),
             symbol: symbol.clone(),
-            timestamp: ts_str,
+            ex_timestamp,
+            recv_timestamp,
         };
 
         Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
             action,
             orders: vec![order],
             symbol,
-            timestamp,
+            ex_timestamp,
+            recv_timestamp,
             exchange: self.exchange_name.clone(),
         })])
     }

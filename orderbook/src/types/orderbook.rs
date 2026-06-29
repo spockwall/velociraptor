@@ -1,5 +1,4 @@
 use crate::connection::{BaseClientMessage, BasicClientMsgTrait};
-use chrono::{DateTime, Utc};
 use libs::protocol::{ExchangeName, LastTradePrice, UserEvent};
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +8,11 @@ pub struct GenericOrder {
     pub side: String,
     pub qty: f64,
     pub symbol: String,
-    pub timestamp: String,
+    /// Exchange-stamped time in Unix nanoseconds (`0` when the venue sends
+    /// none). Mirrors the parent [`OrderbookUpdate::ex_timestamp`].
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +48,12 @@ pub struct OrderbookUpdate {
     pub action: OrderbookAction,
     pub orders: Vec<GenericOrder>,
     pub symbol: String,
-    pub timestamp: DateTime<Utc>,
+    /// Exchange-stamped time in Unix nanoseconds when the venue provides one
+    /// (OKX, Polymarket, Hyperliquid, Kalshi delta); `0` otherwise (Binance
+    /// depth, Kalshi snapshot).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     pub exchange: ExchangeName,
 }
 

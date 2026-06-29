@@ -5,11 +5,9 @@ use crate::exchanges::polymarket::types::{
 };
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use chrono::TimeZone;
-use chrono::Utc;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderStatus, Side, UserEvent};
 use libs::time::now_ns;
-use libs::time::parse_timestamp_ms;
+use libs::time::parse_ms_to_ns;
 use tracing::{error, info, warn};
 
 /// Which Polymarket WS channel this parser instance is bound to.
@@ -159,8 +157,8 @@ impl PolymarketMessageParser {
         };
 
         let symbol = event.asset_id.clone();
-        let ts = parse_timestamp_ms(&event.timestamp);
-        let ts_str = ts.to_rfc3339();
+        let ex_timestamp = parse_ms_to_ns(&event.timestamp);
+        let recv_timestamp = now_ns();
         let mut orders = Vec::new();
 
         for ask in &event.asks {
@@ -175,7 +173,8 @@ impl PolymarketMessageParser {
                 side: "Ask".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -191,7 +190,8 @@ impl PolymarketMessageParser {
                 side: "Bid".to_string(),
                 qty,
                 symbol: symbol.clone(),
-                timestamp: ts_str.clone(),
+                ex_timestamp,
+                recv_timestamp,
             });
         }
 
@@ -203,7 +203,8 @@ impl PolymarketMessageParser {
             action: OrderbookAction::Snapshot,
             orders,
             symbol,
-            timestamp: ts,
+            ex_timestamp,
+            recv_timestamp,
             exchange: self.exchange_name.clone(),
         })])
     }
@@ -217,8 +218,8 @@ impl PolymarketMessageParser {
             }
         };
 
-        let ts = parse_timestamp_ms(&event.timestamp);
-        let ts_str = ts.to_rfc3339();
+        let ex_timestamp = parse_ms_to_ns(&event.timestamp);
+        let recv_timestamp = now_ns();
 
         // Each price change is independent: qty==0 → Delete, qty>0 → Update.
         // Emit one StreamMessage per change so actions are never mixed across levels.
@@ -256,10 +257,12 @@ impl PolymarketMessageParser {
                     side: side.to_string(),
                     qty,
                     symbol: change.asset_id.clone(),
-                    timestamp: ts_str.clone(),
+                    ex_timestamp,
+                    recv_timestamp,
                 }],
                 symbol: change.asset_id.clone(),
-                timestamp: ts,
+                ex_timestamp,
+                recv_timestamp,
                 exchange: self.exchange_name.clone(),
             }));
         }
@@ -293,7 +296,8 @@ impl PolymarketMessageParser {
             qty,
             filled: matched,
             status: parse_order_type(&o.order_type),
-            ts_ns: now_ns(),
+            ex_timestamp: parse_ms_to_ns(&o.timestamp),
+            recv_timestamp: now_ns(),
         }))
     }
 
@@ -349,7 +353,8 @@ impl PolymarketMessageParser {
             px,
             qty,
             fee: 0.0, // Polymarket does not include fee in the trade event
-            ts_ns: now_ns(),
+            ex_timestamp: parse_ms_to_ns(&t.timestamp),
+            recv_timestamp: now_ns(),
             trade_status,
             maker_orders,
         }))
@@ -363,11 +368,6 @@ impl PolymarketMessageParser {
                 return None;
             }
         };
-        let ms: i64 = e.timestamp.parse().ok()?;
-        let ts = Utc
-            .timestamp_millis_opt(ms)
-            .single()
-            .unwrap_or_else(Utc::now);
         Some(StreamMessage::LastTradePrice(LastTradePrice {
             exchange: self.exchange_name,
             symbol: e.asset_id,
@@ -377,7 +377,8 @@ impl PolymarketMessageParser {
             side: e.side,
             fee_rate_bps: e.fee_rate_bps.parse().unwrap_or(0.0),
             market: e.market,
-            timestamp: ts,
+            ex_timestamp: parse_ms_to_ns(&e.timestamp),
+            recv_timestamp: now_ns(),
             trade_id: None,
         }))
     }

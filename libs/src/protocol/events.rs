@@ -1,5 +1,4 @@
 use super::orders::{OrderStatus, Side};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Slim best-bid-ask payload stored in Redis and served by the backend.
@@ -14,7 +13,10 @@ pub struct BbaPayload {
     #[serde(default)]
     pub full_slug: Option<String>,
     pub sequence: u64,
-    pub timestamp: DateTime<Utc>,
+    /// Exchange-stamped time in Unix nanoseconds (`0` when unavailable).
+    pub ex_timestamp: i64,
+    /// Local receive time in Unix nanoseconds.
+    pub recv_timestamp: i64,
     pub best_bid: Option<(f64, f64)>,
     pub best_ask: Option<(f64, f64)>,
     pub spread: Option<f64>,
@@ -69,7 +71,11 @@ pub enum UserEvent {
         qty: f64,
         filled: f64,
         status: OrderStatus,
-        ts_ns: i64,
+        /// Exchange-stamped event time in Unix nanoseconds (`0` if the
+        /// venue's user-channel event carries no usable timestamp).
+        ex_timestamp: i64,
+        /// Local receive time in Unix nanoseconds.
+        recv_timestamp: i64,
     },
     Fill {
         exchange: String,
@@ -97,7 +103,11 @@ pub enum UserEvent {
         px: f64,
         qty: f64,
         fee: f64,
-        ts_ns: i64,
+        /// Exchange-stamped fill time in Unix nanoseconds (`0` if the venue's
+        /// trade event carries no usable timestamp).
+        ex_timestamp: i64,
+        /// Local receive time in Unix nanoseconds.
+        recv_timestamp: i64,
         /// Exchange-specific trade-lifecycle status. For Polymarket this is
         /// the on-chain settlement progression: `MATCHED` → `MINED` →
         /// `CONFIRMED`, or `RETRYING` / `FAILED`. Stored as the raw
@@ -140,7 +150,8 @@ mod tests {
             px: 0.42,
             qty: 10.0,
             fee: 0.01,
-            ts_ns: 1_700_000_000_000_000_000,
+            ex_timestamp: 1_700_000_000_000_000_000,
+            recv_timestamp: 1_700_000_000_111_000_000,
             trade_status: Some("MATCHED".into()),
             maker_orders: Some(serde_json::json!([
                 {"order_id": "m1", "matched_amount": "10.0", "price": "0.42"}

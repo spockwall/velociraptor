@@ -90,8 +90,9 @@ pub struct PolyOrderEvent {
     /// Owner/trader identifier (Polymarket user UUID).
     #[serde(default)]
     pub owner: String,
+    /// Exchange event time as a Unix-millisecond string. May be empty.
     #[serde(default)]
-    pub _timestamp: String,
+    pub timestamp: String,
 }
 
 /// Raw trade/fill event from the Polymarket user channel.
@@ -119,8 +120,9 @@ pub struct PolyTradeEvent {
     /// Trade status, e.g. `"MATCHED"`.
     #[serde(default)]
     pub status: String,
+    /// Exchange event time as a Unix-millisecond string. May be empty.
     #[serde(default)]
-    pub _timestamp: String,
+    pub timestamp: String,
 }
 
 /// One maker order entry nested inside a `PolyTradeEvent`.
