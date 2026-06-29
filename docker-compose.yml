@@ -41,9 +41,9 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
-      # DATA_DIR is the host data root: /data (prod, default) or ./data (dev),
-      # set by the Makefile from LABEL. Container paths stay /app/data everywhere.
-      - ${DATA_DIR:-/data}/redis:/data
+      # DATA_DIR is the host data root: ./data (dev) or /data (prod), set by
+      # the Makefile from LABEL. Container paths stay /app/data everywhere.
+      - ${DATA_DIR:-./data}/redis:/data
     restart: unless-stopped
 
   backend:
@@ -52,15 +52,15 @@ services:
       dockerfile: backend/Dockerfile
     image: velociraptor/backend:latest
     container_name: velociraptor-backend
-    # LABEL selects the env (prod|dev). `make up LABEL=dev`; defaults to prod.
-    command: ["--config", "/app/configs/${LABEL:-prod}/config.yaml"]
+    # LABEL selects the env (prod|dev). `make up LABEL=prod`; defaults to dev.
+    command: ["--config", "/app/configs/${LABEL:-dev}/config.yaml"]
     volumes:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
-      - ${DATA_DIR:-/data}/syslog:/app/syslog
+      - ${DATA_DIR:-./data}/syslog:/app/syslog
       # Read-only mount of the data volume so the monitor page can report
       # per-subfolder usage (backend.data_dir = /app/data).
-      - ${DATA_DIR:-/data}:/app/data:ro
+      - ${DATA_DIR:-./data}:/app/data:ro
     depends_on:
       - redis
     ports:
@@ -75,16 +75,16 @@ services:
     container_name: velociraptor-orderbook-server
     command:
       - "--config"
-      - "/app/configs/${LABEL:-prod}/config.yaml"
+      - "/app/configs/${LABEL:-dev}/config.yaml"
       - "--polymarket-credentials"
-      - "/app/credentials/${LABEL:-prod}/polymarket.yaml"
+      - "/app/credentials/${LABEL:-dev}/polymarket.yaml"
       - "--kalshi-credentials"
-      - "/app/credentials/${LABEL:-prod}/kalshi.yaml"
+      - "/app/credentials/${LABEL:-dev}/kalshi.yaml"
     volumes:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
-      - ${DATA_DIR:-/data}:/app/data
-      - ${DATA_DIR:-/data}/syslog:/app/syslog
+      - ${DATA_DIR:-./data}:/app/data
+      - ${DATA_DIR:-./data}/syslog:/app/syslog
     depends_on:
       - redis
     ports:
@@ -104,17 +104,17 @@ services:
     # whatever perms they have on the host.
     command:
       - "--config"
-      - "/app/configs/${LABEL:-prod}/config.yaml"
+      - "/app/configs/${LABEL:-dev}/config.yaml"
       - "--credentials"
-      - "/app/credentials/${LABEL:-prod}/polymarket.yaml"
+      - "/app/credentials/${LABEL:-dev}/polymarket.yaml"
       - "--kalshi-credentials"
-      - "/app/credentials/${LABEL:-prod}/kalshi.yaml"
+      - "/app/credentials/${LABEL:-dev}/kalshi.yaml"
       - "--skip-chmod-check"
     volumes:
       - ./configs:/app/configs:ro
       - ./credentials:/app/credentials:ro
-      - ${DATA_DIR:-/data}:/app/data
-      - ${DATA_DIR:-/data}/syslog:/app/syslog
+      - ${DATA_DIR:-./data}:/app/data
+      - ${DATA_DIR:-./data}/syslog:/app/syslog
     depends_on:
       - redis
     ports:

@@ -31,7 +31,10 @@ cargo build --release
 cargo check --workspace
 
 # Method 1: Running in container by using makefile
-# Run the whole stack via Docker. LABEL picks the env (prod|dev); default dev. `make up LABEL=<env>` selects configs/<env>/config.yaml + credentials/<env>/, and maps the host data root (prod -> /data, dev -> ./data) into /app/data in every container.
+# Run the whole stack via Docker. LABEL picks the env (prod|dev); default dev.
+# `make up LABEL=<env>` selects configs/<env>/config.yaml + credentials/<env>/,
+# and maps the host data root (prod -> /data, dev -> ./data) into /app/data in
+# every container.
 make builder
 make build              # builds shared builder + thin runtime images
 make up LABEL=prod      # production stack  (live CLOB, risk gate ON)
@@ -40,7 +43,9 @@ make logs
 make down
 
 # Method 2: Running raw building blocks
-# Run individual binaries from source. The defaults target the DEV env, so a bare `cargo run` works against configs/dev/* + credentials/dev/*. Switch envs by passing `--config configs/prod/...` (see the binary→config table below).
+# Run individual binaries from source. The defaults target the DEV env, so a
+# bare `cargo run` works against configs/dev/* + credentials/dev/*. Switch envs
+# by passing `--config configs/prod/...` (see the binary→config table below).
 docker compose up -d redis
 cargo run --bin orderbook_server   --release    # --config configs/dev/config.yaml   (default)
 cargo run --bin backend            --release    # --config configs/dev/config.yaml   (default)

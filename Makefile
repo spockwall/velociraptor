@@ -2,7 +2,33 @@
 # `velociraptor/builder` image (Dockerfile.builder) — it must be built before
 # the per-service runtime images, hence the two-step targets here.
 
-.PHONY: build builder rebuild frontend up down logs ps clean
+.PHONY: help build builder rebuild frontend up down logs ps clean
+
+# Show this help by default (bare `make`).
+.DEFAULT_GOAL := help
+help:
+	@echo "velociraptor — docker compose wrappers"
+	@echo ""
+	@echo "Environment is selected with LABEL=<env> (NOT a --flag):"
+	@echo "    make up LABEL=prod      production  (live CLOB, risk gate ON,  /data)"
+	@echo "    make up LABEL=dev       dev         (testnet,   risk gate OFF, ./data)"
+	@echo "    make up                 same as LABEL=dev  ← default mode is 'dev'"
+	@echo ""
+	@echo "    Current default: LABEL=$(LABEL)  DATA_DIR=$(DATA_DIR)"
+	@echo ""
+	@echo "Targets:"
+	@echo "    make builder            build the shared Rust builder image"
+	@echo "    make build              build builder + all runtime images (recreates frontend)"
+	@echo "    make rebuild            clean --no-cache rebuild of everything"
+	@echo "    make frontend           fast no-cache rebuild + redeploy of just the frontend"
+	@echo "    make up   [LABEL=env]   start the stack detached"
+	@echo "    make down               stop the stack"
+	@echo "    make logs               follow logs (last 200 lines)"
+	@echo "    make ps                 show service status"
+	@echo "    make clean              stop + remove volumes and orphans"
+	@echo ""
+	@echo "Note: 'make up --mode prod' does NOT work — make only accepts VAR=value,"
+	@echo "      so use 'make up LABEL=prod'."
 
 # Build the shared Rust builder image, then the runtime images.
 # The frontend is built with --no-cache: its Dockerfile's `COPY . . && npm run
@@ -20,18 +46,18 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 
 # Environment label — selects which config + credentials each service loads:
 #   configs/$(LABEL)/config.yaml  and  credentials/$(LABEL)/{polymarket,kalshi}.yaml
-# Override per-invocation:  make up LABEL=dev   (defaults to prod).
+# Override per-invocation:  make up LABEL=prod   (defaults to dev).
 # Exported so docker-compose's ${LABEL} substitution picks it up.
-LABEL ?= prod
+LABEL ?= dev
 export LABEL
 
 # Host data root, derived from LABEL: prod writes to /data, dev to ./data.
 # Override explicitly with  make up LABEL=prod DATA_DIR=/mnt/whatever.
 # Container paths stay /app/data regardless (compose maps $(DATA_DIR) -> /app/data).
-ifeq ($(LABEL),dev)
-DATA_DIR ?= ./data
-else
+ifeq ($(LABEL),prod)
 DATA_DIR ?= /data
+else
+DATA_DIR ?= ./data
 endif
 export DATA_DIR
 
