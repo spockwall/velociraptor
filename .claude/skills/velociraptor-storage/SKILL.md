@@ -17,7 +17,8 @@ Flat sequence of length-prefixed records:
 ┌──────────┬─────────────────────────────────────┐
 │ 4 bytes  │  N bytes                            │
 │ u32 LE   │  msgpack map                        │
-│ (length) │  { "sequence": 1, "ts_ns": ... }    │
+│ (length) │  { "sequence": 1, "ex_timestamp": …,│
+│          │    "recv_timestamp": …, … }          │
 └──────────┴─────────────────────────────────────┘
 ```
 
@@ -28,7 +29,8 @@ Records are written sequentially, no padding, no index. Always read front-to-bac
 | Field | Type | Description |
 |---|---|---|
 | `sequence` | u64 | Monotonically increasing update counter |
-| `ts_ns` | i64 | UTC timestamp in nanoseconds |
+| `ex_timestamp` | i64 | Exchange-stamped UTC ns (`0` when the venue sends none) |
+| `recv_timestamp` | i64 | Local receive UTC ns |
 | `bids` | `[[f64, f64]]` | Top-N bids `[price, qty]`, best first |
 | `asks` | `[[f64, f64]]` | Top-N asks |
 
@@ -38,7 +40,8 @@ Records are written sequentially, no padding, no index. Always read front-to-bac
 
 | Field | Type | Description |
 |---|---|---|
-| `ts_ns` | i64 | UTC ns |
+| `ex_timestamp` | i64 | Exchange-stamped UTC ns (`0` when the venue sends none) |
+| `recv_timestamp` | i64 | Local receive UTC ns |
 | `price` | f64 | Trade price |
 | `size` | f64 | Trade size |
 | `side` | str | Taker direction `"BUY"`/`"SELL"` |
@@ -77,7 +80,7 @@ The `recorder` crate's `StorageWriter` (used by `orderbook_recorder` + `orderboo
 {base_path}/events/{YYYY-MM-DD}.csv   ← fills + order_updates, `type` column discriminates
 ```
 
-Columns: `ts_ns,type,exchange,symbol,side,px,qty,filled,status,fee,taker_oid,client_oid,exchange_oid,trade_id,maker_orders`. `maker_orders` is a JSON string in one cell.
+Columns: `ex_timestamp,recv_timestamp,type,exchange,symbol,side,px,qty,filled,status,fee,taker_oid,client_oid,exchange_oid,trade_id,maker_orders`. `maker_orders` is a JSON string in one cell.
 
 The recorder crate splits the two formats by module: `recorder/src/mpack_writer.rs` holds `StorageWriter` (the mpack snapshot/trade streams), and `recorder/src/csv.rs` holds `CsvArchive` — the shared append-only CSV helper the user-event stream and both fetchers use.
 
@@ -192,7 +195,7 @@ def read_mpack(path):
             (n,) = struct.unpack("<I", header)
             records.append(msgpack.unpackb(f.read(n), raw=False))
     df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
+    df.insert(0, "ts", pd.to_datetime(df["recv_timestamp"], unit="ns", utc=True))
     return df
 
 df = read_mpack("data/binance/BTCUSDT/2026-04-03.mpack")
@@ -212,7 +215,7 @@ def read_mpack_zst(path):
             (n,) = struct.unpack("<I", header)
             records.append(msgpack.unpackb(buf.read(n), raw=False))
     df = pd.DataFrame(records)
-    df.insert(0, "ts", pd.to_datetime(df.pop("ts_ns"), unit="ns", utc=True))
+    df.insert(0, "ts", pd.to_datetime(df["recv_timestamp"], unit="ns", utc=True))
     return df
 ```
 

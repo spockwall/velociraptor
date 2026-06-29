@@ -123,15 +123,17 @@ impl MsgParserTrait<StreamMessage> for MyExchangeMessageParser {
 | `Update` | Updates individual price levels (qty = new total) |
 | `Delete` | Price level removed (qty = 0) |
 
-`GenericOrder` fields: `price: f64, qty: f64, side: String("Bid"/"Ask"), symbol: String, timestamp: String (rfc3339)`.
+`GenericOrder` fields: `price: f64, qty: f64, side: String("Bid"/"Ask"), symbol: String, ex_timestamp: i64, recv_timestamp: i64`. Both timestamps are Unix nanoseconds; set the same `ex_timestamp`/`recv_timestamp` on every `GenericOrder` and on the parent `OrderbookUpdate`.
 
-Timestamp helpers:
+Timestamp helpers — all in `libs::time`, all returning Unix nanoseconds (i64):
 
 ```rust
-let ts = Utc.timestamp_millis_opt(ms as i64).single().unwrap_or_else(Utc::now);
-// or for string ms:
-use libs::time::parse_timestamp_ms;
-let ts = parse_timestamp_ms(&event.timestamp_str);
+use libs::time::{now_ns, parse_ms_to_ns, parse_rfc3339_to_ns};
+let recv_timestamp = now_ns();                          // local receive time
+let ex_timestamp = parse_ms_to_ns(&event.timestamp_str);  // venue ms string → ns
+// or, for an RFC3339 venue string:
+let ex_timestamp = parse_rfc3339_to_ns(&event.ts_str);
+// `ex_timestamp` is 0 when the venue provides no usable timestamp.
 ```
 
 > **Critical rule: emit one `StreamMessage` per price-level change.** Never batch levels with different actions into one message — mixed Update/Delete batches cause silent data loss. See `polymarket/msg_parser.rs` for the correct pattern.

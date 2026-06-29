@@ -14,7 +14,8 @@ pub struct OrderbookUpdate {
     pub action: OrderbookAction,   // Snapshot | Update | Delete
     pub orders: Vec<GenericOrder>,
     pub symbol: String,            // exchange-native key
-    pub timestamp: DateTime<Utc>,
+    pub ex_timestamp: i64,         // exchange Unix ns (0 when venue sends none)
+    pub recv_timestamp: i64,       // local receive Unix ns
     pub exchange: ExchangeName,
 }
 
@@ -23,7 +24,8 @@ pub struct GenericOrder {
     pub qty: f64,
     pub side: String,              // "Bid" or "Ask"
     pub symbol: String,
-    pub timestamp: String,         // RFC 3339
+    pub ex_timestamp: i64,         // exchange Unix ns (mirrors the parent)
+    pub recv_timestamp: i64,       // local receive Unix ns
 }
 ```
 
@@ -67,7 +69,7 @@ Same string is the ZMQ topic format.
 | `b` | `[[p,q]]` | Bids, best first |
 | `a` | `[[p,q]]` | Asks, best first |
 
-No timestamp in message → parser uses `Utc::now()`. Action: always `Snapshot`.
+Spot `@depth20@100ms` has no timestamp → `ex_timestamp = 0`, `recv_timestamp = now_ns()`. Futures `depthUpdate` carries `T` (transaction time, ms — when the book change occurred at the matching engine) → `ex_timestamp` set from `T`, not `E`. Action: always `Snapshot`.
 
 ---
 

@@ -96,7 +96,8 @@ if let Some(ob) = books.get("binance:BTCUSDT") {
 pub exchange:  ExchangeName
 pub symbol:    String
 pub sequence:  u64
-pub timestamp: DateTime<Utc>
+pub ex_timestamp:   i64             // exchange Unix ns (0 when unavailable)
+pub recv_timestamp: i64             // local receive Unix ns
 pub best_bid:  Option<(f64, f64)>   // (price, qty)
 pub best_ask:  Option<(f64, f64)>
 pub spread:    Option<f64>

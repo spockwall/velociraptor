@@ -51,8 +51,9 @@ full_slug  : str | null      # rolling markets only — current window's
                              # null/absent for static exchanges.
                              # Encoded as `#[serde(default)] Option<String>`
                              # so old captures decode under the new schema.
-sequence   : u64
-timestamp  : DateTime<Utc>
+sequence     : u64
+ex_timestamp   : i64         # exchange-stamped Unix ns (0 when venue sends none)
+recv_timestamp : i64         # local receive Unix ns
 best_bid   : [price, qty] | null
 best_ask   : [price, qty] | null
 spread     : f64 | null
@@ -67,8 +68,9 @@ asks       : [[price, qty]]
 exchange   : str             # plain string
 symbol     : str
 full_slug  : str | null      # mirrors OrderbookSnapshot.full_slug
-sequence   : u64
-timestamp  : DateTime<Utc>
+sequence     : u64
+ex_timestamp   : i64         # exchange-stamped Unix ns (0 when unavailable)
+recv_timestamp : i64         # local receive Unix ns
 best_bid   : [price, qty] | null
 best_ask   : [price, qty] | null
 spread     : f64 | null
@@ -123,10 +125,10 @@ No handshake. Frame: `[topic_bytes, msgpack_payload]`. Topic: `"user.{exchange}.
 **`UserEvent`** — tagged union, discriminated by `"type"`:
 
 ```
-Fill:        type, exchange, client_oid, exchange_oid, symbol, side, px, qty, fee, ts_ns
-OrderUpdate: type, exchange, client_oid, exchange_oid, symbol, side, px, qty, filled, status, ts_ns
-Balance:     type, exchange, asset, free, locked, ts_ns
-Position:    type, exchange, symbol, size, avg_px, ts_ns
+Fill:        type, exchange, client_oid, exchange_oid, symbol, side, px, qty, fee, ex_timestamp, recv_timestamp
+OrderUpdate: type, exchange, client_oid, exchange_oid, symbol, side, px, qty, filled, status, ex_timestamp, recv_timestamp
+Balance:     type, exchange, asset, free, locked, ex_timestamp, recv_timestamp
+Position:    type, exchange, symbol, size, avg_px, ex_timestamp, recv_timestamp
 ```
 
 `side` ∈ `"buy"|"sell"`. `status` ∈ `"new"|"partially_filled"|"filled"|"canceled"|"rejected"|"expired"`.
@@ -164,7 +166,7 @@ req_id : u64
 result : Ok(OrderResult) | Err(OrderError)
 ```
 
-`OrderResult` (tagged by `"result"`): `ack` (`client_oid`,`exchange_oid`,`status`,`ts_ns`), `batch_ack` (`results:[...]`), `cancel_count` (`count`), `heartbeat_ok` (`next_due_ms`).
+`OrderResult` (tagged by `"result"`): `ack` (`client_oid`,`exchange_oid`,`status`,`ex_timestamp`,`recv_timestamp`), `batch_ack` (`results:[...]`), `cancel_count` (`count`), `heartbeat_ok` (`next_due_ms`).
 
 `OrderError` (tagged by `"kind"`): `risk_rejected` · `kill_switch` · `duplicate_client_oid` · `exchange_rejected` · `network` · `timeout` · `not_found` · `internal`.
 
