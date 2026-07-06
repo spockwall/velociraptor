@@ -102,6 +102,24 @@ Rules:
 - **UTC** date.
 - Up and Down written to separate files; trade records routed by `asset_id`.
 
+### Kalshi (rolling windows)
+
+Written by `kalshi_recorder` (`orderbook/src/bin/kalshi_recorder.rs`, config
+`configs/{dev,prod}/kalshi.yaml` via `KalshiFileConfig`). **One file per window** —
+no up/down split (YES/NO is folded into a single book by the parser) and the
+Kalshi feed carries no trade events, so snapshots only:
+
+```
+{base_path}/{series}/{YYYY-MM-DD}/        ← UTC date of window start
+    {HH:MM}-{HH:MM}.mpack
+    *.mpack.zst                            ← after window close (if zstd_level > 0)
+```
+
+Kalshi signs the WS upgrade even for market data, so the recorder requires
+`--kalshi-credentials` (env `KALSHI_CREDENTIALS_FILE`, default
+`credentials/dev/kalshi.yaml`). Snapshot records: `ex_timestamp` is `0` for full
+snapshots (no venue time) and RFC3339-derived for deltas.
+
 ## Config
 
 ```yaml
@@ -244,6 +262,21 @@ python scripts/read_polymarket.py data/polymarket/btc-updown-5m/2026-04-06/ --me
 ```
 
 Adds `window`, `side`, `mid`, `spread`, `wmid` columns derived from filename + stored bids/asks.
+
+### Kalshi helper script
+
+```bash
+python scripts/read_kalshi.py data/kalshi/KXBTC15M/2026-07-06/03:30-03:45.mpack
+python scripts/read_kalshi.py data/kalshi/KXBTC15M/2026-07-06/    # all windows in a date
+python scripts/read_kalshi.py data/kalshi/KXBTC15M/               # all dates for a series
+python scripts/read_kalshi.py data/kalshi/KXBTC15M/ --summary
+```
+
+Like the Polymarket script but single-book (no `--side`/`--merge`). Adds `series`,
+`date`, `window` from the path plus `yes_prob` (= `mid`), `no_prob` (= `1 - mid`),
+`spread`, `wmid`, and `latency_ms` (`recv - ex` venue latency, NaN on the initial
+snapshot which has `ex_timestamp = 0`). Tolerates a truncated final record
+(recorder killed mid-write) with a warning instead of raising.
 
 ### Price-to-beat CSV
 

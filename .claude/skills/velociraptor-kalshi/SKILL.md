@@ -161,6 +161,28 @@ cargo run --example kalshi_orderbook --release -- \
     --credentials credentials/kalshi.yaml
 ```
 
+## Recorder (`kalshi_recorder`)
+
+`orderbook/src/bin/kalshi_recorder.rs` — Kalshi analogue of `polymarket_recorder`.
+Streams each rolling window via `run_rolling_scheduler` and writes snapshot-only
+mpack files (Kalshi emits no trade events; single book per window, no up/down
+split):
+
+```
+{storage.base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}.mpack[.zst]
+```
+
+```bash
+cargo run --release --bin kalshi_recorder -- \
+    --config configs/prod/kalshi.yaml \
+    --kalshi-credentials credentials/prod/kalshi.yaml
+```
+
+Config = `KalshiFileConfig` (`libs/src/configs/kalshi.rs`): `server` / `storage` /
+`logging` / `kalshi.market[]`. Credentials are **required** (RSA-PSS-signed WS
+upgrade); flag defaults to `credentials/dev/kalshi.yaml`, env
+`KALSHI_CREDENTIALS_FILE`. File-layout details in the `velociraptor-storage` skill.
+
 ## Auto-rotation scheduler
 
 Per series, independent loop:
