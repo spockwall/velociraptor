@@ -8,7 +8,7 @@ server:
 storage:
   enabled: true
   base_path: "./data/kalshi"
-  depth: 8 # depth levels to store (bids + asks)
+  depth: 10 # depth levels to store (bids + asks)
   flush_interval: 500 # ms between BufWriter flushes
   rotation: "none" # "daily" | "none"
   zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
