@@ -1,0 +1,39 @@
+# ── PROD Kalshi recorder config (HOST, not Docker) ──────────────────────────
+# Used by `kalshi_recorder` so it writes to a SEPARATE storage tree from the
+# generic `orderbook_recorder` (which uses configs/prod/recorder.yaml →
+# /data/orderbook). This one writes under /data/kalshi:
+#   {storage.base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}.mpack
+#
+#   cargo run --release --bin kalshi_recorder -- --config configs/prod/kalshi.yaml
+#
+# Kalshi WS market data requires RSA-PSS auth — pass --kalshi-credentials
+# (default credentials/dev/kalshi.yaml, env KALSHI_CREDENTIALS_FILE).
+
+server:
+  render_interval: 300
+
+storage:
+  enabled: true
+  base_path: "/data/kalshi"
+  depth: 8             # depth levels to store (bids + asks)
+  flush_interval: 500  # ms between BufWriter flushes
+  rotation: "none"     # "daily" | "none"
+  zstd_level: 3        # 0 = disabled, 1–22 = zstd compression level
+
+logging:
+  level: "info"          # env-filter string, e.g. "info,libs=debug"
+  json: false            # set true to emit JSON-formatted records
+  dir: "/data/syslog"    # files: {dir}/kalshi_recorder/{YYYY-MM-DD}.log and …/{YYYY-MM-DD}.error.log
+
+# Rolling 15-minute markets.
+# series — Kalshi series ticker (the part before the date stamp).
+# Ticker format: {series}-{YYMONDDHHMM (Eastern time)}-{close minute}
+# Example:       KXBTC15M-26APR130415-15  (closes 08:15 UTC = 04:15 EDT)
+kalshi:
+  market:
+    - enable: true
+      series: "KXBTC15M"
+      interval_secs: 900
+    - enable: true
+      series: "KXETH15M"
+      interval_secs: 900

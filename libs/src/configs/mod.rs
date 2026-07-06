@@ -17,7 +17,7 @@ pub use binance::{BinanceConfig, BinanceSpotConfig};
 pub use executor::ExecutorConfig;
 pub use fetcher::FetcherConfig;
 pub use hyperliquid::HyperliquidConfig;
-pub use kalshi::{KalshiConfig, KalshiMarketConfig};
+pub use kalshi::{KalshiConfig, KalshiFileConfig, KalshiMarketConfig};
 pub use logging::LoggingConfig;
 pub use okx::OkxConfig;
 pub use polymarket::{PolymarketConfig, PolymarketFileConfig, PolymarketMarketConfig};
