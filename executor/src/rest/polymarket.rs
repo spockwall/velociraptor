@@ -21,14 +21,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use libs::credentials::polymarket::PolymarketCredentials;
 use libs::protocol::orders::{
-    HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
+    FillInfo, HeartbeatAck, OrderAck, OrderError, OrderKind, OrderStatus, PlaceOne, Side, Tif,
 };
 use polymarket_client_sdk_v2::auth::state::Authenticated;
-use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer};
+use polymarket_client_sdk_v2::auth::{Credentials, LocalSigner, Normal, Signer, Uuid};
 // `LocalSigner` is generic; `from_str` produces this concrete shape (k256
 // ECDSA key) — same as `alloy_signer_local::PrivateKeySigner`.
 type PrivKeySigner = LocalSigner<k256::ecdsa::SigningKey>;
 use polymarket_client_sdk_v2::clob::types::request::{CancelMarketOrderRequest, OrdersRequest};
+use polymarket_client_sdk_v2::clob::types::response::PostOrderResponse;
 use polymarket_client_sdk_v2::clob::types::{
     Amount, OrderStatusType, OrderType, Side as SdkSide, SignatureType,
 };
@@ -36,7 +37,7 @@ use polymarket_client_sdk_v2::clob::{Client, Config};
 use polymarket_client_sdk_v2::types::{Address, Decimal, U256};
 use polymarket_client_sdk_v2::{derive_proxy_wallet, derive_safe_wallet};
 
-use super::{RestOrderClient, TargetPrice};
+use super::{record_venue_ms, RestOrderClient, TargetPrice};
 use crate::error::map_internal;
 
 /// Polygon mainnet chain id — required by `LocalSigner` for the v2 EIP-712
@@ -84,6 +85,17 @@ impl PolymarketRestClient {
         let sig_type = parse_signature_type(creds.signature_type.as_deref())?;
         let funder = resolve_funder(&creds, &signer, sig_type)?;
 
+        // Pre-existing L2 API credentials, if the creds file carries the full
+        // trio. This matters for the `poly1271` deposit-wallet flow: the CLOB
+        // rejects an order whose `signer` (= the deposit `funder` under
+        // poly1271) doesn't match the address the *API key* is registered to
+        // ("the order signer address has to be the address of the API KEY").
+        // The web-UI-issued key is registered to the deposit wallet, so we
+        // must present THAT key rather than letting the SDK mint a fresh one
+        // bound to the bare EOA. When the trio is absent we fall back to the
+        // SDK deriving a key from the EOA (correct for raw-EOA accounts).
+        let explicit_creds = build_l2_credentials(&creds)?;
+
         let unauth = Client::new(&base_url.into(), Config::default())
             .map_err(|e| anyhow::anyhow!("polymarket sdk Client::new: {e}"))?;
         let mut auth = unauth.authentication_builder(&signer);
@@ -92,6 +104,9 @@ impl PolymarketRestClient {
         }
         if let Some(f) = funder {
             auth = auth.funder(f);
+        }
+        if let Some(c) = explicit_creds {
+            auth = auth.credentials(c);
         }
         let client = auth
             .authenticate()
@@ -148,13 +163,65 @@ impl PolymarketRestClient {
             upper: f("upperBound"),
         })
     }
+
+    /// Light CLOB health-check GET issued through the SAME SDK client (and
+    /// therefore the same reqwest connection pool) the order path uses. The
+    /// keep-warm task in `bin/executor.rs` calls this periodically: reqwest
+    /// evicts idle pool connections after 90 s, so sparse order flow would
+    /// otherwise pay a fresh TCP+TLS handshake on the first order after a
+    /// quiet spell (measured 459 ms first-order vs 103 ms warm on AMS).
+    pub async fn warm(&self) -> Result<(), OrderError> {
+        self.client
+            .ok()
+            .await
+            .map(|_| ())
+            .map_err(|e| OrderError::Network {
+                message: e.to_string(),
+            })
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/// Build the SDK's L2 `Credentials` from the creds file when the full trio
+/// (`api_key` + `secret` + `passphrase`) is present. Returns `Ok(None)` when
+/// any is missing — the caller then lets the SDK derive a fresh key from the
+/// EOA (correct for raw-EOA accounts). `api_key` must be a UUID (Polymarket's
+/// L2 key format); a malformed value is a hard error rather than a silent
+/// fallback, so a typo can't quietly change trading identity.
+fn build_l2_credentials(
+    creds: &PolymarketCredentials,
+) -> anyhow::Result<Option<Credentials>> {
+    let passphrase = match creds.passphrase.as_deref().filter(|s| !s.is_empty()) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    if creds.api_key.is_empty() || creds.secret.is_empty() {
+        return Ok(None);
+    }
+    let key = Uuid::parse_str(&creds.api_key).map_err(|e| {
+        anyhow::anyhow!("polymarket: api_key is not a valid UUID L2 key: {e}")
+    })?;
+    Ok(Some(Credentials::new(
+        key,
+        creds.secret.clone(),
+        passphrase.to_owned(),
+    )))
+}
+
 /// Parse `signature_type` from credentials. Accepts `eoa`, `proxy`,
-/// `gnosis_safe` (case-insensitive). Returns `Ok(None)` when unset to mean
-/// "let the SDK pick its default (Eoa)".
+/// `gnosis_safe`, `poly1271` (case-insensitive). Returns `Ok(None)` when unset
+/// to mean "let the SDK pick its default (Eoa)".
+///
+/// `poly1271` (SDK `SignatureType::Poly1271`, wire value 3) is the EIP-1271
+/// smart-contract-wallet flow: the order's `maker` AND `signer` are set to the
+/// deposit-wallet `funder`, the EOA key produces the signature, and the CLOB
+/// verifies it via the funder contract's `isValidSignature`. This is what
+/// Polymarket web-UI accounts whose deposit wallet isn't CREATE2-derivable from
+/// the EOA require — without it the CLOB 400s "maker address not allowed,
+/// please use the deposit wallet flow". V2 orders only (the SDK rejects it on
+/// V1); Polymarket prod CLOB is V2. Requires an explicit `funder` in creds
+/// (there's no derivation for it).
 fn parse_signature_type(s: Option<&str>) -> anyhow::Result<Option<SignatureType>> {
     match s.map(str::trim).filter(|s| !s.is_empty()) {
         None => Ok(None),
@@ -162,8 +229,10 @@ fn parse_signature_type(s: Option<&str>) -> anyhow::Result<Option<SignatureType>
             "eoa" => Ok(Some(SignatureType::Eoa)),
             "proxy" | "poly_proxy" | "polyproxy" => Ok(Some(SignatureType::Proxy)),
             "gnosis_safe" | "gnosissafe" | "safe" => Ok(Some(SignatureType::GnosisSafe)),
+            "poly1271" | "poly_1271" | "eip1271" => Ok(Some(SignatureType::Poly1271)),
             other => Err(anyhow::anyhow!(
-                "polymarket: unknown signature_type {other:?} (expected eoa|proxy|gnosis_safe)"
+                "polymarket: unknown signature_type {other:?} \
+                 (expected eoa|proxy|gnosis_safe|poly1271)"
             )),
         },
     }
@@ -174,6 +243,11 @@ fn parse_signature_type(s: Option<&str>) -> anyhow::Result<Option<SignatureType>
 ///   2. For Proxy/GnosisSafe sig types, derive deterministically from the
 ///      signer's EOA via the SDK helpers.
 ///   3. Otherwise `None` (raw EOA flow — SDK uses signer.address() as maker).
+///
+/// `Poly1271` has no CREATE2 derivation (the deposit wallet address is not a
+/// deterministic function of the EOA), so it MUST carry an explicit `funder`;
+/// reaching the derive branch with `Poly1271` is a config error we surface
+/// early rather than letting the SDK reject it opaquely at build time.
 fn resolve_funder(
     creds: &PolymarketCredentials,
     signer: &PrivKeySigner,
@@ -188,6 +262,10 @@ fn resolve_funder(
     match sig_type {
         Some(SignatureType::Proxy) => Ok(derive_proxy_wallet(eoa, POLYGON)),
         Some(SignatureType::GnosisSafe) => Ok(derive_safe_wallet(eoa, POLYGON)),
+        Some(SignatureType::Poly1271) => Err(anyhow::anyhow!(
+            "polymarket: signature_type poly1271 requires an explicit `funder` \
+             (deposit wallet address) in credentials — it cannot be derived from the EOA"
+        )),
         _ => Ok(None),
     }
 }
@@ -225,10 +303,10 @@ fn to_sdk_order_type(t: Tif) -> OrderType {
     match t {
         Tif::Gtc => OrderType::GTC,
         Tif::Gtd => OrderType::GTD,
-        // CLOB v2 has FAK as well — keep IOC mapped to FOK for now (the
-        // existing semantic in our previous impl); revisit if FAK is the
-        // closer match for callers' intent.
-        Tif::Ioc => OrderType::FOK,
+        // IOC on a limit = FAK: cross for whatever is displayed at or
+        // inside the limit, kill the remainder. Callers that need
+        // all-or-nothing pass Tif::Fok explicitly.
+        Tif::Ioc => OrderType::FAK,
         Tif::Fok => OrderType::FOK,
     }
 }
@@ -296,6 +374,33 @@ fn now_ns() -> i64 {
     Utc::now().timestamp_nanos_opt().unwrap_or(0)
 }
 
+/// Project the SDK's `PostOrderResponse` (returned by `build_sign_and_post`)
+/// onto our protocol-level [`FillInfo`]. Decimals lower to `f64` (lossless at
+/// CLOB tick/size granularity); `B256` hashes render as `0x`-prefixed hex.
+/// An empty `error_msg` is normalized to `None`.
+fn fill_info(resp: &PostOrderResponse) -> FillInfo {
+    FillInfo {
+        making_amount: dec_to_f64(resp.making_amount),
+        taking_amount: dec_to_f64(resp.taking_amount),
+        success: resp.success,
+        error_msg: resp
+            .error_msg
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned(),
+        transaction_hashes: resp
+            .transaction_hashes
+            .iter()
+            .map(|h| format!("{h:#x}"))
+            .collect(),
+        trade_ids: resp.trade_ids.clone(),
+    }
+}
+
+fn dec_to_f64(d: Decimal) -> f64 {
+    d.to_string().parse().unwrap_or(0.0)
+}
+
 // ── Trait impl ──────────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -304,35 +409,52 @@ impl RestOrderClient for PolymarketRestClient {
         // Canonical SDK flow: `limit_order()` / `market_order()` -> typestate
         // builder -> `build_sign_and_post(&signer)`. The SDK handles the
         // EIP-712 v2 domain, struct hash, secp256k1 signing, and JSON envelope.
+        //
+        // Latency instrumentation: we time `build_sign_and_post` with
+        // `Instant` and record the elapsed ms into the request-scoped
+        // `VENUE_MS` cell (see `rest::record_venue_ms`) on BOTH the accept and
+        // the reject branch — a 400 (e.g. FAK "no orders found to match")
+        // still pays the venue round-trip and must be measured. This is the
+        // tightest boundary around the only call that reaches the CLOB;
+        // `build_sign_and_post` bundles signing + the HTTP POST in the SDK, so
+        // it's the finest split available without touching signing logic. No
+        // order/TIF/signature semantics change — timing + a scratch write only.
         let resp = match p.kind {
-            OrderKind::Limit => self
-                .client
-                .limit_order()
-                .token_id(parse_token_id(&p.symbol)?)
-                .side(to_sdk_side(p.side))
-                .price(dec(p.px)?)
-                .size(dec(p.qty)?)
-                .order_type(to_sdk_order_type(p.tif))
-                .build_sign_and_post(self.signer.as_ref())
-                .await
-                .map_err(map_sdk_err)?,
-            OrderKind::Market => self
-                .client
-                .market_order()
-                .token_id(parse_token_id(&p.symbol)?)
-                .side(to_sdk_side(p.side))
-                .amount(to_market_amount(p.qty, p.side)?)
-                .order_type(to_sdk_market_order_type(p.tif)?)
-                .build_sign_and_post(self.signer.as_ref())
-                .await
-                .map_err(map_sdk_err)?,
+            OrderKind::Limit => {
+                let builder = self
+                    .client
+                    .limit_order()
+                    .token_id(parse_token_id(&p.symbol)?)
+                    .side(to_sdk_side(p.side))
+                    .price(dec(p.px)?)
+                    .size(dec(p.qty)?)
+                    .order_type(to_sdk_order_type(p.tif));
+                let started = std::time::Instant::now();
+                let out = builder.build_sign_and_post(self.signer.as_ref()).await;
+                record_venue_ms(started.elapsed().as_secs_f64() * 1_000.0);
+                out.map_err(map_sdk_err)?
+            }
+            OrderKind::Market => {
+                let builder = self
+                    .client
+                    .market_order()
+                    .token_id(parse_token_id(&p.symbol)?)
+                    .side(to_sdk_side(p.side))
+                    .amount(to_market_amount(p.qty, p.side)?)
+                    .order_type(to_sdk_market_order_type(p.tif)?);
+                let started = std::time::Instant::now();
+                let out = builder.build_sign_and_post(self.signer.as_ref()).await;
+                record_venue_ms(started.elapsed().as_secs_f64() * 1_000.0);
+                out.map_err(map_sdk_err)?
+            }
         };
 
         Ok(OrderAck {
             client_oid: p.client_oid.clone(),
-            exchange_oid: resp.order_id,
+            exchange_oid: resp.order_id.clone(),
             status: map_status(&resp.status),
             ts_ns: now_ns(),
+            fill: Some(fill_info(&resp)),
         })
     }
 
@@ -375,6 +497,7 @@ impl RestOrderClient for PolymarketRestClient {
             exchange_oid: exchange_oid.to_string(),
             status: OrderStatus::Canceled,
             ts_ns: now_ns(),
+            fill: None,
         })
     }
 
@@ -417,6 +540,7 @@ impl RestOrderClient for PolymarketRestClient {
                 exchange_oid: o.id,
                 status: map_status(&o.status),
                 ts_ns: now_ns(),
+                fill: None,
             })
             .collect())
     }
@@ -433,5 +557,68 @@ impl RestOrderClient for PolymarketRestClient {
         Ok(HeartbeatAck {
             next_due_ms: u64::MAX,
         })
+    }
+}
+
+#[cfg(test)]
+mod sig_type_tests {
+    use super::*;
+
+    #[test]
+    fn parses_all_signature_flavours() {
+        assert!(matches!(parse_signature_type(None).unwrap(), None));
+        assert!(matches!(
+            parse_signature_type(Some("eoa")).unwrap(),
+            Some(SignatureType::Eoa)
+        ));
+        assert!(matches!(
+            parse_signature_type(Some("proxy")).unwrap(),
+            Some(SignatureType::Proxy)
+        ));
+        assert!(matches!(
+            parse_signature_type(Some("gnosis_safe")).unwrap(),
+            Some(SignatureType::GnosisSafe)
+        ));
+        // The regression this test guards: poly1271 (EIP-1271 deposit-wallet
+        // flow) must parse. Its absence 400s live orders with "maker address
+        // not allowed, please use the deposit wallet flow".
+        for s in ["poly1271", "POLY1271", "poly_1271", "eip1271"] {
+            assert!(
+                matches!(
+                    parse_signature_type(Some(s)).unwrap(),
+                    Some(SignatureType::Poly1271)
+                ),
+                "{s} should map to Poly1271"
+            );
+        }
+        assert!(parse_signature_type(Some("nonsense")).is_err());
+    }
+
+    #[test]
+    fn poly1271_requires_explicit_funder() {
+        // A throwaway signer (well-known Anvil key #0) — we only exercise the
+        // no-funder derive branch, no network, no real key.
+        let signer: PrivKeySigner = LocalSigner::from_str(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        let creds = PolymarketCredentials {
+            funder: None,
+            ..Default::default()
+        };
+        // Poly1271 with no funder → hard error (cannot be derived).
+        assert!(resolve_funder(&creds, &signer, Some(SignatureType::Poly1271)).is_err());
+        // With an explicit funder it resolves to that address regardless of type.
+        let creds_f = PolymarketCredentials {
+            funder: Some("0x5aBf4F4Fee1fEc0cd8557dfdEC1b4c9AD5AaDd8D".into()),
+            ..Default::default()
+        };
+        let got = resolve_funder(&creds_f, &signer, Some(SignatureType::Poly1271))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            got,
+            Address::from_str("0x5aBf4F4Fee1fEc0cd8557dfdEC1b4c9AD5AaDd8D").unwrap()
+        );
     }
 }

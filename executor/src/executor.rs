@@ -56,7 +56,18 @@ pub struct Executor {
     pretrade_state: PretradeState,
     registry: OrderRegistry,
     redis: Option<RedisHandle>,
-    config_path: PathBuf,
+    /// Path the risk gate is (re)loaded from — the sibling `risk.yaml` next to
+    /// the `--config` file (e.g. `configs/<label>/config.yaml` → `…/risk.yaml`).
+    risk_config_path: PathBuf,
+}
+
+/// The risk file lives alongside the main config: `<config dir>/risk.yaml`.
+/// Both startup seeding and hot-reload read from here, so they always agree.
+pub fn risk_path_for(config_path: &std::path::Path) -> PathBuf {
+    config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("risk.yaml")
 }
 
 impl Executor {
@@ -71,7 +82,32 @@ impl Executor {
             pretrade_state: PretradeState::default(),
             registry: OrderRegistry::default(),
             redis: b.redis,
-            config_path: b.config_path,
+            risk_config_path: risk_path_for(&b.config_path),
+        }
+    }
+
+    /// Path the risk gate loads from (sibling `risk.yaml`). Used by the binary
+    /// to seed the gate at startup before the first hot-reload.
+    pub fn risk_config_path(&self) -> &std::path::Path {
+        &self.risk_config_path
+    }
+
+    /// Load the risk config from `risk_config_path` and swap it into the gate.
+    /// Fail-soft: on a missing/invalid file the current limits are kept (at
+    /// startup that's the default = gating disabled), matching prior behavior.
+    pub fn load_risk_config(&self) {
+        let path_str = self.risk_config_path.to_string_lossy().to_string();
+        match libs::configs::load_yaml::<libs::configs::RiskConfig, _>(&path_str) {
+            Ok(risk) => {
+                let enabled = risk.enabled;
+                self.pretrade_state.swap(risk);
+                tracing::info!("executor: risk config loaded from {path_str} (enabled={enabled})");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "executor: risk config not loaded from {path_str} ({e}); gating uses current limits"
+                );
+            }
         }
     }
 
@@ -119,6 +155,8 @@ impl Executor {
                     result: Err(OrderError::Internal {
                         message: format!("decode: {e}"),
                     }),
+                    // Never reached the venue.
+                    venue_ms: None,
                 };
             }
         };
@@ -159,11 +197,22 @@ impl Executor {
         //     return resp;
         // }
 
-        // 6. Dispatch to the exchange.
-        let result = self.dispatch(&req).await;
+        // 6. Dispatch to the exchange. Run it inside a `VENUE_MS` scope so the
+        //    REST client can record the venue-facing CLOB HTTP round-trip time
+        //    from deep inside `place()` (both accept and reject paths). The
+        //    timing must be read back *within* the scope, so dispatch + read
+        //    share one scoped future. `None` for non-placement actions and for
+        //    placements that fail before reaching the HTTP call.
+        let (result, venue_ms) = crate::rest::VENUE_MS
+            .scope(std::cell::Cell::new(None), async {
+                let result = self.dispatch(&req).await;
+                (result, crate::rest::take_venue_ms())
+            })
+            .await;
         let resp = OrderResponse {
             req_id: req.req_id,
             result: result.clone(),
+            venue_ms,
         };
 
         // // 7. State maintenance (always — even on dispatch errors so the
@@ -409,17 +458,9 @@ impl ControlCallbacks for ExecutorControlCallbacks {
     }
 
     async fn reload_config(&self) {
-        let path = self.executor.config_path.clone();
-        let path_str = path.to_string_lossy().to_string();
-        match libs::configs::load_yaml::<libs::configs::Config, _>(&path_str) {
-            Ok(cfg) => {
-                self.executor.pretrade_state.swap(cfg.risk);
-                tracing::info!("executor: risk config reloaded from {path_str}");
-            }
-            Err(e) => {
-                tracing::warn!("executor: reload failed, keeping current limits: {e}");
-            }
-        }
+        // Re-read the dedicated risk file (sibling `risk.yaml`); the rest of the
+        // unified config is not hot-reloadable.
+        self.executor.load_risk_config();
     }
 }
 

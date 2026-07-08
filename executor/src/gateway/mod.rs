@@ -9,11 +9,16 @@
 //!   send: [ identity | empty | msgpack(OrderResponse) ]
 //!
 //! Loop:
-//!   1. Read a multipart frame from the ROUTER socket on a blocking thread.
-//!   2. Hand the payload to [`crate::Executor::handle_one`] for the entire
-//!      per-request pipeline.
-//!   3. Encoded response goes back through ROUTER via a writer that
-//!      shares the same blocking thread (zmq sockets aren't thread-safe).
+//!   1. `zmq_poll` over the ROUTER socket AND an inproc wakeup PULL on a
+//!      blocking thread — the thread sleeps until either a new request or a
+//!      finished response is ready (no rcvtimeo gap between an HTTP ack
+//!      completing and the engine seeing it).
+//!   2. Hand request payloads to [`crate::Executor::handle_request`] for the
+//!      per-request pipeline (one tokio task each).
+//!   3. Encoded responses flow tokio → forwarder thread → inproc PUSH →
+//!      the poller thread, which writes them out the ROUTER immediately
+//!      (zmq sockets aren't thread-safe, so both ROUTER and PULL live on
+//!      the poller thread).
 //!
 //! All non-transport concerns (audit, idempotency, kill-switch, risk,
 //! dispatch, registry, metrics) live on `Executor`. This module is just
@@ -47,57 +52,120 @@ impl Gateway {
 
     pub async fn run(self) -> anyhow::Result<()> {
         let (req_tx, req_rx) = std::sync::mpsc::channel::<(Vec<u8>, Vec<u8>)>();
-        let (resp_tx, resp_rx_async) = mpsc::unbounded_channel::<(Vec<u8>, Vec<u8>)>();
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel::<(Vec<u8>, Vec<u8>)>();
 
-        // ROUTER socket thread (zmq is not thread-safe).
+        // One shared zmq context — inproc transport is per-context, and the
+        // response forwarder uses it to wake the poller thread.
+        let ctx = zmq::Context::new();
+        const RESP_INPROC: &str = "inproc://gateway-resp";
+
+        // Poller thread: ROUTER + wakeup PULL (zmq sockets aren't
+        // thread-safe, so both live and die here). The thread sleeps in
+        // `zmq_poll` until a request OR a finished response is ready — a
+        // response wakes it immediately instead of waiting out the old
+        // 50 ms rcvtimeo window, which added a flat 0–50 ms to every ack
+        // the (synchronously blocked) engine was waiting on.
         let bind = self.config.bind.clone();
         let shutdown_for_router = self.executor.shutdown().clone();
-        let resp_rx_blocking = Arc::new(std::sync::Mutex::new(resp_rx_async));
-        let resp_rx_for_thread = resp_rx_blocking.clone();
+        let ctx_router = ctx.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
         let router_thread = std::thread::spawn(move || {
-            let ctx = zmq::Context::new();
-            let sock = ctx.socket(zmq::ROUTER).expect("ROUTER socket");
+            let sock = ctx_router.socket(zmq::ROUTER).expect("ROUTER socket");
             sock.bind(&bind).expect("bind ROUTER");
-            sock.set_rcvtimeo(50).ok();
+            let pull = ctx_router.socket(zmq::PULL).expect("PULL socket");
+            pull.bind(RESP_INPROC).expect("bind inproc resp");
+            let _ = ready_tx.send(()); // inproc bound — forwarder may connect
             info!("zmq_gateway: ROUTER bound on {bind}");
-            loop {
-                if shutdown_for_router.is_draining()
-                    && resp_rx_for_thread.lock().unwrap().is_empty()
-                {
+            'outer: loop {
+                let (req_ready, resp_ready) = {
+                    let mut items = [
+                        sock.as_poll_item(zmq::POLLIN),
+                        pull.as_poll_item(zmq::POLLIN),
+                    ];
+                    // 100 ms cap so shutdown drain is noticed when idle.
+                    match zmq::poll(&mut items, 100) {
+                        Ok(_) => (items[0].is_readable(), items[1].is_readable()),
+                        Err(e) => {
+                            warn!("zmq_gateway: poll error {e:?}");
+                            continue;
+                        }
+                    }
+                };
+                // Responses first — a blocked engine is waiting on them.
+                if resp_ready {
+                    loop {
+                        match pull.recv_multipart(zmq::DONTWAIT) {
+                            Ok(parts) if parts.len() == 2 => {
+                                let identity = &parts[0];
+                                let bytes = &parts[1];
+                                if let Err(e) = sock.send(&identity[..], zmq::SNDMORE) {
+                                    warn!("zmq_gateway: send identity failed: {e}");
+                                    continue;
+                                }
+                                if let Err(e) = sock.send(&[][..], zmq::SNDMORE) {
+                                    warn!("zmq_gateway: send delim failed: {e}");
+                                    continue;
+                                }
+                                if let Err(e) = sock.send(&bytes[..], 0) {
+                                    warn!("zmq_gateway: send body failed: {e}");
+                                }
+                            }
+                            Ok(parts) => warn!(
+                                "zmq_gateway: dropping malformed response ({} parts)",
+                                parts.len()
+                            ),
+                            Err(zmq::Error::EAGAIN) => break,
+                            Err(e) => {
+                                warn!("zmq_gateway: response recv error {e:?}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                if req_ready {
+                    loop {
+                        match sock.recv_multipart(zmq::DONTWAIT) {
+                            Ok(parts) => {
+                                if parts.len() < 2 {
+                                    warn!(
+                                        "zmq_gateway: dropping short frame ({} parts)",
+                                        parts.len()
+                                    );
+                                    continue;
+                                }
+                                let identity = parts[0].clone();
+                                let payload = parts.last().cloned().unwrap_or_default();
+                                if req_tx.send((identity, payload)).is_err() {
+                                    break 'outer;
+                                }
+                            }
+                            Err(zmq::Error::EAGAIN) => break,
+                            Err(e) => {
+                                warn!("zmq_gateway: recv error {e:?}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                if shutdown_for_router.is_draining() && !req_ready && !resp_ready {
                     break;
                 }
-                // Drain pending responses first.
-                {
-                    let mut rx = resp_rx_for_thread.lock().unwrap();
-                    while let Ok((identity, bytes)) = rx.try_recv() {
-                        if let Err(e) = sock.send(&identity[..], zmq::SNDMORE) {
-                            warn!("zmq_gateway: send identity failed: {e}");
-                            continue;
-                        }
-                        if let Err(e) = sock.send(&[][..], zmq::SNDMORE) {
-                            warn!("zmq_gateway: send delim failed: {e}");
-                            continue;
-                        }
-                        if let Err(e) = sock.send(&bytes[..], 0) {
-                            warn!("zmq_gateway: send body failed: {e}");
-                        }
-                    }
-                }
-                // Attempt to recv one new request.
-                match sock.recv_multipart(0) {
-                    Ok(parts) => {
-                        if parts.len() < 2 {
-                            warn!("zmq_gateway: dropping short frame ({} parts)", parts.len());
-                            continue;
-                        }
-                        let identity = parts[0].clone();
-                        let payload = parts.last().cloned().unwrap_or_default();
-                        if req_tx.send((identity, payload)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(zmq::Error::EAGAIN) => continue,
-                    Err(e) => warn!("zmq_gateway: recv error {e:?}"),
+            }
+        });
+        // Wait for the inproc bind so the forwarder's connect can't race it.
+        let _ = ready_rx.recv();
+
+        // Response forwarder: tokio channel → inproc PUSH. A dedicated
+        // blocking thread lets any number of response tasks send without
+        // sharing a zmq socket; each PUSH wakes the poller instantly.
+        let ctx_fwd = ctx.clone();
+        std::thread::spawn(move || {
+            let push = ctx_fwd.socket(zmq::PUSH).expect("PUSH socket");
+            push.connect(RESP_INPROC).expect("connect inproc resp");
+            let mut resp_rx = resp_rx;
+            while let Some((identity, bytes)) = resp_rx.blocking_recv() {
+                if let Err(e) = push.send_multipart([identity, bytes], 0) {
+                    warn!("zmq_gateway: response forward failed: {e}");
                 }
             }
         });

@@ -36,6 +36,7 @@ impl RestOrderClient for StubClient {
             exchange_oid: format!("ex-{}", p.client_oid),
             status: OrderStatus::New,
             ts_ns: 0,
+            fill: None,
         })
     }
     async fn place_batch(

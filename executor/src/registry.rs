@@ -224,6 +224,9 @@ impl OrderRegistry {
                     let resp = OrderResponse {
                         req_id,
                         result,
+                        // Replayed from the audit payload, which carries no
+                        // venue timing; not on the live ack path.
+                        venue_ms: None,
                     };
                     self.record(&req, &resp);
                 }
@@ -292,7 +295,9 @@ mod tests {
                 exchange_oid: exchange_oid.into(),
                 status: OrderStatus::New,
                 ts_ns: 0,
+                fill: None,
             })),
+            venue_ms: None,
         }
     }
 

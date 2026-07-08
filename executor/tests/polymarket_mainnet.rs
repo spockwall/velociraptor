@@ -8,9 +8,11 @@
 //! `#[ignore]`. Read-only tests (`get_orders`, `order_status`, `heartbeat`,
 //! `test_tokens_by_slug`) run on plain `cargo test`.
 //!
-//! Credentials: read entirely from `credentials/polymarket.yaml` via
-//! `libs::credentials::PolymarketCredentials::load()`. The yaml's
-//! `eth_priv_key` is required for the SDK's `authenticate()` step.
+//! Credentials: `$POLYMARKET_CREDENTIALS_FILE`, else the first existing of
+//! `credentials/{prod,dev}/polymarket.yaml`. When no usable credentials are
+//! found every test SKIPS (prints a note and returns) so plain `cargo test`
+//! stays green on machines without creds. The yaml's `eth_priv_key` is
+//! required for the SDK's `authenticate()` step.
 
 use executor::rest::polymarket::PolymarketRestClient;
 use executor::rest::RestOrderClient;
@@ -19,30 +21,58 @@ use libs::endpoints::polymarket::polymarket as poly_ep;
 use libs::endpoints::polymarket::polymarket::gamma;
 use libs::protocol::orders::{OrderKind, PlaceOne, Side, Tif};
 
-/// Workspace-relative path to `credentials/polymarket.yaml`.
-fn creds_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+/// Credentials file: `$POLYMARKET_CREDENTIALS_FILE`, else the first of
+/// `credentials/{prod,dev}/polymarket.yaml` that exists.
+fn creds_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("POLYMARKET_CREDENTIALS_FILE") {
+        return Some(p.into());
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root")
-        .join("credentials/polymarket.yaml")
+        .to_path_buf();
+    [
+        "credentials/prod/polymarket.yaml",
+        "credentials/dev/polymarket.yaml",
+    ]
+    .iter()
+    .map(|rel| root.join(rel))
+    .find(|p| p.exists())
 }
 
-/// Build an authenticated `PolymarketRestClient`. `PolymarketRestClient::new`
-/// is async (it makes an HTTP round-trip during the SDK's `authenticate()`
-/// step), so this helper is async too. Every test calls it.
-async fn build_client() -> PolymarketRestClient {
-    let creds = PolymarketCredentials::load(creds_path());
-    assert!(
-        !creds.address.is_empty(),
-        "polymarket address missing from credentials/polymarket.yaml"
-    );
-    assert!(
-        creds.eth_priv_key.as_deref().is_some_and(|s| !s.is_empty()),
-        "polymarket eth_priv_key missing from credentials/polymarket.yaml"
-    );
-    PolymarketRestClient::new(creds, poly_ep::BASE_URL)
-        .await
-        .expect("construct PolymarketRestClient (this hits Polymarket to derive L2 creds)")
+/// Build an authenticated `PolymarketRestClient`, or `None` (the test skips)
+/// when no usable credentials are present. Async because the SDK's
+/// `authenticate()` can make an HTTP round-trip (skipped when the yaml
+/// carries the full L2 trio).
+async fn build_client() -> Option<PolymarketRestClient> {
+    let Some(path) = creds_path() else {
+        eprintln!(
+            "polymarket_mainnet: no credentials (credentials/{{prod,dev}}/polymarket.yaml \
+             or $POLYMARKET_CREDENTIALS_FILE) — skipping"
+        );
+        return None;
+    };
+    let Some(creds) = PolymarketCredentials::try_load(&path) else {
+        eprintln!(
+            "polymarket_mainnet: no usable `polymarket:` section in {} — skipping",
+            path.display()
+        );
+        return None;
+    };
+    if creds.address.is_empty()
+        || creds.eth_priv_key.as_deref().map_or(true, |s| s.is_empty())
+    {
+        eprintln!(
+            "polymarket_mainnet: address/eth_priv_key missing in {} — skipping",
+            path.display()
+        );
+        return None;
+    }
+    Some(
+        PolymarketRestClient::new(creds, poly_ep::BASE_URL)
+            .await
+            .expect("construct PolymarketRestClient"),
+    )
 }
 
 // ── Read-only (run on default `cargo test`) ─────────────────────────────────
@@ -96,7 +126,7 @@ async fn test_tokens_by_slug() {
 /// path (no `/v1/heartbeats` round-trip in the current adapter).
 #[tokio::test]
 async fn heartbeat() {
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let ack = client.heartbeat().await.expect("heartbeat should succeed");
     eprintln!("heartbeat: next_due_ms={}", ack.next_due_ms);
 }
@@ -105,7 +135,7 @@ async fn heartbeat() {
 /// Empty list is the happy path for a fresh wallet; populated is also fine.
 #[tokio::test]
 async fn get_orders_returns_array() {
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let orders = client
         .get_orders()
         .await
@@ -140,7 +170,7 @@ async fn place_order() {
     let qty = 10.0;
     let px = 0.2;
 
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let client_oid = format!(
         "polymarket_mainnet-{}",
         chrono::Utc::now().timestamp_millis()
@@ -197,7 +227,7 @@ async fn place_batch_orders() {
         },
     ];
 
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     eprintln!("place_batch: {} order(s)", orders.len());
     let acks = client
         .place_batch(&orders)
@@ -235,7 +265,7 @@ async fn place_market_order() {
     // 400 "invalid amount for a marketable BUY order".
     let qty = 20.0; // shares
 
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let client_oid = format!(
         "polymarket_mainnet-market-{}",
         chrono::Utc::now().timestamp_millis()
@@ -287,7 +317,11 @@ async fn place_market_order() {
 #[ignore = "flattens EVERY open Polymarket position on this account — run manually"]
 async fn sell_all_positions() {
     // ── Step 1: list positions via the Polymarket data API ──
-    let creds = PolymarketCredentials::load(creds_path());
+    let Some(path) = creds_path() else {
+        eprintln!("polymarket_mainnet: no credentials — skipping");
+        return;
+    };
+    let creds = PolymarketCredentials::load(path);
     let address = creds.address.clone();
     assert!(!address.is_empty(), "polymarket address missing");
 
@@ -338,7 +372,7 @@ async fn sell_all_positions() {
     }
 
     // ── Step 2: fire one FOK market sell per non-zero position ──
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for (i, pos) in to_sell.iter().enumerate() {
@@ -390,7 +424,7 @@ async fn sell_all_positions() {
 #[ignore = "cancels a real order on Polymarket mainnet — run manually"]
 async fn cancel_all_orders_one_by_one() {
     // Replace this with an open exchange_oid before running.
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
 
     let orders = client
         .get_orders()
@@ -417,7 +451,7 @@ async fn cancel_all_orders_one_by_one() {
 #[tokio::test]
 #[ignore = "cancels EVERY open Polymarket order on this account — run manually"]
 async fn cancel_all_orders() {
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let n = client
         .cancel_all()
         .await
@@ -436,7 +470,7 @@ async fn cancel_market_orders() {
     const TOKEN_ID: &str =
         "60105229286427884692660113868141858131134689149752564702347657042086215753173";
 
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let n = client
         .cancel_market(TOKEN_ID)
         .await
@@ -451,7 +485,7 @@ async fn cancel_market_orders() {
 #[tokio::test]
 #[ignore = "looks up a specific order — edit the OID const before running"]
 async fn order_status() {
-    let client = build_client().await;
+    let Some(client) = build_client().await else { return };
     let orders = client
         .get_orders()
         .await

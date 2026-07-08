@@ -12,6 +12,7 @@ use clap::Parser;
 use executor::control::{drain, run_watcher, ControlState, ShutdownState};
 use executor::gateway::{ClientMap, Gateway, GatewayConfig};
 use executor::ops::{ensure_owner_only, AuditSink, Metrics};
+use executor::rest::kalshi::KalshiRestClient;
 use executor::rest::polymarket::PolymarketRestClient;
 use executor::rest::RestOrderClient;
 use executor::{Executor, ExecutorBuild, ExecutorControlCallbacks};
@@ -21,18 +22,32 @@ use libs::endpoints::polymarket::polymarket as poly_ep;
 use libs::logging::init_logging;
 use libs::protocol::ExchangeName;
 use libs::redis_client::RedisHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "executor", about = "Velociraptor order executor")]
 struct Args {
-    /// Path to the unified YAML config (e.g. `configs/example.yaml`).
-    #[arg(long, env = "CONFIG_FILE", default_value = "configs/example.yaml")]
+    /// Path to the unified YAML config (e.g. `configs/dev/config.yaml`).
+    #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/config.yaml")]
     config: String,
 
     /// Path to the credentials file (must contain a `polymarket:` section).
-    #[arg(long, default_value = "credentials/polymarket.yaml")]
+    #[arg(
+        long,
+        env = "POLYMARKET_CREDENTIALS_FILE",
+        default_value = "credentials/dev/polymarket.yaml"
+    )]
     credentials: String,
+
+    /// Path to the Kalshi credentials file (a `kalshi:` section). Kept separate
+    /// from `--credentials` because Kalshi creds live in their own file. If the
+    /// file/section is absent the Kalshi REST client is simply not built.
+    #[arg(
+        long,
+        env = "KALSHI_CREDENTIALS_FILE",
+        default_value = "credentials/dev/kalshi.yaml"
+    )]
+    kalshi_credentials: String,
 
     /// Skip the credentials file-mode check (useful in dev / docker).
     #[arg(long)]
@@ -81,18 +96,81 @@ async fn main() -> anyhow::Result<()> {
         "testnet" | "preprod" | "amoy" => poly_ep::TESTNET_BASE_URL,
         _ => poly_ep::BASE_URL,
     };
-    match PolymarketRestClient::new(poly_creds, poly_base).await {
+    let poly_client = match PolymarketRestClient::new(poly_creds, poly_base).await {
         Ok(c) => {
+            let c = Arc::new(c);
             clients.insert(
                 ExchangeName::Polymarket,
-                Arc::new(c) as Arc<dyn RestOrderClient>,
+                c.clone() as Arc<dyn RestOrderClient>,
             );
             info!("polymarket: REST client built ({})", poly_base);
+            c
         }
         Err(e) => {
             warn!("polymarket: REST client init failed: {e}");
             anyhow::bail!("polymarket REST client could not be initialised");
         }
+    };
+
+    // CLOB keep-warm: reqwest's pool evicts idle connections after 90 s, so a
+    // sparse order flow pays TCP+TLS again on the first order after a lull
+    // (measured 459 ms first-order vs 103 ms warm). A periodic light GET
+    // through the SAME SDK client keeps the pooled connection hot.
+    let keep_warm_secs = exec_cfg.keep_warm_secs;
+    if keep_warm_secs > 0 {
+        let warm_client = poly_client.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(keep_warm_secs));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await; // skip the immediate tick — boot reconcile warms
+            loop {
+                tick.tick().await;
+                let t0 = std::time::Instant::now();
+                match warm_client.warm().await {
+                    Ok(()) => debug!(
+                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                        "polymarket: keep-warm ping ok"
+                    ),
+                    Err(e) => warn!("polymarket: keep-warm ping failed: {e:?}"),
+                }
+            }
+        });
+        info!(
+            interval_secs = keep_warm_secs,
+            "polymarket: CLOB keep-warm task started"
+        );
+    }
+
+    // ── Kalshi (optional) ────────────────────────────────────────────────
+    // Read from the dedicated `--kalshi-credentials` file (Kalshi creds live
+    // separately from polymarket). Built only when that file has a `kalshi`
+    // section, so an absent file/section doesn't block startup. Sync
+    // constructor (RSA-PSS auth is local). Demo/env selection is future work.
+    if !args.skip_chmod_check && std::path::Path::new(&args.kalshi_credentials).exists() {
+        if let Err(e) = ensure_owner_only(&args.kalshi_credentials) {
+            anyhow::bail!("kalshi credentials: {e}");
+        }
+    }
+    match libs::credentials::kalshi::KalshiCredentials::try_load(&args.kalshi_credentials) {
+        Some(kalshi_creds) => {
+            match KalshiRestClient::new(
+                kalshi_creds,
+                libs::endpoints::kalshi::kalshi::EXTERNAL_API_BASE_URL,
+            ) {
+                Ok(c) => {
+                    clients.insert(
+                        ExchangeName::Kalshi,
+                        Arc::new(c) as Arc<dyn RestOrderClient>,
+                    );
+                    info!("kalshi: REST client built (external-api)");
+                }
+                Err(e) => warn!("kalshi: REST client init failed: {e}"),
+            }
+        }
+        None => info!(
+            path = %args.kalshi_credentials,
+            "kalshi: no credentials file/section — skipping REST client"
+        ),
     }
 
     // ── Redis ────────────────────────────────────────────────────────────
@@ -133,6 +211,12 @@ async fn main() -> anyhow::Result<()> {
         redis: redis.clone(),
         config_path: PathBuf::from(&args.config),
     }));
+
+    // Seed the pre-trade risk gate from the sibling `risk.yaml` (e.g.
+    // `configs/<label>/risk.yaml`) before serving, so limits are active from the
+    // first order. Hot-reload (`executor:reload_config`) re-reads the same file.
+    executor.load_risk_config();
+    info!(risk_config = %executor.risk_config_path().display(), "executor: risk gate seeded");
 
     // Boot-time registry rehydrate + per-exchange reconcile.
     executor.rehydrate_registry(&audit_dir_path).await;

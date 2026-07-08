@@ -120,6 +120,7 @@ mod tests {
                 exchange_oid: "".into(),
                 status: OrderStatus::Canceled,
                 ts_ns: 0,
+                fill: None,
             })
         }
         async fn cancel_all(&self) -> Result<u32, OrderError> {
@@ -158,6 +159,7 @@ mod tests {
                 exchange_oid: "live-1".into(),
                 status: OrderStatus::New,
                 ts_ns: 0,
+                fill: None,
             }],
         });
 
@@ -171,6 +173,7 @@ mod tests {
                 response: OrderResponse {
                     req_id: 0,
                     result: Err(OrderError::Timeout),
+                    venue_ms: None,
                 },
                 exchange_oid: Some("known-but-gone".into()),
                 status: OrderStatus::New,
