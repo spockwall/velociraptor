@@ -24,6 +24,15 @@ redis:
 backend:
   port: 3000
   data_dir: "/app/data"
+  # Polymarket auto-redeem watchdog: flags winning positions that stay
+  # `redeemable` past alert_after_secs (auto-redeem presumed broken).
+  # Watches the credentials wallet (funder/address) plus any listed here.
+  redeem_watch:
+    enabled: true
+    poll_secs: 60
+    alert_after_secs: 900
+    min_value_usd: 1.0 # losing positions are also "redeemable" but worth $0 — ignored
+    wallets: []
 
 storage:
   enabled: false

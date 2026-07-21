@@ -12,7 +12,7 @@ pub mod risk;
 pub mod server;
 pub mod storage;
 
-pub use backend::BackendConfig;
+pub use backend::{BackendConfig, RedeemWatchConfig};
 pub use binance::{BinanceConfig, BinanceSpotConfig};
 pub use executor::ExecutorConfig;
 pub use fetcher::FetcherConfig;

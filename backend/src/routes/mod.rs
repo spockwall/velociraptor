@@ -7,4 +7,5 @@ pub mod markets;
 pub mod monitor;
 pub mod orderbook;
 pub mod pmexplorer;
+pub mod redeem;
 pub mod spot;

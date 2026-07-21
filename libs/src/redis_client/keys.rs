@@ -85,6 +85,24 @@ impl System {
     pub const ERROR_LOG_CURSORS: &'static str = "system:error_log_cursors";
 }
 
+/// Polymarket auto-redeem watchdog keys, written by the backend's redeem
+/// watcher (`backend::routes::redeem::watch_loop`).
+pub struct Redeem;
+impl Redeem {
+    /// Latest watcher status blob (JSON string): per-wallet redeemable /
+    /// stuck positions plus the poll timestamp. Read by
+    /// `GET /api/pm/redeem-status`.
+    pub const STATUS: &'static str = "pm:redeem:status";
+
+    /// Hash per watched wallet: field = position asset (token id), value =
+    /// unix secs the position was first seen redeemable. Persisting the
+    /// first-seen clock here means a backend restart doesn't reset the
+    /// stuck timers.
+    pub fn first_seen(wallet: &str) -> String {
+        format!("pm:redeem:first_seen:{wallet}")
+    }
+}
+
 pub struct Risk;
 impl Risk {
     pub const CONFIG: &'static str = "risk:config";
@@ -146,6 +164,10 @@ mod tests {
         assert_eq!(
             RedisKey::orders_open("polymarket"),
             "orders:open:polymarket"
+        );
+        assert_eq!(
+            Redeem::first_seen("0xabc"),
+            "pm:redeem:first_seen:0xabc"
         );
     }
 }

@@ -23,6 +23,16 @@ use tracing::info;
 struct Args {
     #[arg(long, env = "CONFIG_FILE", default_value = "configs/dev/config.yaml")]
     config: String,
+
+    /// Credentials file with a `polymarket:` section. Only used to learn the
+    /// proxy wallet (`funder`, falling back to `address`) for the auto-redeem
+    /// watcher; absent file/section just means no wallet is auto-added.
+    #[arg(
+        long,
+        env = "POLYMARKET_CREDENTIALS_FILE",
+        default_value = "credentials/dev/polymarket.yaml"
+    )]
+    polymarket_credentials: String,
 }
 
 #[tokio::main]
@@ -39,13 +49,41 @@ async fn main() {
         cfg.logging.json,
     );
 
-    if let Err(e) = run(cfg).await {
+    if let Err(e) = run(cfg, &args).await {
         tracing::error!("Fatal: {e:#}");
         std::process::exit(1);
     }
 }
 
-async fn run(cfg: Config) -> Result<()> {
+/// Wallets the auto-redeem watcher polls: `backend.redeem_watch.wallets`
+/// from the config plus the credentials wallet (`funder` — the proxy wallet
+/// the data-api keys positions by — falling back to `address`), lowercased
+/// and deduped.
+fn resolve_redeem_wallets(cfg: &Config, creds_path: &str) -> Vec<String> {
+    let mut wallets: Vec<String> = cfg
+        .backend
+        .redeem_watch
+        .wallets
+        .iter()
+        .map(|w| w.trim().to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if let Some(creds) = libs::credentials::PolymarketCredentials::try_load(creds_path) {
+        let w = creds
+            .funder
+            .filter(|f| !f.trim().is_empty())
+            .unwrap_or(creds.address);
+        let w = w.trim().to_lowercase();
+        if !w.is_empty() {
+            wallets.push(w);
+        }
+    }
+    wallets.sort();
+    wallets.dedup();
+    wallets
+}
+
+async fn run(cfg: Config, args: &Args) -> Result<()> {
     let redis = RedisHandle::connect(&cfg.redis.url, cfg.redis.event_list_cap).await?;
     info!("Redis connected: {}", cfg.redis.url);
 
@@ -71,6 +109,30 @@ async fn run(cfg: Config) -> Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .user_agent("velociraptor-backend/0.1")
         .build()?;
+
+    // Background Polymarket auto-redeem watcher: polls the public data-api
+    // for `redeemable` positions on the configured wallet(s) and alerts when
+    // a winning position stays unredeemed past the threshold (auto-redeem
+    // presumed broken). Status lands in Redis, read by
+    // `GET /api/pm/redeem-status`; stuck positions ERROR-log so the frontend
+    // Logs page shows them.
+    if cfg.backend.redeem_watch.enabled {
+        let wallets = resolve_redeem_wallets(&cfg, &args.polymarket_credentials);
+        if wallets.is_empty() {
+            info!(
+                creds = %args.polymarket_credentials,
+                "redeem watcher: no wallets (no credentials, empty backend.redeem_watch.wallets) — not started"
+            );
+        } else {
+            tokio::spawn(backend::routes::redeem::watch_loop(
+                redis.clone(),
+                gamma.clone(),
+                cfg.backend.redeem_watch.clone(),
+                wallets,
+            ));
+        }
+    }
+
     let state = Arc::new(AppState {
         redis,
         gamma,

@@ -35,7 +35,7 @@ use serde::Deserialize;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-const DATA_API: &str = "https://data-api.polymarket.com";
+pub(crate) const DATA_API: &str = "https://data-api.polymarket.com";
 const LB_API: &str = "https://lb-api.polymarket.com";
 const GAMMA_API: &str = "https://gamma-api.polymarket.com";
 const SITE_API: &str = "https://polymarket.com/api";

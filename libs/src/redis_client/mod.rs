@@ -188,6 +188,16 @@ impl RedisHandle {
         }
     }
 
+    /// HDEL `fields` at `key` in one round-trip.
+    pub async fn hdel(&self, key: &str, fields: &[&str]) {
+        if fields.is_empty() {
+            return;
+        }
+        if let Err(e) = self.conn.clone().hdel::<_, _, ()>(key, fields).await {
+            error!("Redis HDEL {key} failed: {e}");
+        }
+    }
+
     /// SADD `member` to set `key`.
     pub async fn sadd(&self, key: &str, member: &str) {
         if let Err(e) = self.conn.clone().sadd::<_, _, ()>(key, member).await {

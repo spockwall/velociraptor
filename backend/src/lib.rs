@@ -67,6 +67,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/pm/leaderboard", get(routes::pmexplorer::get_leaderboard))
         .route("/api/pm/market/:slug", get(routes::pmexplorer::get_market))
         .route("/api/pm/resolve/:id", get(routes::pmexplorer::resolve))
+        .route("/api/pm/redeem-status", get(routes::redeem::get_redeem_status))
         .route("/api/spot_price/:product", get(routes::spot::get_spot_price))
         .route(
             "/api/window_open_price/:product/:interval_secs/:window_start",
