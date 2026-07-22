@@ -1,18 +1,26 @@
 """
-Read Kalshi recorder MessagePack files into pandas DataFrames.
+Read Kalshi orderbook and public-trade recorder files into pandas DataFrames.
 
 Kalshi files are organised by series, date, and window interval — one file per
 window (no up/down split: the parser folds YES/NO into a single two-sided book,
 so `mid` IS the implied probability of YES; NO is `1 - mid`):
 
     {base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}.mpack
+                                      {HH:MM}-{HH:MM}-trades.mpack
     ...and compressed variants ending in .mpack.zst
 
-Record schema (snapshots only — the Kalshi feed carries no trade events):
+Snapshot record schema:
     sequence:       u64
     ex_timestamp:   i64  — venue UTC ns (0 on the initial full snapshot)
     recv_timestamp: i64  — local receive UTC ns
     bids / asks:    [[price, qty], ...]  top-N, best first
+
+Trade record schema:
+    ex_timestamp / recv_timestamp: i64  — Unix ns
+    price / size:                    f64  — YES price and contract count
+    side:                            str  — BUY (YES) / SELL (NO)
+    fee_rate_bps:                    f64  — 0.0 for this public feed
+    trade_id:                        str  — Kalshi UUID
 
 Usage:
     pip install msgpack pandas zstandard
@@ -28,6 +36,9 @@ Usage:
 
     # Per-window summary (record count, mean mid/spread, mean latency)
     python scripts/read_kalshi.py data/kalshi/KXBTC15M/2026-07-06/ --summary
+
+    # Only public trades
+    python scripts/read_kalshi.py data/kalshi/KXBTC15M/2026-07-06/ --kind trades
 """
 
 import argparse
@@ -120,8 +131,17 @@ def _discover_files(root: Path) -> list[Path]:
 
 
 def _window_from_path(path: Path) -> str:
-    """Extract '03:30-03:45' from a filename like '03:30-03:45.mpack'."""
-    return path.name.removesuffix(".zst").removesuffix(".mpack")
+    """Extract '03:30-03:45' from snapshot or trade filenames."""
+    return (
+        path.name.removesuffix(".zst")
+        .removesuffix(".mpack")
+        .removesuffix("-trades")
+    )
+
+
+def _kind_from_path(path: Path) -> str:
+    stem = path.name.removesuffix(".zst").removesuffix(".mpack")
+    return "trades" if stem.endswith("-trades") else "snapshots"
 
 
 def _series_date_from_path(path: Path) -> tuple[str | None, str | None]:
@@ -138,8 +158,8 @@ def _series_date_from_path(path: Path) -> tuple[str | None, str | None]:
 def load(target: str) -> pd.DataFrame:
     """
     Load one file, a date directory, or a full series directory into a
-    DataFrame. Adds 'series', 'date', and 'window' (HH:MM-HH:MM) columns
-    from the path.
+    DataFrame. Adds 'series', 'date', 'window' (HH:MM-HH:MM), and 'kind'
+    (snapshots/trades) columns from the path.
     """
     p = Path(target)
     files = [p] if p.is_file() else _discover_files(p)
@@ -156,23 +176,27 @@ def load(target: str) -> pd.DataFrame:
         df["series"] = series
         df["date"] = date
         df["window"] = _window_from_path(f)
+        df["kind"] = _kind_from_path(f)
         frames.append(df)
 
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def summary(target: str) -> pd.DataFrame:
-    """Per-window summary: record count, first/last ts, mean mid/spread/latency."""
+def summary(target: str, kind: str | None = None) -> pd.DataFrame:
+    """Per-window summary for snapshots and public trades."""
     df = load(target)
+    if kind is not None:
+        df = df[df["kind"] == kind]
     if df.empty:
         return df
 
     rows = []
-    for (date, window), g in df.groupby(["date", "window"]):
+    for (date, window, record_kind), g in df.groupby(["date", "window", "kind"]):
         rows.append(
             {
                 "date": date,
                 "window": window,
+                "kind": record_kind,
                 "records": len(g),
                 "first_ts": g["ts"].min(),
                 "last_ts": g["ts"].max(),
@@ -185,9 +209,19 @@ def summary(target: str) -> pd.DataFrame:
                     if "latency_ms" in g.columns
                     else None
                 ),
+                "mean_price": (
+                    round(g["price"].mean(), 4) if "price" in g.columns else None
+                ),
+                "total_size": (
+                    round(g["size"].sum(), 2) if "size" in g.columns else None
+                ),
             }
         )
-    return pd.DataFrame(rows).sort_values(["date", "window"]).reset_index(drop=True)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["date", "window", "kind"])
+        .reset_index(drop=True)
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -204,29 +238,37 @@ def main():
         "--summary", action="store_true", help="Print per-window summary table"
     )
     parser.add_argument(
+        "--kind",
+        choices=["snapshots", "trades"],
+        help="Only display snapshot or public-trade records",
+    )
+    parser.add_argument(
         "--head", type=int, default=20, help="Rows to display (default: 20)"
     )
     args = parser.parse_args()
 
     if args.summary:
-        df = summary(args.target)
+        df = summary(args.target, args.kind)
         print(df.to_string(index=False))
         return
 
     df = load(args.target)
+    if args.kind is not None:
+        df = df[df["kind"] == args.kind].reset_index(drop=True)
     if df.empty:
         print("No records found.")
         return
 
     display_cols = [
-        "ts", "window", "yes_prob", "no_prob", "spread", "wmid",
-        "latency_ms", "sequence",
+        "ts", "window", "kind", "yes_prob", "no_prob", "spread", "wmid",
+        "price", "size", "side", "trade_id", "latency_ms", "sequence",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
     print(df[display_cols].head(args.head).to_string(index=False))
 
+    counts = df["kind"].value_counts().to_dict() if "kind" in df.columns else {}
     windows = df["window"].nunique() if "window" in df.columns else 0
-    print(f"\n{len(df):,} records  |  {windows} window(s)")
+    print(f"\n{len(df):,} records  |  {windows} window(s)  |  {counts}")
 
 
 if __name__ == "__main__":

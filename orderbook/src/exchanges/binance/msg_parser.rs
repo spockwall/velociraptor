@@ -43,7 +43,7 @@ impl BinanceMessageParser {
             market: String::new(),
             ex_timestamp,
             recv_timestamp: now_ns(),
-            trade_id: Some(ev.trade_id),
+            trade_id: Some(ev.trade_id.into()),
         }))
     }
 
@@ -197,7 +197,7 @@ mod tests {
                 assert_eq!(t.price, 50000.10);
                 assert_eq!(t.size, 0.5);
                 assert_eq!(t.side, "BUY");
-                assert_eq!(t.trade_id, Some(12345));
+                assert_eq!(t.trade_id, Some(libs::protocol::TradeId::Numeric(12345)));
             }
             other => panic!("expected LastTradePrice, got {other:?}"),
         }

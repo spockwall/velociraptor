@@ -10,6 +10,7 @@
 //!   serialize as empty cells where they don't apply.
 
 use crate::event::{LastTradePrice, OrderbookSnapshot, UserEvent};
+use libs::protocol::TradeId;
 use serde::Serialize;
 
 // ── Snapshots ────────────────────────────────────────────────────────────────
@@ -58,10 +59,10 @@ pub struct TradeRecord {
     /// Taker side: `"BUY"` or `"SELL"`.
     pub side: String,
     pub fee_rate_bps: f64,
-    /// Exchange-assigned trade id (Binance `t`); omitted for feeds that
-    /// don't carry one.
+    /// Exchange-assigned trade id; an integer for Binance and UUID string for
+    /// Kalshi. Omitted for feeds that don't carry one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trade_id: Option<i64>,
+    pub trade_id: Option<TradeId>,
 }
 
 impl TradeRecord {
@@ -73,7 +74,7 @@ impl TradeRecord {
             size: trade.size,
             side: trade.side.clone(),
             fee_rate_bps: trade.fee_rate_bps,
-            trade_id: trade.trade_id,
+            trade_id: trade.trade_id.clone(),
         }
     }
 }
@@ -193,5 +194,36 @@ impl UserEventRecord {
                 maker_orders: None,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libs::protocol::{ExchangeName, TradeId};
+
+    #[test]
+    fn preserves_string_public_trade_ids() {
+        let trade = LastTradePrice {
+            exchange: ExchangeName::Kalshi,
+            symbol: "KXBTC15M-26JUL221200-00".to_string(),
+            full_slug: None,
+            price: 0.36,
+            size: 136.0,
+            side: "SELL".to_string(),
+            fee_rate_bps: 0.0,
+            market: "KXBTC15M-26JUL221200-00".to_string(),
+            ex_timestamp: 1_669_149_841_000_000_000,
+            recv_timestamp: 1_669_149_841_001_000_000,
+            trade_id: Some(TradeId::Text(
+                "d91bc706-ee49-470d-82d8-11418bda6fed".to_string(),
+            )),
+        };
+
+        let record = TradeRecord::from_trade(&trade);
+        assert_eq!(record.trade_id, trade.trade_id);
+        let payload = rmp_serde::to_vec_named(&record).unwrap();
+        let decoded: serde_json::Value = rmp_serde::from_slice(&payload).unwrap();
+        assert_eq!(decoded["trade_id"], "d91bc706-ee49-470d-82d8-11418bda6fed");
     }
 }

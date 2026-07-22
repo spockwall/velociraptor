@@ -1,15 +1,15 @@
-//! Kalshi orderbook recorder.
+//! Kalshi orderbook + public-trade recorder.
 //!
 //! Streams live orderbook data for rolling 15-minute Kalshi markets and
-//! writes snapshots to disk per window. Unlike Polymarket there is no
-//! up/down split — each window has a single ticker whose YES/NO book is
-//! folded into one two-sided book by the parser — and the Kalshi feed
-//! carries no trade events, so only snapshots are recorded.
+//! writes snapshots and public trades to disk per window. Unlike Polymarket
+//! there is no up/down split — each window has a single ticker whose YES/NO
+//! book is folded into one two-sided book by the parser.
 //!
 //! # Directory layout
 //!
 //! ```text
 //! {base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}.mpack
+//!                                      {HH:MM}-{HH:MM}-trades.mpack
 //! ```
 //!
 //! Each file contains length-prefixed MessagePack records.  Files are
@@ -31,14 +31,14 @@ use libs::configs::{KalshiFileConfig, KalshiMarketConfig};
 use libs::credentials::KalshiCredentials;
 use libs::endpoints::kalshi::kalshi;
 use libs::logging::init_logging;
-use libs::protocol::{ExchangeName, OrderbookSnapshot};
+use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use orderbook::connection::{ClientConfig, SystemControl};
-use orderbook::exchanges::kalshi::{run_rolling_scheduler, KalshiSubMsgBuilder, WindowTask};
+use orderbook::exchanges::kalshi::{KalshiSubMsgBuilder, WindowTask, run_rolling_scheduler};
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
-use recorder::format::SnapshotRecord;
+use recorder::format::{SnapshotRecord, TradeRecord};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info};
@@ -51,7 +51,7 @@ const KALSHI_INTERVAL_SECS: u64 = 900;
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
-#[clap(about = "Kalshi orderbook recorder")]
+#[clap(about = "Kalshi orderbook + public-trade recorder")]
 struct Args {
     #[clap(long, default_value = DEFAULT_CONFIG)]
     config: String,
@@ -76,11 +76,11 @@ struct MpackWriter {
 
 impl MpackWriter {
     fn open(path: PathBuf, zstd_level: Option<i32>) -> Option<Self> {
-        if let Some(dir) = path.parent() {
-            if let Err(e) = fs::create_dir_all(dir) {
-                error!("MpackWriter: failed to create dir {}: {e}", dir.display());
-                return None;
-            }
+        if let Some(dir) = path.parent()
+            && let Err(e) = fs::create_dir_all(dir)
+        {
+            error!("MpackWriter: failed to create dir {}: {e}", dir.display());
+            return None;
         }
         let file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => f,
@@ -144,7 +144,7 @@ fn spawn_compress(path: PathBuf, level: i32) {
 // ── Window file path ──────────────────────────────────────────────────────────
 
 fn snapshot_path(
-    base_path: &PathBuf,
+    base_path: &Path,
     series: &str,
     win_start_secs: u64,
     win_end_secs: u64,
@@ -161,6 +161,24 @@ fn snapshot_path(
     )
 }
 
+fn trade_path(
+    base_path: &Path,
+    series: &str,
+    win_start_secs: u64,
+    win_end_secs: u64,
+) -> Option<PathBuf> {
+    let win_start: DateTime<Utc> = Utc.timestamp_opt(win_start_secs as i64, 0).single()?;
+    let win_end: DateTime<Utc> = Utc.timestamp_opt(win_end_secs as i64, 0).single()?;
+    let date_str = win_start.format("%Y-%m-%d").to_string();
+    let interval_str = format!("{}-{}", win_start.format("%H:%M"), win_end.format("%H:%M"));
+    Some(
+        base_path
+            .join(series)
+            .join(date_str)
+            .join(format!("{interval_str}-trades.mpack")),
+    )
+}
+
 // ── Per-window task spawner ───────────────────────────────────────────────────
 
 struct SpawnArgs {
@@ -171,7 +189,24 @@ struct SpawnArgs {
     creds: KalshiCredentials,
 }
 
-type SharedWriter = Arc<Mutex<Option<MpackWriter>>>;
+struct WindowWriters {
+    snapshot: MpackWriter,
+    trades: MpackWriter,
+}
+
+impl WindowWriters {
+    fn flush_all(&mut self) {
+        self.snapshot.flush();
+        self.trades.flush();
+    }
+
+    fn close_all(self) {
+        self.snapshot.close_and_compress();
+        self.trades.close_and_compress();
+    }
+}
+
+type SharedWriters = Arc<Mutex<Option<WindowWriters>>>;
 
 async fn spawn_window(
     args: Arc<SpawnArgs>,
@@ -179,15 +214,22 @@ async fn spawn_window(
     win_start_secs: u64,
     win_end_secs: u64,
 ) -> Option<WindowTask> {
-    let path = snapshot_path(&args.base_path, &args.series, win_start_secs, win_end_secs)?;
-    let writer: SharedWriter = Arc::new(Mutex::new(Some(MpackWriter::open(
-        path,
-        args.zstd_level,
-    )?)));
+    let snapshot_path = snapshot_path(&args.base_path, &args.series, win_start_secs, win_end_secs)?;
+    let trade_path = trade_path(&args.base_path, &args.series, win_start_secs, win_end_secs)?;
+    let writers: SharedWriters = Arc::new(Mutex::new(Some(WindowWriters {
+        snapshot: MpackWriter::open(snapshot_path, args.zstd_level)?,
+        trades: MpackWriter::open(trade_path, args.zstd_level)?,
+    })));
 
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
         .set_ws_url(kalshi::ws::PUBLIC_STREAM)
-        .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
+        .set_subscription_message(
+            KalshiSubMsgBuilder::new()
+                .with_orderbook_channel()
+                .with_trade_channel()
+                .with_ticker(&ticker)
+                .build(),
+        )
         .set_api_credentials(args.creds.api_key.clone(), args.creds.secret.clone(), None);
 
     let mut cfg = StreamSystemConfig::new();
@@ -199,14 +241,14 @@ async fn spawn_window(
     let mut engine = StreamEngine::new(cfg.event_broadcast_capacity, args.depth);
 
     // Periodic flush task.
-    let writer_flush = writer.clone();
+    let writers_flush = writers.clone();
     let flush_handle = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
             ticker.tick().await;
-            if let Ok(mut guard) = writer_flush.lock() {
+            if let Ok(mut guard) = writers_flush.lock() {
                 match guard.as_mut() {
-                    Some(w) => w.flush(),
+                    Some(writers) => writers.flush_all(),
                     None => break,
                 }
             }
@@ -215,16 +257,36 @@ async fn spawn_window(
 
     // Snapshot hook — single book per window, no side routing needed.
     {
-        let writer = writer.clone();
+        let writers = writers.clone();
         let depth = args.depth;
         let ticker_hook = ticker.clone();
         engine.hooks_mut().on::<OrderbookSnapshot, _>(move |snap| {
-            if let Ok(mut guard) = writer.lock() {
-                if let Some(w) = guard.as_mut() {
-                    let rec = SnapshotRecord::from_snapshot(snap, depth);
-                    if let Err(e) = w.write(&rec) {
-                        error!("Snapshot write failed for {ticker_hook}: {e}");
-                    }
+            if let Ok(mut guard) = writers.lock()
+                && let Some(writers) = guard.as_mut()
+            {
+                let rec = SnapshotRecord::from_snapshot(snap, depth);
+                if let Err(e) = writers.snapshot.write(&rec) {
+                    error!("Snapshot write failed for {ticker_hook}: {e}");
+                }
+            }
+        });
+    }
+
+    // Public-trade hook. Kalshi has one YES-perspective market per window,
+    // so both taker outcomes share one trade file instead of an up/down split.
+    {
+        let writers = writers.clone();
+        let ticker_hook = ticker.clone();
+        engine.hooks_mut().on::<LastTradePrice, _>(move |trade| {
+            if trade.symbol != ticker_hook {
+                return;
+            }
+            if let Ok(mut guard) = writers.lock()
+                && let Some(writers) = guard.as_mut()
+            {
+                let rec = TradeRecord::from_trade(trade);
+                if let Err(e) = writers.trades.write(&rec) {
+                    error!("Trade write failed for {ticker_hook}: {e}");
                 }
             }
         });
@@ -238,11 +300,11 @@ async fn spawn_window(
             error!(ticker = %ticker_log, "Kalshi recorder system error: {e}");
         }
         ctrl.shutdown();
-        let writer = writer.lock().ok().and_then(|mut guard| guard.take());
+        let writers = writers.lock().ok().and_then(|mut guard| guard.take());
         flush_handle.abort();
         let _ = flush_handle.await;
-        if let Some(w) = writer {
-            w.close_and_compress();
+        if let Some(writers) = writers {
+            writers.close_all();
         }
     });
 
@@ -314,12 +376,8 @@ async fn main() -> Result<()> {
         }
     };
 
-    let markets: Vec<KalshiMarketConfig> = cfg
-        .kalshi
-        .market
-        .into_iter()
-        .filter(|m| m.enable)
-        .collect();
+    let markets: Vec<KalshiMarketConfig> =
+        cfg.kalshi.market.into_iter().filter(|m| m.enable).collect();
 
     if markets.is_empty() {
         eprintln!("No enabled markets in {}.", args.config);
@@ -342,4 +400,29 @@ async fn main() -> Result<()> {
 
     tokio::signal::ctrl_c().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_snapshot_and_trade_paths_for_the_same_window() {
+        let start = Utc
+            .with_ymd_and_hms(2026, 7, 22, 3, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp() as u64;
+        let end = start + KALSHI_INTERVAL_SECS;
+        let base = PathBuf::from("/data/kalshi");
+
+        assert_eq!(
+            snapshot_path(&base, "KXBTC15M", start, end).unwrap(),
+            PathBuf::from("/data/kalshi/KXBTC15M/2026-07-22/03:30-03:45.mpack")
+        );
+        assert_eq!(
+            trade_path(&base, "KXBTC15M", start, end).unwrap(),
+            PathBuf::from("/data/kalshi/KXBTC15M/2026-07-22/03:30-03:45-trades.mpack")
+        );
+    }
 }

@@ -10,10 +10,10 @@ use libs::configs::KalshiMarketConfig;
 use libs::credentials::KalshiCredentials;
 use libs::endpoints::kalshi::kalshi;
 use libs::protocol::{ExchangeName, OrderbookSnapshot};
-use libs::redis_client::{keys::RedisKey, RedisHandle};
+use libs::redis_client::{RedisHandle, keys::RedisKey};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::kalshi::{
-    run_rolling_scheduler as kalshi_rolling, KalshiSubMsgBuilder, WindowTask as KalshiWindowTask,
+    KalshiSubMsgBuilder, WindowTask as KalshiWindowTask, run_rolling_scheduler as kalshi_rolling,
 };
 use orderbook::{StreamEngine, StreamEngineBus, StreamSystem, StreamSystemConfig};
 use tracing::{debug, error, info, warn};
@@ -100,7 +100,13 @@ async fn spawn_kalshi_window(
 ) -> Option<KalshiWindowTask> {
     let conn_cfg = ClientConfig::new(ExchangeName::Kalshi)
         .set_ws_url(kalshi::ws::PUBLIC_STREAM)
-        .set_subscription_message(KalshiSubMsgBuilder::new().with_ticker(&ticker).build())
+        .set_subscription_message(
+            KalshiSubMsgBuilder::new()
+                .with_orderbook_channel()
+                .with_trade_channel()
+                .with_ticker(&ticker)
+                .build(),
+        )
         .set_api_credentials(creds.api_key, creds.secret, None);
 
     let mut cfg = StreamSystemConfig::new();

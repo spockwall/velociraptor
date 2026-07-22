@@ -38,6 +38,31 @@ pub struct KalshiDeltaMsg {
     pub ts: Option<String>,
 }
 
+/// Payload of a `type: "trade"` public-trades message.
+///
+/// Decimal strings are parsed only when converting into the common public
+/// trade event, keeping wire deserialization lossless.
+#[derive(Debug, Deserialize)]
+pub struct KalshiTradeMsg {
+    pub trade_id: String,
+    pub market_ticker: String,
+    pub yes_price_dollars: String,
+    pub no_price_dollars: String,
+    pub count_fp: String,
+    pub taker_side: String,
+    /// Added to newer payloads; older documented examples omit it.
+    #[serde(default)]
+    pub taker_outcome_side: Option<String>,
+    /// Added to newer payloads; older documented examples omit it.
+    #[serde(default)]
+    pub taker_book_side: Option<String>,
+    /// Deprecated Unix timestamp in seconds.
+    #[serde(default)]
+    pub ts: Option<i64>,
+    /// Exchange-stamped trade timestamp in Unix milliseconds.
+    pub ts_ms: i64,
+}
+
 /// Top-level WebSocket message envelope from Kalshi.
 ///
 /// All event messages carry `type` + `sid` + `seq` + `msg`.

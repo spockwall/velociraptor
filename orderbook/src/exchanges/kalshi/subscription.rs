@@ -1,18 +1,20 @@
-/// Builder for Kalshi orderbook subscription messages.
+/// Builder for Kalshi market-data subscription messages.
 ///
-/// Per Kalshi docs: one subscribe command names the channel once and lists
-/// all market tickers in `market_tickers`. The resulting JSON is sent as a
-/// single text frame on connect.
+/// Per Kalshi docs: one subscribe command lists channels separately from the
+/// market tickers in `market_tickers`. The resulting JSON is sent as a single
+/// text frame on connect.
 ///
 /// # Example
 /// ```
 /// use orderbook::KalshiSubMsgBuilder;
 /// let msg = KalshiSubMsgBuilder::new()
+///     .with_orderbook_channel()
 ///     .with_ticker("FED-23DEC-T3.00")
 ///     .build();
 /// // {"id":1,"cmd":"subscribe","params":{"channels":["orderbook_delta"],"market_tickers":["FED-23DEC-T3.00"]}}
 /// ```
 pub struct KalshiSubMsgBuilder {
+    channels: Vec<String>,
     tickers: Vec<String>,
     /// Subscription ID sent with the command (Kalshi echoes it in the ack).
     cmd_id: u64,
@@ -21,9 +23,22 @@ pub struct KalshiSubMsgBuilder {
 impl KalshiSubMsgBuilder {
     pub fn new() -> Self {
         Self {
+            channels: Vec::new(),
             tickers: Vec::new(),
             cmd_id: 1,
         }
+    }
+
+    /// Add Kalshi's orderbook snapshot/delta channel.
+    pub fn with_orderbook_channel(mut self) -> Self {
+        self.channels.push("orderbook_delta".to_string());
+        self
+    }
+
+    /// Add Kalshi's immediate public-trade channel.
+    pub fn with_trade_channel(mut self) -> Self {
+        self.channels.push("trade".to_string());
+        self
     }
 
     /// Add a single market ticker (e.g. `"FED-23DEC-T3.00"`).
@@ -45,7 +60,7 @@ impl KalshiSubMsgBuilder {
             "id": self.cmd_id,
             "cmd": "subscribe",
             "params": {
-                "channels": ["orderbook_delta"],
+                "channels": self.channels,
                 "market_tickers": self.tickers,
             }
         })
@@ -116,7 +131,24 @@ impl Default for KalshiCfBenchmarksSubMsgBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::KalshiCfBenchmarksSubMsgBuilder;
+    use super::{KalshiCfBenchmarksSubMsgBuilder, KalshiSubMsgBuilder};
+
+    #[test]
+    fn accumulates_orderbook_and_trade_channels() {
+        let msg = KalshiSubMsgBuilder::new()
+            .with_orderbook_channel()
+            .with_trade_channel()
+            .with_ticker("KXBTC15M-26JUL221200-00")
+            .build();
+        let value: serde_json::Value = serde_json::from_str(&msg).unwrap();
+
+        assert_eq!(value["params"]["channels"][0], "orderbook_delta");
+        assert_eq!(value["params"]["channels"][1], "trade");
+        assert_eq!(
+            value["params"]["market_tickers"][0],
+            "KXBTC15M-26JUL221200-00"
+        );
+    }
 
     #[test]
     fn builds_cfbenchmarks_subscription_for_brti_and_eth_rti() {

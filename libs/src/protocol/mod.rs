@@ -153,9 +153,31 @@ pub struct LastTradePrice {
     pub ex_timestamp: i64,
     /// Local receive time in Unix nanoseconds.
     pub recv_timestamp: i64,
-    /// Exchange-assigned trade identifier. Present when the upstream feed
-    /// emits one (e.g. Binance `t`); `None` for sources that don't (e.g.
-    /// Polymarket `last_trade_price`).
+    /// Exchange-assigned trade identifier. Numeric venues remain encoded as
+    /// integers while UUID/string venues remain strings.
     #[serde(default)]
-    pub trade_id: Option<i64>,
+    pub trade_id: Option<TradeId>,
+}
+
+/// Venue-native public trade identifier.
+///
+/// Kept untagged so persisted MessagePack/JSON retains the venue's natural
+/// representation: Binance IDs are integers and Kalshi IDs are UUID strings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TradeId {
+    Numeric(i64),
+    Text(String),
+}
+
+impl From<i64> for TradeId {
+    fn from(value: i64) -> Self {
+        Self::Numeric(value)
+    }
+}
+
+impl From<String> for TradeId {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
 }

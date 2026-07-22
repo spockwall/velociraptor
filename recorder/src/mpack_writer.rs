@@ -367,7 +367,7 @@ mod tests {
             market: String::new(),
             ex_timestamp: 0,
             recv_timestamp: libs::time::now_ns(),
-            trade_id: Some(42),
+            trade_id: Some(42.into()),
         }))
         .unwrap();
 

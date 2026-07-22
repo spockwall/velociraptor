@@ -1,11 +1,11 @@
 use crate::connection::{BaseClientMessage, MsgParserTrait};
 use crate::exchanges::kalshi::types::{
     KalshiCfBenchmarksMessage, KalshiCfBenchmarksSourceValue, KalshiCfBenchmarksValue,
-    KalshiCfBenchmarksValueMsg, KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg,
+    KalshiCfBenchmarksValueMsg, KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg, KalshiTradeMsg,
 };
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
-use libs::protocol::ExchangeName;
+use libs::protocol::{ExchangeName, LastTradePrice, TradeId};
 use libs::time::{now_ns, parse_rfc3339_to_ns};
 use tracing::{error, info, warn};
 
@@ -142,6 +142,7 @@ impl MsgParserTrait<StreamMessage> for KalshiMessageParser {
         match envelope.msg_type.as_str() {
             "orderbook_snapshot" => self.parse_snapshot(envelope.msg),
             "orderbook_delta" => self.parse_delta(envelope.msg),
+            "trade" => self.parse_trade(envelope.msg),
             "subscribed" | "subscribe_ack" => {
                 info!("Kalshi: subscription confirmed (sid={:?})", envelope.sid);
                 Ok(vec![])
@@ -181,6 +182,61 @@ impl MsgParserTrait<StreamMessage> for KalshiMessageParser {
 }
 
 impl KalshiMessageParser {
+    fn parse_trade(&self, msg: serde_json::Value) -> Result<Vec<StreamMessage>> {
+        let trade: KalshiTradeMsg = match serde_json::from_value(msg) {
+            Ok(trade) => trade,
+            Err(err) => {
+                error!("Kalshi: failed to deserialise public trade: {err}");
+                return Ok(vec![]);
+            }
+        };
+
+        let price = match trade.yes_price_dollars.parse::<f64>() {
+            Ok(price) => price,
+            Err(err) => {
+                error!(
+                    "Kalshi: failed to parse public trade YES price '{}': {err}",
+                    trade.yes_price_dollars
+                );
+                return Ok(vec![]);
+            }
+        };
+        let size = match trade.count_fp.parse::<f64>() {
+            Ok(size) => size,
+            Err(err) => {
+                error!(
+                    "Kalshi: failed to parse public trade count '{}': {err}",
+                    trade.count_fp
+                );
+                return Ok(vec![]);
+            }
+        };
+        let side = match trade.taker_side.to_ascii_lowercase().as_str() {
+            "yes" | "buy" => "BUY",
+            "no" | "sell" => "SELL",
+            other => {
+                warn!("Kalshi: unrecognised public trade taker side '{other}'");
+                return Ok(vec![]);
+            }
+        };
+        let ticker = trade.market_ticker;
+
+        Ok(vec![StreamMessage::LastTradePrice(LastTradePrice {
+            exchange: self.exchange_name,
+            symbol: ticker.clone(),
+            full_slug: None,
+            // The common trade model is from the YES-contract perspective.
+            price,
+            size,
+            side: side.to_string(),
+            fee_rate_bps: 0.0,
+            market: ticker,
+            ex_timestamp: trade.ts_ms.saturating_mul(1_000_000),
+            recv_timestamp: now_ns(),
+            trade_id: Some(TradeId::Text(trade.trade_id)),
+        })])
+    }
+
     fn parse_snapshot(&self, msg: serde_json::Value) -> Result<Vec<StreamMessage>> {
         let snap: KalshiSnapshotMsg = match serde_json::from_value(msg) {
             Ok(s) => s,
@@ -451,6 +507,79 @@ mod tests {
         assert!(message.contains("Index IDs required"));
     }
 
+    #[test]
+    fn parses_public_trade_with_uuid_and_yes_perspective() {
+        let raw = r#"{
+            "type": "trade",
+            "sid": 11,
+            "msg": {
+                "trade_id": "d91bc706-ee49-470d-82d8-11418bda6fed",
+                "market_ticker": "KXBTC15M-26JUL221200-00",
+                "yes_price_dollars": "0.360",
+                "no_price_dollars": "0.640",
+                "count_fp": "136.00",
+                "taker_side": "no",
+                "taker_outcome_side": "no",
+                "taker_book_side": "ask",
+                "ts": 1669149841,
+                "ts_ms": 1669149841000
+            }
+        }"#;
+
+        let messages = parser().parse_message(raw).unwrap();
+        assert_eq!(messages.len(), 1);
+        let StreamMessage::LastTradePrice(trade) = &messages[0] else {
+            panic!("expected public trade, got {:?}", messages[0]);
+        };
+
+        assert_eq!(trade.symbol, "KXBTC15M-26JUL221200-00");
+        assert!((trade.price - 0.36).abs() < 1e-9);
+        assert!((trade.size - 136.0).abs() < 1e-9);
+        assert_eq!(trade.side, "SELL");
+        assert_eq!(trade.ex_timestamp, 1_669_149_841_000_000_000);
+        assert_eq!(
+            trade.trade_id,
+            Some(TradeId::Text(
+                "d91bc706-ee49-470d-82d8-11418bda6fed".to_string()
+            ))
+        );
+        assert!(trade.recv_timestamp > 0);
+    }
+
+    #[test]
+    fn parses_legacy_public_trade_without_new_taker_fields() {
+        let raw = r#"{
+            "type": "trade",
+            "sid": 11,
+            "msg": {
+                "trade_id": "d91bc706-ee49-470d-82d8-11418bda6fed",
+                "market_ticker": "HIGHNY-22DEC23-B53.5",
+                "yes_price_dollars": "0.360",
+                "no_price_dollars": "0.640",
+                "count_fp": "136.00",
+                "taker_side": "no",
+                "ts": 1669149841,
+                "ts_ms": 1669149841000
+            }
+        }"#;
+
+        let messages = parser().parse_message(raw).unwrap();
+        let StreamMessage::LastTradePrice(trade) = &messages[0] else {
+            panic!("expected public trade, got {:?}", messages[0]);
+        };
+        assert_eq!(trade.symbol, "HIGHNY-22DEC23-B53.5");
+        assert!((trade.price - 0.36).abs() < 1e-9);
+        assert!((trade.size - 136.0).abs() < 1e-9);
+        assert_eq!(trade.side, "SELL");
+        assert_eq!(trade.ex_timestamp, 1_669_149_841_000_000_000);
+        assert_eq!(
+            trade.trade_id,
+            Some(TradeId::Text(
+                "d91bc706-ee49-470d-82d8-11418bda6fed".to_string()
+            ))
+        );
+    }
+
     /// Real wire payload captured from Kalshi's WebSocket for an
     /// `orderbook_snapshot` frame — fields are string decimals, not cents.
     #[test]
@@ -607,6 +736,7 @@ mod tests {
     fn subscription_builder() {
         use crate::exchanges::kalshi::KalshiSubMsgBuilder;
         let msg = KalshiSubMsgBuilder::new()
+            .with_orderbook_channel()
             .with_ticker("FED-23DEC-T3.00")
             .with_ticker("PRES-2028")
             .build();
