@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use crate::connection::{BaseClientMessage, BasicClientMsgTrait};
+use serde::{Deserialize, Serialize};
 
 /// A single `[price_dollars, size_dollars]` level from Kalshi's orderbook.
 /// Both are decimal strings (e.g. `["0.0800", "300.00"]`).
@@ -50,4 +51,86 @@ pub struct KalshiEnvelope {
     pub seq: Option<u64>,
     #[serde(default)]
     pub msg: serde_json::Value,
+}
+
+/// A windowed average attached to a CF Benchmarks value update.
+///
+/// Values remain decimal strings so consumers do not lose precision before
+/// choosing their own numeric representation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KalshiCfBenchmarksAverage {
+    pub value: String,
+    pub window_size: u64,
+    pub window_start_ts_ms: i64,
+    pub window_end_ts_exclusive: i64,
+}
+
+/// Parsed form of the JSON string carried in the wire-level `data` field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KalshiCfBenchmarksSourceValue {
+    #[serde(rename = "type")]
+    pub value_type: String,
+    pub id: String,
+    /// Upstream source timestamp in Unix milliseconds.
+    pub time: i64,
+    pub value: String,
+}
+
+/// A complete typed `cfbenchmarks_value` update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KalshiCfBenchmarksValue {
+    pub sid: u64,
+    pub seq: u64,
+    pub index_id: String,
+    /// Time Kalshi received the source frame, in Unix milliseconds.
+    pub received_at: i64,
+    /// Original JSON string supplied by Kalshi in the `data` field.
+    pub raw_data: String,
+    /// Parsed representation of [`Self::raw_data`].
+    pub source_data: KalshiCfBenchmarksSourceValue,
+    pub avg_60s_data: KalshiCfBenchmarksAverage,
+    /// Present only during the final minute before a quarter-hour close.
+    pub last_60s_windowed_average_15min: Option<KalshiCfBenchmarksAverage>,
+    /// Local receive timestamp in Unix nanoseconds.
+    pub recv_timestamp: i64,
+}
+
+/// Messages emitted by [`crate::exchanges::kalshi::KalshiCfBenchmarksClient`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum KalshiCfBenchmarksMessage {
+    Value(Box<KalshiCfBenchmarksValue>),
+    Base(BaseClientMessage),
+}
+
+impl BasicClientMsgTrait for KalshiCfBenchmarksMessage {
+    fn connected() -> Self {
+        Self::Base(BaseClientMessage::Connected)
+    }
+
+    fn disconnected() -> Self {
+        Self::Base(BaseClientMessage::Disconnected)
+    }
+
+    fn ping() -> Self {
+        Self::Base(BaseClientMessage::Ping)
+    }
+
+    fn pong() -> Self {
+        Self::Base(BaseClientMessage::Pong)
+    }
+
+    fn error(error: String) -> Self {
+        Self::Base(BaseClientMessage::Error(error))
+    }
+}
+
+/// Wire payload nested under `msg` for a `cfbenchmarks_value` envelope.
+#[derive(Debug, Deserialize)]
+pub(crate) struct KalshiCfBenchmarksValueMsg {
+    pub index_id: String,
+    pub received_at: i64,
+    pub data: String,
+    pub avg_60s_data: KalshiCfBenchmarksAverage,
+    #[serde(default)]
+    pub last_60s_windowed_average_15min: Option<KalshiCfBenchmarksAverage>,
 }

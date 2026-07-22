@@ -3,8 +3,10 @@
 # generic `orderbook_recorder` (which uses configs/prod/recorder.yaml →
 # /data/orderbook). This one writes under /data/kalshi:
 #   {storage.base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}.mpack
+#   {storage.base_path}/cfbenchmarks/{index_id}/{YYYY-MM-DD}.mpack
 #
 #   cargo run --release --bin kalshi_recorder -- --config configs/prod/kalshi.yaml
+#   cargo run --release --bin cfbenchmark_recorder -- --config configs/prod/kalshi.yaml
 #
 # Kalshi WS market data requires RSA-PSS auth — pass --kalshi-credentials
 # (default credentials/dev/kalshi.yaml, env KALSHI_CREDENTIALS_FILE).
@@ -17,7 +19,7 @@ storage:
   base_path: "/data/kalshi"
   depth: 20             # depth levels to store (bids + asks)
   flush_interval: 500  # ms between BufWriter flushes
-  rotation: "none"     # "daily" | "none"
+  rotation: "daily"    # used by cfbenchmark_recorder; kalshi_recorder rotates per window
   zstd_level: 3        # 0 = disabled, 1–22 = zstd compression level
 
 logging:

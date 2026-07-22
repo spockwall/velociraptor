@@ -21,8 +21,7 @@
 //! credentials are mandatory (unlike the Polymarket recorder).
 //!
 //! ```bash
-//! cargo run --bin kalshi_recorder -- --config configs/dev/kalshi.yaml \
-//!     --kalshi-credentials credentials/dev/kalshi.yaml
+//! cargo run --bin kalshi_recorder -- --config configs/dev/kalshi.yaml --kalshi-credentials credentials/dev/kalshi.yaml
 //! ```
 
 use anyhow::Result;

@@ -1,9 +1,10 @@
 use crate::connection::{ClientConfig, ClientTrait, SystemControl, client::ClientBase};
 use crate::exchanges::ExchangeName;
-use crate::exchanges::kalshi::KalshiMessageParser;
 use crate::exchanges::kalshi::auth::ws_upgrade_headers;
+use crate::exchanges::kalshi::types::KalshiCfBenchmarksMessage;
+use crate::exchanges::kalshi::{KalshiCfBenchmarksMessageParser, KalshiMessageParser};
 use crate::types::orderbook::StreamMessage;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
@@ -65,6 +66,55 @@ impl KalshiClient {
 
 #[async_trait]
 impl ClientTrait for KalshiClient {
+    async fn run(&mut self) -> Result<()> {
+        self.inner.run().await
+    }
+}
+
+/// Authenticated WebSocket client for Kalshi's CF Benchmarks value feed.
+///
+/// Unlike [`KalshiClient`], this client emits benchmark-specific typed
+/// messages directly to an mpsc channel and does not pass through
+/// `StreamEngine`.
+pub struct KalshiCfBenchmarksClient {
+    inner: ClientBase<KalshiCfBenchmarksMessageParser, KalshiCfBenchmarksMessage>,
+}
+
+impl KalshiCfBenchmarksClient {
+    /// Build a CF Benchmarks connection, failing immediately when credentials
+    /// are missing or the RSA private key cannot be parsed.
+    pub fn new(
+        config: ClientConfig,
+        message_tx: UnboundedSender<KalshiCfBenchmarksMessage>,
+        system_control: SystemControl,
+    ) -> Result<Self> {
+        let api_key = config
+            .api_key
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("Kalshi CF Benchmarks: API key is required"))?;
+        let secret_pem = config
+            .api_secret
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("Kalshi CF Benchmarks: RSA private key is required"))?;
+        let auth_header = ws_upgrade_headers(api_key.clone(), secret_pem.as_str())?;
+
+        let inner = ClientBase::new(
+            config,
+            message_tx,
+            system_control,
+            KalshiCfBenchmarksMessageParser::new(),
+            ExchangeName::Kalshi,
+            Some(auth_header),
+        );
+
+        Ok(Self { inner })
+    }
+}
+
+#[async_trait]
+impl ClientTrait for KalshiCfBenchmarksClient {
     async fn run(&mut self) -> Result<()> {
         self.inner.run().await
     }

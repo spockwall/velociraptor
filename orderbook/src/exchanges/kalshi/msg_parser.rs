@@ -1,5 +1,8 @@
-use crate::connection::MsgParserTrait;
-use crate::exchanges::kalshi::types::{KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg};
+use crate::connection::{BaseClientMessage, MsgParserTrait};
+use crate::exchanges::kalshi::types::{
+    KalshiCfBenchmarksMessage, KalshiCfBenchmarksSourceValue, KalshiCfBenchmarksValue,
+    KalshiCfBenchmarksValueMsg, KalshiDeltaMsg, KalshiEnvelope, KalshiSnapshotMsg,
+};
 use crate::types::orderbook::{GenericOrder, OrderbookAction, OrderbookUpdate, StreamMessage};
 use anyhow::Result;
 use libs::protocol::ExchangeName;
@@ -21,6 +24,108 @@ impl KalshiMessageParser {
 impl Default for KalshiMessageParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Parser for Kalshi's dedicated `cfbenchmarks_value` channel.
+pub struct KalshiCfBenchmarksMessageParser;
+
+impl KalshiCfBenchmarksMessageParser {
+    pub fn new() -> Self {
+        Self
+    }
+
+    fn parse_value(&self, envelope: KalshiEnvelope) -> Result<Vec<KalshiCfBenchmarksMessage>> {
+        let Some(sid) = envelope.sid else {
+            error!("Kalshi CF Benchmarks: value update is missing sid");
+            return Ok(vec![]);
+        };
+        let Some(seq) = envelope.seq else {
+            error!("Kalshi CF Benchmarks: value update is missing seq");
+            return Ok(vec![]);
+        };
+
+        let msg: KalshiCfBenchmarksValueMsg = match serde_json::from_value(envelope.msg) {
+            Ok(msg) => msg,
+            Err(err) => {
+                error!("Kalshi CF Benchmarks: failed to parse value payload: {err}");
+                return Ok(vec![]);
+            }
+        };
+
+        let source_data: KalshiCfBenchmarksSourceValue = match serde_json::from_str(&msg.data) {
+            Ok(data) => data,
+            Err(err) => {
+                error!("Kalshi CF Benchmarks: failed to parse nested data frame: {err}");
+                return Ok(vec![]);
+            }
+        };
+
+        Ok(vec![KalshiCfBenchmarksMessage::Value(Box::new(
+            KalshiCfBenchmarksValue {
+                sid,
+                seq,
+                index_id: msg.index_id,
+                received_at: msg.received_at,
+                raw_data: msg.data,
+                source_data,
+                avg_60s_data: msg.avg_60s_data,
+                last_60s_windowed_average_15min: msg.last_60s_windowed_average_15min,
+                recv_timestamp: now_ns(),
+            },
+        ))])
+    }
+}
+
+impl Default for KalshiCfBenchmarksMessageParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MsgParserTrait<KalshiCfBenchmarksMessage> for KalshiCfBenchmarksMessageParser {
+    fn parse_message(&self, text: &str) -> Result<Vec<KalshiCfBenchmarksMessage>> {
+        let envelope: KalshiEnvelope = match serde_json::from_str(text) {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                error!("Kalshi CF Benchmarks: failed to parse envelope: {err} — {text}");
+                return Ok(vec![]);
+            }
+        };
+
+        match envelope.msg_type.as_str() {
+            "cfbenchmarks_value" => self.parse_value(envelope),
+            "subscribed" | "subscribe_ack" | "ok" => {
+                let sid = envelope
+                    .sid
+                    .or_else(|| envelope.msg.get("sid").and_then(serde_json::Value::as_u64));
+                info!("Kalshi CF Benchmarks: subscription confirmed (sid={sid:?})");
+                Ok(vec![])
+            }
+            "ping" | "pong" => Ok(vec![]),
+            "error" => {
+                error!("Kalshi CF Benchmarks: received error from server: {text}");
+                Ok(vec![KalshiCfBenchmarksMessage::Base(
+                    BaseClientMessage::Error(text.to_string()),
+                )])
+            }
+            other => {
+                warn!("Kalshi CF Benchmarks: unrecognised message type '{other}', ignoring");
+                Ok(vec![])
+            }
+        }
+    }
+
+    fn build_ping(&self) -> Option<String> {
+        None
+    }
+
+    fn is_ping(&self, text: &str) -> bool {
+        text.contains("\"ping\"")
+    }
+
+    fn is_pong(&self, text: &str) -> bool {
+        text.contains("\"pong\"")
     }
 }
 
@@ -225,6 +330,125 @@ mod tests {
 
     fn parser() -> KalshiMessageParser {
         KalshiMessageParser::new()
+    }
+
+    fn cfbenchmarks_parser() -> KalshiCfBenchmarksMessageParser {
+        KalshiCfBenchmarksMessageParser::new()
+    }
+
+    #[test]
+    fn parses_cfbenchmarks_value_with_both_averages() {
+        let raw = r#"{
+            "type": "cfbenchmarks_value",
+            "sid": 1,
+            "seq": 42,
+            "msg": {
+                "index_id": "BRTI",
+                "received_at": 1710000000123,
+                "data": "{\"type\":\"value\",\"id\":\"BRTI\",\"time\":1710000000123,\"value\":\"68000.12\"}",
+                "avg_60s_data": {
+                    "value": "68000.12000000",
+                    "window_size": 3,
+                    "window_start_ts_ms": 1709999940123,
+                    "window_end_ts_exclusive": 1710000000123
+                },
+                "last_60s_windowed_average_15min": {
+                    "value": "68000.23000000",
+                    "window_size": 14,
+                    "window_start_ts_ms": 1709999980000,
+                    "window_end_ts_exclusive": 1710000000123
+                }
+            }
+        }"#;
+
+        let messages = cfbenchmarks_parser().parse_message(raw).unwrap();
+        assert_eq!(messages.len(), 1);
+
+        let KalshiCfBenchmarksMessage::Value(value) = &messages[0] else {
+            panic!("expected CF Benchmarks value, got {:?}", messages[0]);
+        };
+        assert_eq!(value.sid, 1);
+        assert_eq!(value.seq, 42);
+        assert_eq!(value.index_id, "BRTI");
+        assert_eq!(value.received_at, 1710000000123);
+        assert_eq!(value.source_data.value_type, "value");
+        assert_eq!(value.source_data.id, "BRTI");
+        assert_eq!(value.source_data.time, 1710000000123);
+        assert_eq!(value.source_data.value, "68000.12");
+        assert!(value.raw_data.contains("68000.12"));
+        assert_eq!(value.avg_60s_data.value, "68000.12000000");
+        assert_eq!(value.avg_60s_data.window_size, 3);
+        assert_eq!(
+            value
+                .last_60s_windowed_average_15min
+                .as_ref()
+                .unwrap()
+                .value,
+            "68000.23000000"
+        );
+        assert!(value.recv_timestamp > 0);
+    }
+
+    #[test]
+    fn parses_cfbenchmarks_value_without_quarter_hour_average() {
+        let raw = r#"{
+            "type": "cfbenchmarks_value",
+            "sid": 1,
+            "seq": 43,
+            "msg": {
+                "index_id": "ETHUSD_RTI",
+                "received_at": 1710000001123,
+                "data": "{\"type\":\"value\",\"id\":\"ETHUSD_RTI\",\"time\":1710000001123,\"value\":\"3500.01\"}",
+                "avg_60s_data": {
+                    "value": "3500.01000000",
+                    "window_size": 1,
+                    "window_start_ts_ms": 1709999941123,
+                    "window_end_ts_exclusive": 1710000001123
+                }
+            }
+        }"#;
+
+        let messages = cfbenchmarks_parser().parse_message(raw).unwrap();
+        let KalshiCfBenchmarksMessage::Value(value) = &messages[0] else {
+            panic!("expected CF Benchmarks value, got {:?}", messages[0]);
+        };
+        assert_eq!(value.index_id, "ETHUSD_RTI");
+        assert_eq!(value.source_data.value, "3500.01");
+        assert!(value.last_60s_windowed_average_15min.is_none());
+    }
+
+    #[test]
+    fn drops_cfbenchmarks_value_with_malformed_nested_data() {
+        let raw = r#"{
+            "type": "cfbenchmarks_value",
+            "sid": 1,
+            "seq": 44,
+            "msg": {
+                "index_id": "BRTI",
+                "received_at": 1710000002123,
+                "data": "not-json",
+                "avg_60s_data": {
+                    "value": "68000.12",
+                    "window_size": 1,
+                    "window_start_ts_ms": 1709999942123,
+                    "window_end_ts_exclusive": 1710000002123
+                }
+            }
+        }"#;
+
+        assert!(cfbenchmarks_parser().parse_message(raw).unwrap().is_empty());
+    }
+
+    #[test]
+    fn exposes_cfbenchmarks_server_errors() {
+        let raw = r#"{"id":9,"type":"error","msg":{"code":24,"msg":"Index IDs required"}}"#;
+        let messages = cfbenchmarks_parser().parse_message(raw).unwrap();
+
+        let KalshiCfBenchmarksMessage::Base(BaseClientMessage::Error(message)) = &messages[0]
+        else {
+            panic!("expected base error, got {:?}", messages[0]);
+        };
+        assert!(message.contains("Index IDs required"));
     }
 
     /// Real wire payload captured from Kalshi's WebSocket for an

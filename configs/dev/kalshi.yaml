@@ -1,6 +1,7 @@
-# Kalshi orderbook configuration (visualizer example + kalshi_recorder)
+# Kalshi configuration (visualizer + orderbook and CF Benchmarks recorders)
 # Run with: cargo run --example kalshi_orderbook -- --config configs/dev/kalshi.yaml
 #      or:  cargo run --bin kalshi_recorder -- --config configs/dev/kalshi.yaml
+#      or:  cargo run --bin cfbenchmark_recorder -- --config configs/dev/kalshi.yaml
 
 server:
   render_interval: 300
@@ -10,7 +11,7 @@ storage:
   base_path: "./data/kalshi"
   depth: 10 # depth levels to store (bids + asks)
   flush_interval: 500 # ms between BufWriter flushes
-  rotation: "none" # "daily" | "none"
+  rotation: "daily" # used by cfbenchmark_recorder; kalshi_recorder rotates per window
   zstd_level: 3 # 0 = disabled, 1–22 = zstd compression level (3 is a good default)
 
 logging:

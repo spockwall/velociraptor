@@ -8,11 +8,14 @@ pub mod utils;
 
 pub use exchanges::binance::BinanceSubMsgBuilder;
 pub use exchanges::hyperliquid::HyperliquidSubMsgBuilder;
-pub use exchanges::kalshi::KalshiSubMsgBuilder;
+pub use exchanges::kalshi::{KalshiCfBenchmarksSubMsgBuilder, KalshiSubMsgBuilder};
 pub use exchanges::okx::OkxSubMsgBuilder;
 pub use exchanges::polymarket::{PolymarketSubMsgBuilder, PolymarketUserSubMsgBuilder};
 pub use exchanges::{
-    binance::BinanceClient, hyperliquid::HyperliquidClient, kalshi::KalshiClient, okx::OkxClient,
+    binance::BinanceClient,
+    hyperliquid::HyperliquidClient,
+    kalshi::{KalshiCfBenchmarksClient, KalshiClient},
+    okx::OkxClient,
     polymarket::PolymarketClient,
 };
 pub use orderbook::{

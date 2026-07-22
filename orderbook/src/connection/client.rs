@@ -21,8 +21,7 @@ pub struct ClientBase<P: MsgParserTrait<M>, M: BasicClientMsgTrait> {
     system_control: SystemControl,
     exchange_name: ExchangeName,
     /// Optional HTTP header injector for exchanges with signed upgrade requests.
-    /// `None` → plain `connect_async`; `Some(b)` → b.build_headers() is called
-    /// on the tungstenite `Request` before every connect attempt.
+    /// `None` → plain `connect_async`; configured headers are added to every tungstenite `Request`.
     auth_header: Option<AuthHeader>,
 }
 

@@ -55,7 +55,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
 rsa = { workspace = true }
-libs       = { path = "../libs", features = ["redis"] }
+libs       = { path = "../libs", features = ["redis", "logging"] }
 recorder   = { path = "../recorder" }
 reqwest   = { workspace = true }
 rmp-serde = { workspace = true }
