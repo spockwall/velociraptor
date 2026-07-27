@@ -1,6 +1,6 @@
 //! Static-exchange registration.
 //!
-//! These exchanges' symbols (e.g. `btcusdt`, `BTC-USDT`, `BTC`) are stable
+//! These exchanges' symbols (e.g. `btcusdt`, `BTC-USD`, `BTC-USDT`, `BTC`) are stable
 //! over time, so we register them once at startup into the main
 //! `StreamSystemConfig` — no scheduler / window lifecycle is involved.
 //! Their orderbook data flows through the main `StreamEngine` and lands in
@@ -9,6 +9,7 @@
 use libs::protocol::ExchangeName;
 use orderbook::connection::ClientConfig;
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
+use orderbook::exchanges::coinbase::CoinbaseSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::StreamSystemConfig;
@@ -48,6 +49,26 @@ pub fn add_binance_spot(cfg: &mut StreamSystemConfig, symbols: &[String]) -> boo
         ),
     );
     info!(symbols = ?symbols, "Binance Spot enabled");
+    true
+}
+
+/// Register Coinbase Exchange products, subscribing to the public batched
+/// Level 2 book and public matches feeds.
+pub fn add_coinbase(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
+    if symbols.is_empty() {
+        return false;
+    }
+    let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
+    cfg.with_exchange(
+        ClientConfig::new(ExchangeName::Coinbase).set_subscription_message(
+            CoinbaseSubMsgBuilder::new()
+                .with_product_ids(&refs)
+                .with_orderbook_channel()
+                .with_trade_channel()
+                .build(),
+        ),
+    );
+    info!(symbols = ?symbols, "Coinbase enabled");
     true
 }
 

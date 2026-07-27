@@ -23,11 +23,18 @@ Append-only binary files written by the recorder crate. Length-prefixed msgpack 
 |---|---|
 | Standard (Binance futures, OKX, Hyperliquid) | `{base_path}/{exchange}/{SYMBOL}/{YYYY-MM-DD}.mpack` |
 | Binance Spot (snapshots + trades) | `{base_path}/binance_spot/{symbol}/{YYYY-MM-DD}.mpack` + `…-trades.mpack` |
+| Coinbase Exchange (snapshots + trades) | `{base_path}/coinbase/{product_id}/{YYYY-MM-DD}.mpack` + `…-trades.mpack` |
 | Polymarket (rolling windows) | `{base_path}/{base_slug}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}-{up\|down}[-trades].mpack` |
 | Kalshi (rolling windows) | `{base_path}/{series}/{YYYY-MM-DD}/{HH:MM}-{HH:MM}[-trades].mpack` |
 | Kalshi CF Benchmarks | `{base_path}/cfbenchmarks/{index_id}/{YYYY-MM-DD}.mpack` |
 
 After daily rotation (or window close), files are zstd-compressed in the background (`zstd_level > 0`) and `.mpack` is replaced by `.mpack.zst`.
+
+Coinbase uses the public `level2_batch` and `matches` channels. Initial book
+snapshots have `ex_timestamp = 0`; updates and trades use Coinbase's RFC3339
+event time. Stored trade `side` is taker direction (the inverse of Coinbase's
+maker-side field), and the numeric `trade_id` is retained. See
+[Coinbase Exchange market data](coinbase.md) for channel and completeness notes.
 
 ## Kalshi CF Benchmarks
 
@@ -105,4 +112,4 @@ storage:
 
 ## Deep reference
 
-Full record schemas, per-exchange notes (Polymarket no `trade_id`, Binance Spot `m` flag), all archive details, why the 1-hour oracle lookback, Python reader recipes (`read_mpack`, `read_mpack_zst`, Polymarket helper script, CSV with pandas) are in the project skill **`velociraptor-storage`** at `.claude/skills/velociraptor-storage/SKILL.md`.
+Full record schemas, per-exchange notes (Polymarket no `trade_id`, Binance Spot `m` flag, Coinbase maker-side inversion), all archive details, why the 1-hour oracle lookback, Python reader recipes (`read_mpack`, `read_mpack_zst`, Polymarket helper script, CSV with pandas) are in the project skill **`velociraptor-storage`** at `.claude/skills/velociraptor-storage/SKILL.md`.

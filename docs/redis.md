@@ -52,7 +52,7 @@ Written by `zmq_server::setup::attach_redis` hooks; see [`zmq_server/src/setup.r
 | `snapshots:{exchange}:{symbol}` | list (LPUSH newest-first) | msgpack `OrderbookSnapshot` per entry, capped at `redis.snapshot_cap` (default 100) | `lpush_capped` on every snapshot | `backend GET /api/snapshots/{ex}/{sym}?limit=N` | none |
 | `trades:{exchange}:{symbol}` | list (LPUSH newest-first) | msgpack `LastTradePrice` per entry, capped at `redis.trade_cap` (default 1000) | `lpush_capped` on every `StreamEvent::LastTradePrice` | `backend GET /api/trades/{ex}/{sym}?limit=N` | none |
 
-`{exchange}` is the lowercase `ExchangeName::to_str()` (`binance`, `binance_spot`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `{symbol}` is exchange-native (e.g. `BTCUSDT`, the Polymarket token id).
+`{exchange}` is the lowercase `ExchangeName::to_str()` (`binance`, `binance_spot`, `coinbase`, `okx`, `polymarket`, `hyperliquid`, `kalshi`). `{symbol}` is exchange-native (e.g. Coinbase `BTC-USD`, Binance `BTCUSDT`, or a Polymarket token id).
 
 **Read example:**
 

@@ -54,6 +54,12 @@ binance_spot:
     - "btcusdt"
     - "ethusdt"
 
+coinbase:
+  enabled: true
+  symbols:
+    - "BTC-USD"
+    - "ETH-USD"
+
 okx:
   enabled: true
   symbols:

@@ -6,6 +6,7 @@ A high-performance Rust workspace for real-time market data streaming and order 
 |---|---|---|
 | Binance USDT-M futures | Live | Partial Book Depth 20 @ 100ms |
 | Binance Spot | Live | Partial Book Depth 20 @ 100ms + raw `@trade` |
+| Coinbase Exchange | Live | Public `level2_batch` @ 50ms + `matches` |
 | OKX | Live | `books` snapshot + incremental |
 | Polymarket | Live | `book` snapshot + `price_change` diffs |
 | Hyperliquid | Live | `l2Book` full snapshot every update |
@@ -113,6 +114,7 @@ storage: { enabled: false, base_path: "./data", depth: 20,
 
 binance:      { enabled: true, symbols: ["btcusdt", "ethusdt"] }
 binance_spot: { enabled: true, symbols: ["btcusdt", "ethusdt"] }
+coinbase:     { enabled: true, symbols: ["BTC-USD", "ETH-USD"] }
 okx:          { enabled: true, symbols: ["BTC-USDT", "ETH-USDT-SWAP"] }
 hyperliquid:  { enabled: true, coins: ["BTC", "ETH"] }
 kalshi:

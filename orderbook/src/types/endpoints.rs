@@ -3,6 +3,7 @@
 //! New code should import from `libs::endpoints::*` directly.
 
 pub use libs::endpoints::binance::binance;
+pub use libs::endpoints::coinbase::coinbase;
 pub use libs::endpoints::hyperliquid::hyperliquid;
 pub use libs::endpoints::kalshi::kalshi;
 pub use libs::endpoints::okx::okx;

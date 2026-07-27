@@ -292,6 +292,10 @@ mod tests {
             Path::new("/data/binance/btcusdt/2026-06-01-trades.mpack")
         );
         assert_eq!(
+            mpack_path(base, "coinbase:BTC-USD:trades", "2026-06-01", RotationPolicy::Daily),
+            Path::new("/data/coinbase/BTC-USD/2026-06-01-trades.mpack")
+        );
+        assert_eq!(
             mpack_path(base, "binance:btcusdt:", "x", RotationPolicy::None),
             Path::new("/data/binance/btcusdt/data.mpack")
         );

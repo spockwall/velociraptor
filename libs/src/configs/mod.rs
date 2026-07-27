@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod binance;
+pub mod coinbase;
 pub mod executor;
 pub mod fetcher;
 pub mod hyperliquid;
@@ -14,6 +15,7 @@ pub mod storage;
 
 pub use backend::{BackendConfig, RedeemWatchConfig};
 pub use binance::{BinanceConfig, BinanceSpotConfig};
+pub use coinbase::CoinbaseConfig;
 pub use executor::ExecutorConfig;
 pub use fetcher::FetcherConfig;
 pub use hyperliquid::HyperliquidConfig;
@@ -41,6 +43,7 @@ pub struct Config {
     pub backend: BackendConfig,
     pub binance: BinanceConfig,
     pub binance_spot: BinanceSpotConfig,
+    pub coinbase: CoinbaseConfig,
     pub okx: OkxConfig,
     pub hyperliquid: HyperliquidConfig,
     pub kalshi: KalshiConfig,
@@ -107,6 +110,9 @@ mod tests {
 
         assert!(cfg.binance.enabled);
         assert_eq!(cfg.binance.symbols, vec!["btcusdt", "ethusdt"]);
+
+        assert!(cfg.coinbase.enabled);
+        assert_eq!(cfg.coinbase.symbols, vec!["BTC-USD", "ETH-USD"]);
 
         assert!(cfg.okx.enabled);
         assert_eq!(cfg.okx.symbols, vec!["BTC-USDT", "ETH-USDT"]);

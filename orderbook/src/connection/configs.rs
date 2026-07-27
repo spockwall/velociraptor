@@ -1,4 +1,4 @@
-use crate::types::endpoints::{binance, hyperliquid, kalshi, okx, polymarket};
+use crate::types::endpoints::{binance, coinbase, hyperliquid, kalshi, okx, polymarket};
 use libs::protocol::ExchangeName;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -24,6 +24,7 @@ impl ClientConfig {
             ExchangeName::Okx => (okx::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Binance => (binance::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::BinanceSpot => (binance::ws::SPOT_PUBLIC_STREAM, 15u64),
+            ExchangeName::Coinbase => (coinbase::ws::PUBLIC_STREAM, 15u64),
             ExchangeName::Polymarket => (polymarket::ws::PUBLIC_STREAM, 15u64),
             // Ping must be MORE frequent than the 30s pong_timeout in
             // `ClientConfig` (client.rs), or `last_pong` ages past 30s between

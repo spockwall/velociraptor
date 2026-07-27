@@ -1,6 +1,6 @@
 //! Standalone orderbook recorder.
 //!
-//! Connects directly to exchanges (Binance, OKX, Hyperliquid, Kalshi,
+//! Connects directly to exchanges (Binance, Coinbase, OKX, Hyperliquid, Kalshi,
 //! Polymarket) and writes every orderbook snapshot and last-trade event to
 //! disk via the `recorder` crate. Runs independently of `orderbook_server` —
 //! no ZMQ involved.
@@ -18,6 +18,7 @@ use libs::logging::init_logging;
 use libs::protocol::{ExchangeName, LastTradePrice, OrderbookSnapshot};
 use orderbook::connection::{ClientConfig, SystemControl};
 use orderbook::exchanges::binance::BinanceSubMsgBuilder;
+use orderbook::exchanges::coinbase::CoinbaseSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
 use orderbook::types::orderbook::OrderbookUpdate;
@@ -69,6 +70,7 @@ async fn run(config_path: &str, cfg: Config) -> Result<()> {
     let has_static = [
         cfg.binance.enabled && add_binance(&mut system_cfg, &cfg.binance.symbols),
         cfg.binance_spot.enabled && add_binance_spot(&mut system_cfg, &cfg.binance_spot.symbols),
+        cfg.coinbase.enabled && add_coinbase(&mut system_cfg, &cfg.coinbase.symbols),
         cfg.okx.enabled && add_okx(&mut system_cfg, &cfg.okx.symbols),
         cfg.hyperliquid.enabled && add_hyperliquid(&mut system_cfg, &cfg.hyperliquid.coins),
     ]
@@ -201,6 +203,24 @@ fn add_binance_spot(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
         ),
     );
     info!(symbols = ?symbols, "Binance Spot enabled");
+    true
+}
+
+fn add_coinbase(cfg: &mut StreamSystemConfig, symbols: &[String]) -> bool {
+    if symbols.is_empty() {
+        return false;
+    }
+    let refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
+    cfg.with_exchange(
+        ClientConfig::new(ExchangeName::Coinbase).set_subscription_message(
+            CoinbaseSubMsgBuilder::new()
+                .with_product_ids(&refs)
+                .with_orderbook_channel()
+                .with_trade_channel()
+                .build(),
+        ),
+    );
+    info!(symbols = ?symbols, "Coinbase enabled");
     true
 }
 

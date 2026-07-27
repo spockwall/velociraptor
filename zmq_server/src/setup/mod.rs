@@ -7,7 +7,7 @@
 //! Layout:
 //!
 //! - [`exchanges`] — static (always-on) exchange registration: Binance,
-//!   Binance Spot, OKX, Hyperliquid. No window lifecycle.
+//!   Binance Spot, Coinbase, OKX, Hyperliquid. No window lifecycle.
 //! - [`bootstrap`] — [`StreamSystem`](orderbook::StreamSystem) construction,
 //!   ZMQ-server attachment, and the recorder bridge.
 //! - [`redis_attach`] — the generic `attach_redis` hook used by the **main**
@@ -30,7 +30,7 @@ mod redis_attach;
 mod rolling;
 
 pub use bootstrap::{attach_recorder, attach_zmq, build_system};
-pub use exchanges::{add_binance, add_binance_spot, add_hyperliquid, add_okx};
+pub use exchanges::{add_binance, add_binance_spot, add_coinbase, add_hyperliquid, add_okx};
 pub use kalshi::spawn_kalshi_schedulers;
 pub use polymarket::{spawn_polymarket_schedulers, spawn_polymarket_user_channel};
 pub use redis_attach::attach_redis;

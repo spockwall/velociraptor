@@ -1,4 +1,5 @@
 pub mod binance;
+pub mod coinbase;
 pub mod hyperliquid;
 pub mod kalshi;
 pub mod okx;
@@ -6,6 +7,7 @@ pub mod polymarket;
 
 use crate::connection::{ClientConfig, ClientTrait, SystemControl};
 use crate::exchanges::binance::BinanceClient;
+use crate::exchanges::coinbase::CoinbaseClient;
 use crate::exchanges::hyperliquid::HyperliquidClient;
 use crate::exchanges::kalshi::KalshiClient;
 use crate::exchanges::okx::OkxClient;
@@ -25,6 +27,11 @@ impl ConnectionFactory {
     pub fn create_connection(&self, system_control: SystemControl) -> Box<dyn ClientTrait> {
         match self.config.exchange {
             ExchangeName::Binance | ExchangeName::BinanceSpot => Box::new(BinanceClient::new(
+                self.config.clone(),
+                self.message_tx.clone(),
+                system_control,
+            )),
+            ExchangeName::Coinbase => Box::new(CoinbaseClient::new(
                 self.config.clone(),
                 self.message_tx.clone(),
                 system_control,
