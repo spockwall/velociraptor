@@ -12,6 +12,5 @@ pub enum RecorderEvent {
     Snapshot(OrderbookSnapshot),
     Trade(LastTradePrice),
     UserEvent(UserEvent),
-    /// Non-snapshot events are carried as a unit — writer ignores them.
-    RawUpdate,
+    //RawUpdate, // Non-snapshot events are carried as a unit — writer ignores them.
 }

@@ -68,11 +68,10 @@ pub fn attach_zmq(system: &mut StreamSystem, server_pub: &str, server_router: &s
 pub fn attach_recorder(system: &mut StreamSystem, cfg: Option<recorder::StorageConfig>) {
     let Some(cfg) = cfg else { return };
 
-    // Bridge `StreamEvent` (engine bus) → `RecorderEvent` (recorder bus).
-    // A small bounded broadcast is enough; the writer consumes via tokio mpsc
-    // semantics under the hood, but uses broadcast::Receiver so we can fan
-    // out further later without changing the writer API.
-    let (rec_tx, rec_rx) = tokio::sync::broadcast::channel::<recorder::RecorderEvent>(1024);
+    // Bridge `StreamEvent` (engine bus) into a dedicated single-consumer
+    // recorder queue. The unbounded queue absorbs feed bursts without
+    // overwriting snapshots or trades while the disk writer catches up.
+    let (rec_tx, rec_rx) = tokio::sync::mpsc::unbounded_channel::<recorder::RecorderEvent>();
     let mut engine_rx = system.engine_bus().subscribe();
 
     let bridge = tokio::spawn(async move {

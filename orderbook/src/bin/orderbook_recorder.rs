@@ -21,10 +21,9 @@ use orderbook::exchanges::binance::BinanceSubMsgBuilder;
 use orderbook::exchanges::coinbase::CoinbaseSubMsgBuilder;
 use orderbook::exchanges::hyperliquid::HyperliquidSubMsgBuilder;
 use orderbook::exchanges::okx::OkxSubMsgBuilder;
-use orderbook::types::orderbook::OrderbookUpdate;
 use orderbook::{StreamEngine, StreamSystem, StreamSystemConfig};
 use recorder::{RecorderEvent, RotationPolicy, StorageConfig, StorageWriter};
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 #[derive(Parser, Debug)]
@@ -137,8 +136,8 @@ fn build_storage_config(cfg: &Config) -> StorageConfig {
 fn attach_storage_hooks(
     engine: &mut StreamEngine,
     storage_config: &StorageConfig,
-) -> broadcast::Receiver<RecorderEvent> {
-    let (rec_tx, rec_rx) = broadcast::channel::<RecorderEvent>(1024);
+) -> mpsc::UnboundedReceiver<RecorderEvent> {
+    let (rec_tx, rec_rx) = mpsc::unbounded_channel::<RecorderEvent>();
     {
         let tx = rec_tx.clone();
         engine
@@ -146,12 +145,6 @@ fn attach_storage_hooks(
             .on::<OrderbookSnapshot, _>(move |snap: &OrderbookSnapshot| {
                 let _ = tx.send(RecorderEvent::Snapshot(snap.clone()));
             });
-    }
-    {
-        let tx = rec_tx.clone();
-        engine.hooks_mut().on::<OrderbookUpdate, _>(move |_| {
-            let _ = tx.send(RecorderEvent::RawUpdate);
-        });
     }
     {
         let tx = rec_tx.clone();

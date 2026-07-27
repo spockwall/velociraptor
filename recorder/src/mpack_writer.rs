@@ -28,9 +28,9 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub struct StorageWriter {
     config: StorageConfig,
@@ -133,7 +133,7 @@ impl StorageWriter {
 
     pub fn start(
         self,
-        mut event_rx: broadcast::Receiver<RecorderEvent>,
+        mut event_rx: mpsc::UnboundedReceiver<RecorderEvent>,
     ) -> tokio::task::JoinHandle<()> {
         let config = self.config;
 
@@ -156,7 +156,7 @@ impl StorageWriter {
             loop {
                 tokio::select! {
                     event = event_rx.recv() => match event {
-                        Ok(RecorderEvent::Snapshot(snap)) => {
+                        Some(RecorderEvent::Snapshot(snap)) => {
                             let record = SnapshotRecord::from_snapshot(&snap, config.depth);
                             let key = format!("{}:{}:", snap.exchange, snap.symbol);
                             if let Some(w) = open_mpack(&mut mpack, &key, &current_date(), &config) {
@@ -165,7 +165,7 @@ impl StorageWriter {
                                 }
                             }
                         }
-                        Ok(RecorderEvent::Trade(trade)) => {
+                        Some(RecorderEvent::Trade(trade)) => {
                             let record = TradeRecord::from_trade(&trade);
                             let key = format!("{}:{}:trades", trade.exchange, trade.symbol);
                             if let Some(w) = open_mpack(&mut mpack, &key, &current_date(), &config) {
@@ -174,7 +174,7 @@ impl StorageWriter {
                                 }
                             }
                         }
-                        Ok(RecorderEvent::UserEvent(ev)) => {
+                        Some(RecorderEvent::UserEvent(ev)) => {
                             let record = UserEventRecord::from_event(&ev);
                             // Daily file under {base}/events/{date}.csv. The
                             // shared archive handles header-on-create + flush.
@@ -183,11 +183,7 @@ impl StorageWriter {
                                 error!("StorageWriter: user-event write failed: {e}");
                             }
                         }
-                        Ok(RecorderEvent::RawUpdate) => {}
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("StorageWriter: lagged, skipped {n} events");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
+                        None => {
                             info!("StorageWriter: engine channel closed, stopping");
                             break;
                         }
@@ -281,6 +277,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    #[rustfmt::skip]
     fn mpack_paths_by_kind() {
         let base = Path::new("/data");
         assert_eq!(
@@ -355,7 +352,7 @@ mod tests {
             zstd_level: None,               // skip compression so we can read the .mpack
         };
 
-        let (tx, rx) = broadcast::channel::<RecorderEvent>(16);
+        let (tx, rx) = mpsc::unbounded_channel::<RecorderEvent>();
         let handle = StorageWriter::new(config).start(rx);
 
         tx.send(RecorderEvent::Snapshot(sample_snapshot())).unwrap();
@@ -390,6 +387,32 @@ mod tests {
             assert_eq!(f.bids[0], (100.0, 1.0));
         }
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn unbounded_queue_preserves_burst_larger_than_old_buffer() {
+        let dir = std::env::temp_dir().join(format!("rec-burst-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let config = StorageConfig {
+            base_path: dir.clone(),
+            depth: 2,
+            flush_interval_ms: 20,
+            rotation: RotationPolicy::None,
+            zstd_level: None,
+        };
+        let (tx, rx) = mpsc::unbounded_channel::<RecorderEvent>();
+        let handle = StorageWriter::new(config).start(rx);
+
+        const RECORDS: usize = 4_096;
+        for _ in 0..RECORDS {
+            tx.send(RecorderEvent::Snapshot(sample_snapshot())).unwrap();
+        }
+        drop(tx);
+        handle.await.unwrap();
+
+        let path = dir.join("binance").join("btcusdt").join("data.mpack");
+        assert_eq!(decode_frames(&path).len(), RECORDS);
         let _ = fs::remove_dir_all(&dir);
     }
 }
