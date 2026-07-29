@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 /// HTTP headers to inject on the WebSocket upgrade request.
-/// A list of (name, value) pairs. Rebuilt per connect attempt so auth
-/// timestamps/signatures stay current.
+/// A simple list of (name, value) pairs. Kalshi replaces its list immediately
+/// before each connection attempt because its timestamp/signature are time-bound.
 pub type AuthHeader = Vec<(String, String)>;
 
 /// Trait for exchange-specific connections

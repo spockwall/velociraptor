@@ -1,5 +1,6 @@
 use super::{PAUSE_DELAY, SystemControl};
 use crate::connection::{AuthHeader, BasicClientMsgTrait, ClientConfig, MsgParserTrait};
+use crate::exchanges::kalshi::auth::ws_upgrade_headers;
 use crate::heartbeat::{HealthStatus, HearthbeatConfig, HearthbeatManager, HearthbeatProtocol};
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
@@ -83,9 +84,36 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
         Ok(self.hearthbeat_manager.get_health_status())
     }
 
+    fn refresh_auth_header(&mut self) -> Result<()> {
+        if self.exchange_name != ExchangeName::Kalshi || self.auth_header.is_none() {
+            return Ok(());
+        }
+
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("Kalshi WebSocket API key is required"))?;
+        let secret_pem = self
+            .config
+            .api_secret
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("Kalshi WebSocket RSA private key is required"))?;
+
+        // Kalshi signs the timestamp into the upgrade headers. Replace the
+        // simple header vector immediately before every handshake so reconnects
+        // never reuse the timestamp/signature from an earlier connection.
+        self.auth_header = Some(ws_upgrade_headers(api_key.clone(), secret_pem)?);
+        Ok(())
+    }
+
     async fn connect_and_maintain(&mut self) -> Result<()> {
         let url = Url::parse(&self.config.ws_url)?;
         info!("Connecting to {}: {url}", self.exchange_name);
+
+        self.refresh_auth_header()?;
 
         // The WS upgrade is an HTTP GET with Upgrade/Connection headers; any
         // exchange-specific auth headers (e.g. Kalshi's signed triple) ride on
@@ -250,5 +278,104 @@ impl<P: MsgParserTrait<M>, M: BasicClientMsgTrait> ClientBase<P, M> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exchanges::kalshi::KalshiMessageParser;
+    use crate::types::orderbook::StreamMessage;
+    use rsa::RsaPrivateKey;
+    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+    use rsa::rand_core::OsRng;
+    use tokio::sync::mpsc;
+
+    fn test_private_key_pem() -> String {
+        RsaPrivateKey::new(&mut OsRng, 1024)
+            .unwrap()
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap()
+            .to_string()
+    }
+
+    fn header_value<'a>(headers: &'a AuthHeader, name: &str) -> &'a str {
+        headers
+            .iter()
+            .find_map(|(header_name, value)| (header_name == name).then_some(value.as_str()))
+            .unwrap()
+    }
+
+    #[test]
+    fn refreshes_kalshi_auth_header_before_connect() {
+        let config = ClientConfig::new(ExchangeName::Kalshi).set_api_credentials(
+            "test-key-id".to_string(),
+            test_private_key_pem(),
+            None,
+        );
+        let (message_tx, _message_rx) = mpsc::unbounded_channel::<StreamMessage>();
+        let stale_header = vec![
+            ("KALSHI-ACCESS-KEY".to_string(), "test-key-id".to_string()),
+            ("KALSHI-ACCESS-TIMESTAMP".to_string(), "1".to_string()),
+            (
+                "KALSHI-ACCESS-SIGNATURE".to_string(),
+                "stale-signature".to_string(),
+            ),
+        ];
+        let mut client = ClientBase::new(
+            config,
+            message_tx,
+            SystemControl::new(),
+            KalshiMessageParser::new(),
+            ExchangeName::Kalshi,
+            Some(stale_header),
+        );
+
+        client.refresh_auth_header().unwrap();
+
+        let headers = client.auth_header.as_ref().unwrap();
+        assert_eq!(header_value(headers, "KALSHI-ACCESS-KEY"), "test-key-id");
+        assert_ne!(header_value(headers, "KALSHI-ACCESS-TIMESTAMP"), "1");
+        assert_ne!(
+            header_value(headers, "KALSHI-ACCESS-SIGNATURE"),
+            "stale-signature"
+        );
+    }
+
+    #[test]
+    fn leaves_non_kalshi_static_auth_header_unchanged() {
+        let config = ClientConfig::new(ExchangeName::Coinbase);
+        let (message_tx, _message_rx) = mpsc::unbounded_channel::<StreamMessage>();
+        let static_header = vec![("X-TEST".to_string(), "static".to_string())];
+        let mut client = ClientBase::new(
+            config,
+            message_tx,
+            SystemControl::new(),
+            KalshiMessageParser::new(),
+            ExchangeName::Coinbase,
+            Some(static_header.clone()),
+        );
+
+        client.refresh_auth_header().unwrap();
+
+        assert_eq!(client.auth_header, Some(static_header));
+    }
+
+    #[test]
+    fn leaves_unauthenticated_kalshi_client_unauthenticated() {
+        let config = ClientConfig::new(ExchangeName::Kalshi);
+        let (message_tx, _message_rx) = mpsc::unbounded_channel::<StreamMessage>();
+        let mut client = ClientBase::new(
+            config,
+            message_tx,
+            SystemControl::new(),
+            KalshiMessageParser::new(),
+            ExchangeName::Kalshi,
+            None,
+        );
+
+        client.refresh_auth_header().unwrap();
+
+        assert!(client.auth_header.is_none());
     }
 }
