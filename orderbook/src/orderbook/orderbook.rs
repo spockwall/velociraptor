@@ -76,6 +76,10 @@ impl Orderbook {
                     for order in update.orders {
                         self.update_okx_order(order);
                     }
+                } else if self.exchange == ExchangeName::Kalshi {
+                    for order in update.orders {
+                        self.update_kalshi_order(order);
+                    }
                 } else {
                     for order in update.orders {
                         self.update_order(order);
@@ -170,6 +174,40 @@ impl Orderbook {
             });
             level.total_qty = order.qty;
             level.order_count = 1;
+        }
+    }
+
+    /// Apply Kalshi's signed `delta_fp` quantity change at one price level.
+    fn update_kalshi_order(&mut self, order: GenericOrder) {
+        const ZERO_EPSILON: f64 = 1e-9;
+
+        let price_key = OrderedFloat(order.price);
+        let levels = match self.parse_side(&order.side) {
+            OrderSide::Bid => &mut self.bid_levels,
+            OrderSide::Ask => &mut self.ask_levels,
+        };
+        let current_qty = levels
+            .get(&price_key)
+            .map(|level| level.total_qty)
+            .unwrap_or(0.0);
+        let new_qty = current_qty + order.qty;
+
+        if new_qty > ZERO_EPSILON {
+            let level = levels.entry(price_key).or_insert_with(|| PriceLevel {
+                price: order.price,
+                total_qty: 0.0,
+                order_count: 0,
+            });
+            level.total_qty = new_qty;
+            level.order_count = 1;
+        } else {
+            if new_qty < -ZERO_EPSILON {
+                warn!(
+                    "Delta underflow at {} on {}: current_qty={}, delta={}",
+                    order.price, self.exchange, current_qty, order.qty
+                );
+            }
+            levels.remove(&price_key);
         }
     }
 

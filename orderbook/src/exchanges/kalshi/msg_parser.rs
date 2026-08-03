@@ -330,8 +330,13 @@ impl KalshiMessageParser {
             }
         };
 
-        // Kalshi deltas may carry a server `ts` (RFC3339); 0 when absent.
-        let ex_timestamp = delta.ts.as_deref().map(parse_rfc3339_to_ns).unwrap_or(0);
+        // Prefer Kalshi's current millisecond timestamp; retain deprecated
+        // RFC3339 `ts` as a fallback for older payloads.
+        let ex_timestamp = delta
+            .ts_ms
+            .map(|ts_ms| ts_ms.saturating_mul(1_000_000))
+            .or_else(|| delta.ts.as_deref().map(parse_rfc3339_to_ns))
+            .unwrap_or(0);
         let recv_timestamp = now_ns();
 
         // View the book from the YES contract's perspective: YES-side deltas
@@ -345,22 +350,11 @@ impl KalshiMessageParser {
             }
         };
 
-        // delta_fp == 0 → remove the level; we use size=0 + Delete action.
-        // delta_fp <  0 → level shrank (Kalshi always sends the *change*,
-        //                  not the new total). The orderbook engine expects
-        //                  absolute sizes, so for negative deltas we emit
-        //                  size=0 with Delete to signal the engine to remove
-        //                  or reduce the level — the engine will reconcile.
-        // delta_fp >  0 → level grew; emit as Update with the delta as qty.
-        let (action, qty) = if delta_val <= 0.0 {
-            (OrderbookAction::Delete, 0.0)
-        } else {
-            (OrderbookAction::Update, delta_val)
-        };
-
         let order = GenericOrder {
             price: book_price,
-            qty,
+            // Preserve the sign. Kalshi sends a change in resting contract
+            // count, not the new absolute quantity at this level.
+            qty: delta_val,
             side: side.to_string(),
             symbol: symbol.clone(),
             ex_timestamp,
@@ -368,7 +362,7 @@ impl KalshiMessageParser {
         };
 
         Ok(vec![StreamMessage::OrderbookUpdate(OrderbookUpdate {
-            action,
+            action: OrderbookAction::Update,
             orders: vec![order],
             symbol,
             ex_timestamp,
@@ -382,6 +376,7 @@ impl KalshiMessageParser {
 mod tests {
     use super::*;
     use crate::connection::MsgParserTrait;
+    use crate::orderbook::Orderbook;
     use crate::types::orderbook::{OrderbookAction, StreamMessage};
 
     fn parser() -> KalshiMessageParser {
@@ -390,6 +385,13 @@ mod tests {
 
     fn cfbenchmarks_parser() -> KalshiCfBenchmarksMessageParser {
         KalshiCfBenchmarksMessageParser::new()
+    }
+
+    fn parse_orderbook_update(raw: &str) -> OrderbookUpdate {
+        match parser().parse_message(raw).unwrap().into_iter().next() {
+            Some(StreamMessage::OrderbookUpdate(update)) => update,
+            other => panic!("expected one orderbook update, got {other:?}"),
+        }
     }
 
     #[test]
@@ -639,7 +641,8 @@ mod tests {
                 "price_dollars": "0.960",
                 "delta_fp": "54.00",
                 "side": "yes",
-                "ts": "2022-11-22T20:44:01Z"
+                "ts": "2022-11-22T20:44:01Z",
+                "ts_ms": 1669149841000
             }
         }"#;
 
@@ -651,6 +654,7 @@ mod tests {
             assert_eq!(u.orders[0].side, "Bid");
             assert!((u.orders[0].price - 0.960).abs() < 1e-9);
             assert!((u.orders[0].qty - 54.0).abs() < 1e-9);
+            assert_eq!(u.ex_timestamp, 1_669_149_841_000_000_000);
         } else {
             panic!("Expected OrderbookUpdate");
         }
@@ -658,7 +662,7 @@ mod tests {
 
     /// Exact payload the user pasted: negative delta on the YES side.
     #[test]
-    fn parses_negative_delta_as_delete() {
+    fn preserves_negative_delta() {
         let raw = r#"{
             "type": "orderbook_delta",
             "sid": 2,
@@ -677,10 +681,10 @@ mod tests {
         assert_eq!(msgs.len(), 1);
 
         if let StreamMessage::OrderbookUpdate(u) = &msgs[0] {
-            assert_eq!(u.action, OrderbookAction::Delete);
+            assert_eq!(u.action, OrderbookAction::Update);
             // side: "yes" → bid
             assert_eq!(u.orders[0].side, "Bid");
-            assert_eq!(u.orders[0].qty, 0.0);
+            assert_eq!(u.orders[0].qty, -54.0);
             assert!((u.orders[0].price - 0.960).abs() < 1e-9);
         } else {
             panic!("Expected OrderbookUpdate");
@@ -714,6 +718,86 @@ mod tests {
         } else {
             panic!("Expected OrderbookUpdate");
         }
+    }
+
+    #[test]
+    fn applies_signed_deltas_to_snapshot_quantities() {
+        let snapshot = r#"{
+            "type": "orderbook_snapshot",
+            "sid": 2,
+            "seq": 2,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "market_id": "9b0f6b43-5b68-4f9f-9f02-9a2d1b8ac1a1",
+                "yes_dollars_fp": [["0.4200", "100.00"]],
+                "no_dollars_fp": [["0.4000", "80.00"]]
+            }
+        }"#;
+        let yes_add = r#"{
+            "type": "orderbook_delta", "sid": 2, "seq": 3,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "price_dollars": "0.4200",
+                "delta_fp": "25.00",
+                "side": "yes"
+            }
+        }"#;
+        let yes_reduce = r#"{
+            "type": "orderbook_delta", "sid": 2, "seq": 4,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "price_dollars": "0.4200",
+                "delta_fp": "-10.00",
+                "side": "yes"
+            }
+        }"#;
+        let yes_noop = r#"{
+            "type": "orderbook_delta", "sid": 2, "seq": 5,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "price_dollars": "0.4200",
+                "delta_fp": "0.00",
+                "side": "yes"
+            }
+        }"#;
+        let no_reduce = r#"{
+            "type": "orderbook_delta", "sid": 2, "seq": 6,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "price_dollars": "0.4000",
+                "delta_fp": "-30.00",
+                "side": "no"
+            }
+        }"#;
+        let no_clear = r#"{
+            "type": "orderbook_delta", "sid": 2, "seq": 7,
+            "msg": {
+                "market_ticker": "TEST-MARKET",
+                "price_dollars": "0.4000",
+                "delta_fp": "-50.00",
+                "side": "no"
+            }
+        }"#;
+
+        let mut book = Orderbook::new("TEST-MARKET".to_string(), ExchangeName::Kalshi);
+        book.apply_update(parse_orderbook_update(snapshot));
+        assert_eq!(book.best_bid(), Some((0.42, 100.0)));
+        assert_eq!(book.best_ask(), Some((0.6, 80.0)));
+
+        book.apply_update(parse_orderbook_update(yes_add));
+        assert_eq!(book.best_bid(), Some((0.42, 125.0)));
+
+        book.apply_update(parse_orderbook_update(yes_reduce));
+        assert_eq!(book.best_bid(), Some((0.42, 115.0)));
+
+        book.apply_update(parse_orderbook_update(yes_noop));
+        assert_eq!(book.best_bid(), Some((0.42, 115.0)));
+
+        book.apply_update(parse_orderbook_update(no_reduce));
+        assert_eq!(book.best_ask(), Some((0.6, 50.0)));
+
+        book.apply_update(parse_orderbook_update(no_clear));
+        assert_eq!(book.best_ask(), None);
     }
 
     #[test]

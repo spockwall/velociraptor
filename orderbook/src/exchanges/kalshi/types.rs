@@ -1,7 +1,7 @@
 use crate::connection::{BaseClientMessage, BasicClientMsgTrait};
 use serde::{Deserialize, Serialize};
 
-/// A single `[price_dollars, size_dollars]` level from Kalshi's orderbook.
+/// A single `[price_dollars, contract_count_fp]` level from Kalshi's orderbook.
 /// Both are decimal strings (e.g. `["0.0800", "300.00"]`).
 pub type KalshiLevel = [String; 2];
 
@@ -30,12 +30,16 @@ pub struct KalshiDeltaMsg {
     pub market_id: Option<String>,
     /// Price in dollars as a decimal string (e.g. `"0.960"`).
     pub price_dollars: String,
-    /// Signed size change in dollars as a decimal string (e.g. `"-54.00"`).
+    /// Signed contract-count change as a decimal string (e.g. `"-54.00"`).
     pub delta_fp: String,
     /// `"yes"` (bid side) or `"no"` (ask side).
     pub side: String,
-    /// RFC3339 timestamp string. Optional.
+    /// Deprecated RFC3339 timestamp string. Optional.
+    #[serde(default)]
     pub ts: Option<String>,
+    /// Preferred Unix timestamp in milliseconds. Optional.
+    #[serde(default)]
+    pub ts_ms: Option<i64>,
 }
 
 /// Payload of a `type: "trade"` public-trades message.

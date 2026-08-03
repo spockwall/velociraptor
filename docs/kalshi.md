@@ -78,7 +78,11 @@ YES + NO sum to $1.00. A NO-bid at $0.56 = YES-ask at $0.44. The parser merges b
 | delta `side:yes` | Bid | `price_dollars` |
 | delta `side:no` | Ask | `1 - price_dollars` |
 
-`delta_fp > 0` → `Update`; `≤ 0` → `Delete` (qty=0). Visualiser renders the same book twice — UP panel as-is, DOWN panel mirrored — spread is identical in both.
+`delta_fp` is a signed contract-count change. The parser emits `Update`, which
+the book dispatches to its Kalshi-specific updater. It applies
+`new_qty = old_qty + delta_fp`, removing the level only when the result reaches
+zero. Visualiser renders the same book twice — UP panel as-is, DOWN panel
+mirrored — spread is identical in both.
 
 ## Configuration
 
